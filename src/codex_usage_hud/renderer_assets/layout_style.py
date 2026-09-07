@@ -6837,6 +6837,37 @@ TEXT = r"""
             font-size: 10px;
             font-weight: 700;
           }
+          /* 按月分组标题：滚动时吸顶，显示月份与当月命中数 */
+          #${rootId} .codex-usage-hud-search-float .codex-usage-hud-search-group {
+            position: sticky;
+            top: 0;
+            z-index: 2;
+            display: flex;
+            align-items: baseline;
+            justify-content: space-between;
+            gap: 8px;
+            margin: 6px 0 2px;
+            padding: 5px 6px 4px;
+            background: linear-gradient(180deg, rgba(15, 21, 29, .98) 72%, rgba(15, 21, 29, 0));
+            color: var(--codex-usage-hud-info, #9ccbff);
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: .02em;
+            border-bottom: 1px solid var(--codex-usage-hud-divider, #273241);
+          }
+          #${rootId} .codex-usage-hud-search-float .codex-usage-hud-search-group-count {
+            color: var(--codex-usage-hud-muted, #8492a6);
+            font-weight: 600;
+            font-variant-numeric: tabular-nums;
+          }
+          /* 逐行展示会话日期（月-日），推到行首信息右侧 */
+          #${rootId} .codex-usage-hud-search-float .codex-usage-hud-search-date {
+            flex: 0 0 auto;
+            margin-left: auto;
+            color: var(--codex-usage-hud-muted, #8492a6);
+            font-size: 11px;
+            font-variant-numeric: tabular-nums;
+          }
           #${rootId} .codex-usage-hud-search-float .codex-usage-hud-search-nav {
             display: flex;
             gap: 6px;

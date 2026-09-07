@@ -1837,6 +1837,12 @@ TEXT = r"""
       if (!input || !setter || input.value === query) return false;
       setter.call(input, query);
       input.dispatchEvent(new Event("input", { bubbles: true }));
+      // 必须再触发回车，否则 Codex 原生查找栏只显示填充文本但不执行检索
+      //（截图复现：搜索框有词但显示「0 个结果」，手动按回车后才高亮）。
+      input.dispatchEvent(new KeyboardEvent("keydown", {
+        key: "Enter", code: "Enter", keyCode: 13, which: 13,
+        bubbles: true, cancelable: true,
+      }));
       return true;
     }
 
@@ -1881,6 +1887,25 @@ TEXT = r"""
     // 穿梭；高亮、滚动与计数完全交给 Codex 原生 find-in-thread。
     let searchFloat = null;
 
+    // 把会话 ISO 时间戳拆成年/月/日标签，供浮窗按月分组与逐行展示日期。
+    function sessionMonthKeyFromIso(iso) {
+      if (!iso || typeof iso !== "string") return "";
+      const m = /^(\d{4})-(\d{2})/.exec(iso);
+      if (!m) return "";
+      return m[1] + "-" + m[2];
+    }
+    function sessionMonthLabel(key) {
+      if (!key) return "未知日期";
+      const parts = key.split("-");
+      return parts[0] + "年" + parseInt(parts[1], 10) + "月";
+    }
+    function sessionDateLabel(iso) {
+      if (!iso || typeof iso !== "string") return "";
+      const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso);
+      if (!m) return "";
+      return parseInt(m[2], 10) + "月" + parseInt(m[3], 10) + "日";
+    }
+
     function renderSearchFloat() {
       if (!searchFloat) return;
       let panel = document.getElementById("codex-usage-hud-search-float");
@@ -1898,22 +1923,39 @@ TEXT = r"""
       const collapsed = searchFloat.collapsed ? " is-collapsed" : "";
       const side = searchFloat.side ? ` ${searchFloat.side}` : "";
       panel.className = `codex-usage-hud-search-float${collapsed}${side}`;
-      const rows = matches
-        .map((entry, i) => {
-          // 只在每个命中的会话内部展示「该会话实际命中的分词」；未被命中的分词
-          // 不列出，整行没有任何命中分词时也不显示分词区。
+      // 按月分组（月份降序：最新在前），组内沿用检索排序；每个分组标题
+      // 显示月份与命中数量，逐行额外展示该会话的日期（月-日）。
+      const buckets = new Map();
+      matches.forEach((entry) => {
+        const key = sessionMonthKeyFromIso(entry.updatedAt);
+        if (!buckets.has(key)) buckets.set(key, []);
+        buckets.get(key).push(entry);
+      });
+      const monthOrder = [...buckets.keys()]
+        .filter((k) => k)
+        .sort((a, b) => (a < b ? 1 : -1));
+      if (buckets.has("")) monthOrder.push("");
+      let rowsHtml = "";
+      let displayIndex = 0;
+      monthOrder.forEach((key) => {
+        const groupItems = buckets.get(key);
+        rowsHtml += `<li class="codex-usage-hud-search-group"><span>${escapeHtml(sessionMonthLabel(key))}</span><span class="codex-usage-hud-search-group-count">${groupItems.length}</span></li>`;
+        groupItems.forEach((entry) => {
+          displayIndex += 1;
           const rowChips = (entry.matchedTokens || [])
             .map((token) => `<button type="button" class="codex-usage-hud-search-chip" data-token="${escapeAttr(token)}">${escapeHtml(token)}</button>`)
             .join("");
-          return `
+          const dateLabel = sessionDateLabel(entry.updatedAt);
+          rowsHtml += `
           <li class="codex-usage-hud-search-row${entry.id === currentId ? " is-current" : ""}" data-item-id="${escapeAttr(entry.id)}" data-revision="${escapeAttr(revision)}">
-            <span class="codex-usage-hud-search-index">${i + 1}</span>
+            <span class="codex-usage-hud-search-index">${displayIndex}</span>
             <span class="codex-usage-hud-search-title">${escapeHtml(entry.title || entry.id)}</span>
             ${entry.exactPhrase ? '<span class="codex-usage-hud-search-badge">精确命中</span>' : ""}
+            ${dateLabel ? `<span class="codex-usage-hud-search-date">${dateLabel}</span>` : ""}
             ${rowChips ? `<span class="codex-usage-hud-search-row-chips">${rowChips}</span>` : ""}
           </li>`;
-        })
-        .join("");
+        });
+      });
       panel.innerHTML = `
         <button type="button" class="codex-usage-hud-search-toggle" data-action="toggle" title="${searchFloat.collapsed ? "展开" : "折叠"}">${searchFloat.collapsed ? "»" : "«"}</button>
         <div class="codex-usage-hud-search-head">
@@ -1921,7 +1963,7 @@ TEXT = r"""
           <button type="button" class="codex-usage-hud-search-close" data-action="close" title="关闭">×</button>
         </div>
         <div class="codex-usage-hud-search-meta">${total} 个命中 · 当前第 ${idx >= 0 ? idx + 1 : "-"} / ${total}</div>
-        <ul class="codex-usage-hud-search-list">${rows}</ul>
+        <ul class="codex-usage-hud-search-list">${rowsHtml}</ul>
         <div class="codex-usage-hud-search-nav">
           <button type="button" data-action="prev" ${idx <= 0 ? "disabled" : ""}>上一个</button>
           <button type="button" data-action="next" ${(idx < 0 || idx >= total - 1) ? "disabled" : ""}>下一个</button>
@@ -1973,11 +2015,36 @@ TEXT = r"""
       };
     }
 
+    // 查找 Codex 聊天正文内容区域的左边缘，用于浮窗左侧吸附定位。
+    // 依次尝试多个已知选择器（Codex 版本间可能变化），找不到则回退到
+    // 视口左侧（带默认侧栏宽度偏移）。
+    function chatContentLeftEdge() {
+      const candidates = [
+        // 主滚动容器（虚拟列表宿主）
+        "[class*='conversation']",
+        "[class*='chat-content']",
+        "[class*='thread-view']",
+        "[class*='message-list']",
+        "main",
+        "[role='main']",
+      ];
+      for (const sel of candidates) {
+        const el = document.querySelector(sel);
+        if (el) {
+          const r = el.getBoundingClientRect();
+          if (r.width > 200) return r.left;
+        }
+      }
+      return 280; // 回退值：典型侧栏宽度
+    }
+
     function bindSearchFloatDrag(panel) {
       let startX = 0, startY = 0, originLeft = 0, originTop = 0, dragging = false;
       panel.addEventListener("pointerdown", (event) => {
         if (searchFloat?.collapsed) return;
-        if (event.target?.closest?.("button, .codex-usage-hud-search-row, .codex-usage-hud-search-chip")) return;
+        // 排除交互元素与可滚动列表（含其滚动条），避免按住滚动条时
+        // 面板被当拖拽起点而飘到 (0,0)。
+        if (event.target?.closest?.("button, .codex-usage-hud-search-row, .codex-usage-hud-search-chip, .codex-usage-hud-search-list")) return;
         dragging = true;
         panel.classList.add("is-dragging");
         panel.classList.remove("side-left", "side-right");
@@ -2017,7 +2084,12 @@ TEXT = r"""
         } else {
           searchFloat.side = "";
         }
-        if (searchFloat.side) {
+        if (searchFloat.side === "side-left") {
+          // 吸附到 Codex 聊天正文区域的左边缘（而非整个窗口左缘）。
+          panel.style.left = `${chatContentLeftEdge()}px`;
+          panel.style.top = "";
+          panel.style.right = "";
+        } else if (searchFloat.side === "side-right") {
           panel.style.left = "";
           panel.style.top = "";
           panel.style.right = "";

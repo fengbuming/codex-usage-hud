@@ -1149,12 +1149,17 @@ class SessionCleanupManager:
             ranked.append(
                 {
                     "id": match_id,
-                    "title": (
-                        titles.get(match_item._session_id)
-                        if match_item is not None
-                        else (entry.get("title") or match_id)
-                    ),
-                    "kinds": list(entry.get("kinds") or []),
+                "title": (
+                    titles.get(match_item._session_id)
+                    if match_item is not None
+                    else (entry.get("title") or match_id)
+                ),
+                "updatedAt": (
+                    match_item.updated_at
+                    if match_item is not None
+                    else (entry.get("updatedAt") or "")
+                ),
+                "kinds": list(entry.get("kinds") or []),
                     "score": float(entry.get("score") or 0),
                     "exactPhrase": bool(entry.get("exactPhrase") or False),
                     "matchedTokens": matched_tokens,
