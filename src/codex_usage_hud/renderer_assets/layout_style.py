@@ -6665,6 +6665,153 @@ TEXT = r"""
               display: none;
             }
           }
+          #${rootId} .codex-usage-hud-search-float {
+            position: fixed;
+            right: 18px;
+            bottom: 18px;
+            z-index: 2147482640;
+            width: 320px;
+            max-width: calc(100vw - 36px);
+            max-height: 70vh;
+            display: flex;
+            flex-direction: column;
+            box-sizing: border-box;
+            gap: 8px;
+            padding: 12px 12px 10px;
+            border: 1px solid var(--codex-usage-hud-panel-border, #3a485a);
+            border-radius: 12px;
+            background: linear-gradient(150deg, rgba(28, 36, 47, .98), rgba(15, 21, 29, .98));
+            box-shadow: 0 18px 44px rgba(0, 0, 0, .42), inset 0 1px 0 rgba(255, 255, 255, .06);
+            color: var(--codex-usage-hud-text, #e8eef7);
+            font: 12px/1.4 "Microsoft YaHei UI", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            pointer-events: auto;
+            user-select: text;
+          }
+          #${rootId} .codex-usage-hud-search-float .codex-usage-hud-search-head {
+            display: flex;
+            align-items: flex-start;
+            gap: 8px;
+          }
+          #${rootId} .codex-usage-hud-search-float .codex-usage-hud-search-query {
+            flex: 1 1 auto;
+            min-width: 0;
+            font-weight: 700;
+            color: var(--codex-usage-hud-accent, #f3d27a);
+            word-break: break-word;
+          }
+          #${rootId} .codex-usage-hud-search-float .codex-usage-hud-search-close {
+            flex: 0 0 auto;
+            width: 22px;
+            height: 22px;
+            border: 0;
+            border-radius: 6px;
+            background: rgba(255, 255, 255, .08);
+            color: var(--codex-usage-hud-muted, #8492a6);
+            font-size: 15px;
+            line-height: 1;
+            cursor: pointer;
+          }
+          #${rootId} .codex-usage-hud-search-float .codex-usage-hud-search-close:hover {
+            background: rgba(255, 107, 107, .18);
+            color: var(--codex-usage-hud-error, #ff6b6b);
+          }
+          #${rootId} .codex-usage-hud-search-float .codex-usage-hud-search-chips {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+          }
+          #${rootId} .codex-usage-hud-search-float .codex-usage-hud-search-chip {
+            padding: 3px 9px;
+            border: 1px solid var(--codex-usage-hud-panel-border, #3a485a);
+            border-radius: 999px;
+            background: rgba(156, 203, 255, .12);
+            color: var(--codex-usage-hud-info, #9ccbff);
+            font-size: 11px;
+            font-weight: 600;
+            cursor: pointer;
+          }
+          #${rootId} .codex-usage-hud-search-float .codex-usage-hud-search-chip:hover {
+            background: rgba(156, 203, 255, .22);
+          }
+          #${rootId} .codex-usage-hud-search-float .codex-usage-hud-search-meta {
+            color: var(--codex-usage-hud-muted, #8492a6);
+            font-size: 11px;
+          }
+          #${rootId} .codex-usage-hud-search-float .codex-usage-hud-search-list {
+            list-style: none;
+            margin: 0;
+            padding: 4px 0 0;
+            overflow-y: auto;
+            border-top: 1px solid var(--codex-usage-hud-divider, #273241);
+            max-height: 38vh;
+          }
+          #${rootId} .codex-usage-hud-search-float .codex-usage-hud-search-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px;
+            border-radius: 8px;
+            cursor: pointer;
+          }
+          #${rootId} .codex-usage-hud-search-float .codex-usage-hud-search-row:hover {
+            background: rgba(255, 255, 255, .07);
+          }
+          #${rootId} .codex-usage-hud-search-float .codex-usage-hud-search-row.is-current {
+            background: rgba(243, 210, 122, .16);
+            box-shadow: inset 0 0 0 1px rgba(243, 210, 122, .4);
+          }
+          #${rootId} .codex-usage-hud-search-float .codex-usage-hud-search-index {
+            flex: 0 0 auto;
+            width: 18px;
+            text-align: right;
+            color: var(--codex-usage-hud-muted, #8492a6);
+            font-variant-numeric: tabular-nums;
+          }
+          #${rootId} .codex-usage-hud-search-float .codex-usage-hud-search-title {
+            flex: 1 1 auto;
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+          }
+          #${rootId} .codex-usage-hud-search-float .codex-usage-hud-search-badge {
+            flex: 0 0 auto;
+            padding: 1px 6px;
+            border-radius: 999px;
+            background: rgba(143, 227, 161, .18);
+            color: var(--codex-usage-hud-success, #8fe3a1);
+            font-size: 10px;
+            font-weight: 700;
+          }
+          #${rootId} .codex-usage-hud-search-float .codex-usage-hud-search-nav {
+            display: flex;
+            gap: 6px;
+          }
+          #${rootId} .codex-usage-hud-search-float .codex-usage-hud-search-nav button {
+            flex: 1 1 0;
+            padding: 6px 8px;
+            border: 1px solid var(--codex-usage-hud-panel-border, #3a485a);
+            border-radius: 8px;
+            background: rgba(255, 255, 255, .06);
+            color: var(--codex-usage-hud-text, #e8eef7);
+            font-size: 11px;
+            font-weight: 600;
+            cursor: pointer;
+          }
+          #${rootId} .codex-usage-hud-search-float .codex-usage-hud-search-nav button:hover:not([disabled]) {
+            background: rgba(255, 255, 255, .12);
+          }
+          #${rootId} .codex-usage-hud-search-float .codex-usage-hud-search-nav button[disabled] {
+            opacity: .4;
+            cursor: default;
+          }
+          #${rootId} .codex-usage-hud-search-float .codex-usage-hud-search-return {
+            color: var(--codex-usage-hud-info, #9ccbff) !important;
+          }
+          #${rootId} .codex-usage-hud-search-float .codex-usage-hud-search-empty {
+            color: var(--codex-usage-hud-muted, #8492a6);
+            font-size: 11px;
+          }
         `;
         document.documentElement.appendChild(style);
       }

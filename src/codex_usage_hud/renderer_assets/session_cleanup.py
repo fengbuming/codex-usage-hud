@@ -134,6 +134,9 @@ TEXT = r"""
             const details = filterState.searchResultDetails instanceof Map
               ? filterState.searchResultDetails
               : new Map();
+            const leftExact = details.get(String(left?.id || ""))?.exactPhrase ? 1 : 0;
+            const rightExact = details.get(String(right?.id || ""))?.exactPhrase ? 1 : 0;
+            if (leftExact !== rightExact) return rightExact - leftExact;
             const leftScore = Number(details.get(String(left?.id || ""))?.score || 0);
             const rightScore = Number(details.get(String(right?.id || ""))?.score || 0);
             if (leftScore !== rightScore) return rightScore - leftScore;
@@ -1312,6 +1315,9 @@ TEXT = r"""
               .map((item) => [String(item.id), item])
             : [],
         );
+        sessionCleanupState.searchResultTokens = Array.isArray(incoming.searchTokens)
+          ? incoming.searchTokens.filter((token) => String(token || "").trim())
+          : [];
         sessionCleanupState.searchRequestId = "";
         return true;
       }

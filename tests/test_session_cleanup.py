@@ -18,6 +18,7 @@ from codex_usage_hud.core.session_cleanup import (
     SessionCleanupManager,
 )
 from codex_usage_hud.core.deleted_usage import DeletedUsageLedger
+from codex_usage_hud.core.session_search import search_terms
 
 
 ROOT_ID = "10000000-0000-4000-8000-000000000001"
@@ -2607,6 +2608,68 @@ class SessionCleanupManagerTests(unittest.TestCase):
         self.assertEqual(
             result.get("targetKey"),
             hashlib.sha256(ROOT_ID.encode()).hexdigest(),
+        )
+        # 跳转浮窗所需的富化载荷：查询分词、索引 revision、有序命中列表。
+        self.assertEqual(result.get("revision"), scan["revision"])
+        self.assertEqual(result.get("tokens"), list(search_terms("fuzzy-marker")))
+        self.assertEqual(result.get("matches"), [])
+
+    def test_thread_find_for_item_ships_ranked_matches_in_search_order(self) -> None:
+        """After a resident search, the payload carries the ranked match list
+        (id/title/kinds/score/exactPhrase) so the in-session float can list and
+        walk hits in the same verbatim-first order the index produced."""
+        fixture = self._fixture()
+        temporary, _root, _state, _index, rollouts, manager = fixture
+        self.addCleanup(temporary.cleanup)
+        # 给 Root 会话注入可检索的正文，否则管理器的常驻索引只有元数据。
+        rollouts[ROOT_ID].write_text(
+            rollouts[ROOT_ID].read_text(encoding="utf-8")
+            + json.dumps(
+                {
+                    "type": "event_msg",
+                    "payload": {
+                        "type": "user_message",
+                        "message": "请检查会话索引中的 fuzzy-marker",
+                    },
+                },
+                ensure_ascii=False,
+            )
+            + "\n"
+            + json.dumps(
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "已修改 active_session.py"}],
+                    },
+                },
+                ensure_ascii=False,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        scan = manager.scan(request_id="scan-thread-find-ranked")
+        manager._search_index.sync(manager.search_index_entries())
+        manager.search("fuzzy-marker", request_id="search-thread-find-ranked")
+
+        root_row = next(row for row in scan["sessions"] if row["title"] == "Root")
+        result = manager.thread_find_for_item(root_row["id"], scan["revision"], "fuzzy-marker")
+
+        matches = result.get("matches")
+        self.assertIsInstance(matches, list)
+        self.assertTrue(matches, "expected at least one ranked match after search()")
+        first = matches[0]
+        self.assertEqual(first["id"], root_row["id"])
+        self.assertIn("title", first)
+        self.assertIn("kinds", first)
+        self.assertIn("score", first)
+        self.assertIn("exactPhrase", first)
+        # The match order must mirror the resident index ranking (verbatim
+        # phrase above scattered token hits, then by relevance score).
+        self.assertEqual(
+            [entry["id"] for entry in matches],
+            list(manager._search_state.get("matches") or []),
         )
 
     def test_thread_find_for_item_rejects_stale_or_unknown_inventory(self) -> None:

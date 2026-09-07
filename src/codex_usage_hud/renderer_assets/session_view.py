@@ -1867,9 +1867,139 @@ TEXT = r"""
       step();
     }
 
+    function escapeHtml(value) {
+      return String(value ?? "").replace(/[&<>"']/g, (ch) => ({
+        "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+      }[ch]));
+    }
+    function escapeAttr(value) {
+      return escapeHtml(value).replace(/"/g, "&quot;");
+    }
+
+    // 会话内检索浮窗：仅在跳转到 Codex 会话后出现。浮窗列出排序后的命中会话、
+    // 查询分词（点击即用该分词驱动原生查找），并支持上一个 / 下一个在命中会话间
+    // 穿梭；高亮、滚动与计数完全交给 Codex 原生 find-in-thread。
+    let searchFloat = null;
+
+    function renderSearchFloat() {
+      if (!searchFloat) return;
+      let panel = document.getElementById("codex-usage-hud-search-float");
+      if (!panel) {
+        panel = document.createElement("div");
+        panel.id = "codex-usage-hud-search-float";
+        panel.className = "codex-usage-hud-search-float";
+        const host = document.getElementById(rootId) || document.body;
+        host.appendChild(panel);
+      }
+      const { query, tokens, matches, revision, currentId } = searchFloat;
+      const total = matches.length;
+      const idx = matches.findIndex((entry) => entry.id === currentId);
+      const chips = (tokens || [])
+        .map((token) => `<button type="button" class="codex-usage-hud-search-chip" data-token="${escapeAttr(token)}">${escapeHtml(token)}</button>`)
+        .join("");
+      const rows = matches
+        .map((entry, i) => `
+          <li class="codex-usage-hud-search-row${entry.id === currentId ? " is-current" : ""}" data-item-id="${escapeAttr(entry.id)}" data-revision="${escapeAttr(revision)}">
+            <span class="codex-usage-hud-search-index">${i + 1}</span>
+            <span class="codex-usage-hud-search-title">${escapeHtml(entry.title || entry.id)}</span>
+            ${entry.exactPhrase ? '<span class="codex-usage-hud-search-badge">精确命中</span>' : ""}
+          </li>`)
+        .join("");
+      panel.innerHTML = `
+        <div class="codex-usage-hud-search-head">
+          <span class="codex-usage-hud-search-query" title="${escapeAttr(query)}">${escapeHtml(query)}</span>
+          <button type="button" class="codex-usage-hud-search-close" data-action="close" title="关闭">×</button>
+        </div>
+        <div class="codex-usage-hud-search-chips">${chips || '<span class="codex-usage-hud-search-empty">无分词</span>'}</div>
+        <div class="codex-usage-hud-search-meta">${total} 个命中 · 当前第 ${idx >= 0 ? idx + 1 : "-"} / ${total}</div>
+        <ul class="codex-usage-hud-search-list">${rows}</ul>
+        <div class="codex-usage-hud-search-nav">
+          <button type="button" data-action="prev" ${idx <= 0 ? "disabled" : ""}>上一个</button>
+          <button type="button" data-action="next" ${(idx < 0 || idx >= total - 1) ? "disabled" : ""}>下一个</button>
+          <button type="button" data-action="return" class="codex-usage-hud-search-return">返回会话管理</button>
+        </div>`;
+    }
+
+    function bindSearchFloat(panel) {
+      panel.onclick = (event) => {
+        const chip = event.target?.closest?.(".codex-usage-hud-search-chip");
+        const row = event.target?.closest?.(".codex-usage-hud-search-row");
+        const action = event.target?.closest?.("[data-action]");
+        if (chip) {
+          event.preventDefault();
+          openThreadFind(String(chip.dataset.token || ""));
+          return;
+        }
+        if (row) {
+          event.preventDefault();
+          jumpToSearchResult(String(row.dataset.itemId || ""), String(row.dataset.revision || ""));
+          return;
+        }
+        if (!action) return;
+        const name = action.dataset.action;
+        if (name === "close") { closeSearchFloat(); return; }
+        if (name === "return") {
+          closeSearchFloat();
+          if (typeof window.__codexUsageHudOpenSessionCleanup === "function") {
+            window.__codexUsageHudOpenSessionCleanup("storage");
+          }
+          return;
+        }
+        if (name === "prev" || name === "next") {
+          const ctxFloat = searchFloat;
+          if (!ctxFloat || !ctxFloat.matches) return;
+          const at = ctxFloat.matches.findIndex((entry) => entry.id === ctxFloat.currentId);
+          const next = name === "prev" ? at - 1 : at + 1;
+          if (next >= 0 && next < ctxFloat.matches.length) {
+            jumpToSearchResult(ctxFloat.matches[next].id, ctxFloat.revision);
+          }
+        }
+      };
+    }
+
+    function jumpToSearchResult(itemId, revision) {
+      if (!itemId) return;
+      const query = String(searchFloat?.query || "");
+      prepareSearchJump(itemId);
+      const sent = ctx.bindings.send(settingsCommandBindingName, {
+        id: `search-jump-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        createdAt: Date.now(),
+        action: "openSessionCleanupSession",
+        itemId,
+        inventoryRevision: revision,
+        searchQuery: query,
+      });
+      if (sent === false) {
+        console.warn("search jump command channel unavailable");
+      }
+    }
+
+    function closeSearchFloat() {
+      const panel = document.getElementById("codex-usage-hud-search-float");
+      if (panel) panel.remove();
+      searchFloat = null;
+    }
+
     async function applySearchJump(response) {
-      if (!pendingSearchJump || response?.itemId !== pendingSearchJump) return;
+      if (!response || !response.search) return;
       const query = String(response.search?.query || "").trim();
+      // 刷新浮窗上下文：维护排序后的命中列表、分词与当前所在会话。
+      if (
+        response.itemId
+        && Array.isArray(response.search.matches)
+        && response.search.matches.length
+      ) {
+        searchFloat = {
+          query,
+          tokens: Array.isArray(response.search.tokens) ? response.search.tokens : [],
+          matches: response.search.matches,
+          revision: String(response.search.revision || ""),
+          currentId: String(response.itemId || ""),
+        };
+        renderSearchFloat();
+        bindSearchFloat(document.getElementById("codex-usage-hud-search-float"));
+      }
+      if (!pendingSearchJump || response?.itemId !== pendingSearchJump) return;
       if (!query || response.search?.error || !response.verified) { pendingSearchJump = ""; return; }
       pendingSearchJump = "";
       const targetKey = String(response.search?.targetKey || "");

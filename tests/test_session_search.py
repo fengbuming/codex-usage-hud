@@ -162,6 +162,56 @@ def test_loaded_search_uses_resident_postings_without_reopening_sqlite(
     assert result["matches"][0]["sessionId"] == "session"
 
 
+def test_search_ranks_exact_phrase_above_token_hits(tmp_path: Path) -> None:
+    """A session that contains the verbatim query phrase must rank above a
+    session that merely scatters the same tokens across its text."""
+
+    exact = tmp_path / "exact.jsonl"
+    exact.write_text(
+        json.dumps(
+            {
+                "type": "event_msg",
+                "payload": {
+                    "type": "user_message",
+                    "message": "please find renderer active session in the log",
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    scattered = tmp_path / "scattered.jsonl"
+    scattered.write_text(
+        json.dumps(
+            {
+                "type": "event_msg",
+                "payload": {
+                    "type": "user_message",
+                    "message": "the renderer ran an active session but not contiguous",
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    index = SessionSearchIndex(tmp_path / "phrase.sqlite")
+    index.upsert("exact", (exact,))
+    index.upsert("scattered", (scattered,))
+
+    result = index.search("renderer active session")
+    ids = [match["sessionId"] for match in result["matches"]]
+    assert "exact" in ids
+    assert "scattered" in ids
+    # 精确短语命中必须排在零散分词命中之前。
+    assert ids.index("exact") < ids.index("scattered")
+
+    exact_match = next(m for m in result["matches"] if m["sessionId"] == "exact")
+    scattered_match = next(m for m in result["matches"] if m["sessionId"] == "scattered")
+    assert exact_match["exact_phrase"] is True
+    assert scattered_match["exact_phrase"] is False
+
+
 def test_search_terms_support_fuzzy_path_fragments(tmp_path: Path) -> None:
     rollout = tmp_path / "path.jsonl"
     rollout.write_text(

@@ -3350,6 +3350,8 @@ _TEXT_PREFIX = r"""
         renderSettingsModal(String(settingsUiState.tab || settingsActiveTab));
         return true;
       }
+      // 供会话内检索浮窗的「返回会话管理」按钮调用：直接打开设置页到会话管理标签。
+      window.__codexUsageHudOpenSessionCleanup = (tab = "storage") => renderSettingsModal(tab);
 
       function settingsPanelHtml(settings, bridge, path) {
         ensureSettingsProviderDraft(settings);

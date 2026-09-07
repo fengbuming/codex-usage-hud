@@ -805,6 +805,7 @@ class SessionCleanupManager:
                         and not isinstance(raw.get("kinds"), (str, bytes, bytearray))
                         else [],
                         "score": float(raw.get("score") or 0),
+                        "exactPhrase": bool(raw.get("exact_phrase") or False),
                     }
         if query.strip():
             for item in visible_items:
@@ -936,6 +937,7 @@ class SessionCleanupManager:
                     "indexState": index_state,
                     "matches": matches,
                     "matchKinds": match_kinds,
+                    "searchTokens": list(result.get("tokens") or []),
                     "indexed": indexed,
                     "indexAvailable": bool(result.get("indexAvailable", True)),
                     "requestId": str(request_id or ""),
@@ -1115,7 +1117,9 @@ class SessionCleanupManager:
 
         Highlighting, scrolling and prev/next navigation are owned by the
         native find bar; the HUD only needs the query plus a target key so the
-        renderer can confirm the landed session before opening it.
+        renderer can confirm the landed session before opening it.  The payload
+        also ships the ranked match list and query tokens so the in-session
+        search float can list results, surface token chips, and walk prev/next.
         """
         import hashlib
 
@@ -1125,9 +1129,36 @@ class SessionCleanupManager:
             return {"query": query, "error": "inventory-changed"}
         if str(revision) != self._revision or self._items.get(str(item_id)) is not item:
             return {"query": query, "error": "inventory-changed"}
+        titles = self._session_index_titles()
+        ordered_ids = [str(value) for value in self._search_state.get("matches") or []]
+        kind_map = {
+            str(entry.get("id")): entry
+            for entry in (self._search_state.get("matchKinds") or [])
+            if isinstance(entry, Mapping)
+        }
+        ranked: list[dict[str, object]] = []
+        for match_id in ordered_ids:
+            entry = kind_map.get(match_id) or {}
+            match_item = self._items.get(match_id)
+            ranked.append(
+                {
+                    "id": match_id,
+                    "title": (
+                        titles.get(match_item._session_id)
+                        if match_item is not None
+                        else (entry.get("title") or match_id)
+                    ),
+                    "kinds": list(entry.get("kinds") or []),
+                    "score": float(entry.get("score") or 0),
+                    "exactPhrase": bool(entry.get("exactPhrase") or False),
+                }
+            )
         return {
             "query": query,
             "targetKey": hashlib.sha256(item._session_id.encode()).hexdigest(),
+            "tokens": list(search_terms(query)),
+            "revision": self._revision,
+            "matches": ranked,
         }
 
     def workdir_for_transfer_target(
