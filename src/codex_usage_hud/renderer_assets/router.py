@@ -1075,7 +1075,11 @@ TEXT = r"""
           "正在打开会话...",
           { preserveOverlay: true },
         );
-        if (submitted) markSessionCleanupJumpInflight(itemId, "jump");
+        if (submitted) {
+          markSessionCleanupJumpInflight(itemId, "jump");
+          // 跳转意图是离开设置页、去到 Codex 会话，提交成功后即收起设置页让位。
+          closeSettingsModal();
+        }
         return;
       }
       if (action.dataset.action === "session-cleanup-resume-session") {
@@ -1089,7 +1093,11 @@ TEXT = r"""
           "正在终端恢复会话...",
           { preserveOverlay: true },
         );
-        if (submitted) markSessionCleanupJumpInflight(itemId, "fallback");
+        if (submitted) {
+          markSessionCleanupJumpInflight(itemId, "fallback");
+          // 终端恢复同样是「离开设置页去到该会话」，一并收起设置页。
+          closeSettingsModal();
+        }
         return;
       }
       if (action.dataset.action === "session-cleanup-cancel") {
