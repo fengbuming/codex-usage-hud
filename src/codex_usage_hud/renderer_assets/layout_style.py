@@ -6667,8 +6667,9 @@ TEXT = r"""
           }
           #${rootId} .codex-usage-hud-search-float {
             position: fixed;
-            right: 18px;
-            bottom: 18px;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
             z-index: 2147482640;
             width: 320px;
             max-width: calc(100vw - 36px);
@@ -6686,6 +6687,60 @@ TEXT = r"""
             font: 12px/1.4 "Microsoft YaHei UI", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
             pointer-events: auto;
             user-select: text;
+            touch-action: none;
+            cursor: move;
+          }
+          /* 自由拖拽中：JS 写入 left/top，取消居中变换 */
+          #${rootId} .codex-usage-hud-search-float.is-dragging {
+            transform: none !important;
+            user-select: none;
+          }
+          /* 吸附到 Codex 正文区域左 / 右边缘 */
+          #${rootId} .codex-usage-hud-search-float.side-left {
+            left: 12px;
+            right: auto;
+            top: 50%;
+            transform: translateY(-50%) !important;
+          }
+          #${rootId} .codex-usage-hud-search-float.side-right {
+            right: 12px;
+            left: auto;
+            top: 50%;
+            transform: translateY(-50%) !important;
+          }
+          /* 折叠态：仅保留侧边小药丸，点击展开 */
+          #${rootId} .codex-usage-hud-search-float.is-collapsed {
+            width: auto;
+            max-width: none;
+            max-height: none;
+            flex-direction: row;
+            gap: 0;
+            padding: 7px 10px;
+            transform: none !important;
+            cursor: pointer;
+          }
+          #${rootId} .codex-usage-hud-search-float.is-collapsed.side-left,
+          #${rootId} .codex-usage-hud-search-float.is-collapsed.side-right {
+            transform: translateY(-50%) !important;
+          }
+          #${rootId} .codex-usage-hud-search-float.is-collapsed > *:not(.codex-usage-hud-search-toggle) {
+            display: none;
+          }
+          #${rootId} .codex-usage-hud-search-float .codex-usage-hud-search-toggle {
+            flex: 0 0 auto;
+            width: 22px;
+            height: 22px;
+            border: 0;
+            border-radius: 6px;
+            background: rgba(255, 255, 255, .08);
+            color: var(--codex-usage-hud-muted, #8492a6);
+            font-size: 13px;
+            line-height: 1;
+            cursor: pointer;
+          }
+          #${rootId} .codex-usage-hud-search-float .codex-usage-hud-search-toggle:hover {
+            background: rgba(156, 203, 255, .2);
+            color: var(--codex-usage-hud-info, #9ccbff);
           }
           #${rootId} .codex-usage-hud-search-float .codex-usage-hud-search-head {
             display: flex;

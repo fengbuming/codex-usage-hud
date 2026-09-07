@@ -827,6 +827,7 @@ class SessionCleanupManager:
         if details:
             order.sort(
                 key=lambda item_id: (
+                    0 if details[item_id].get("exactPhrase") else 1,
                     -float(details[item_id].get("score") or 0),
                     item_id,
                 )

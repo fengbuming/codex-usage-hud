@@ -2687,6 +2687,65 @@ class SessionCleanupManagerTests(unittest.TestCase):
         self.assertEqual(unknown.get("error"), "inventory-changed")
         self.assertEqual(unknown.get("targetKey"), None)
 
+    def test_search_ranks_exact_phrase_session_first_among_matches(self) -> None:
+        """Regression: the manager re-sort must keep exact-phrase hits ahead of
+        higher-scoring token-scatter hits.
+
+        Without the exactPhrase dimension in ``_search_matches_locked``'s sort
+        key, a scattered match in a higher-weight field (user message) outranks
+        a verbatim-phrase match in a lower-weight field (assistant message) —
+        which is what put the precise session at position 2 in the live UI.
+        """
+
+        fixture = self._fixture()
+        temporary, _root, _state, _index, rollouts, manager = fixture
+        self.addCleanup(temporary.cleanup)
+
+        def append_message(session_id: str, role: str, text: str) -> None:
+            path = rollouts[session_id]
+            line = json.dumps(
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": role,
+                        "content": [{"type": "output_text", "text": text}],
+                    },
+                },
+                ensure_ascii=False,
+            )
+            path.write_text(
+                path.read_text(encoding="utf-8") + line + "\n", encoding="utf-8"
+            )
+
+        # 精确短语（逐字连续）落在较低权重的 assistant 文本里。
+        append_message(ROOT_ID, "assistant", "请检查 alpha beta 这段配置")
+        # 分词散落（alpha 与 beta 被 and 隔开）落在较高权重的 user 文本里，
+        # 因此若只按 score 排序会排在精确命中之前。
+        append_message(SECOND_ID, "user", "我想知道 alpha and beta 的差异在哪里")
+
+        scan = manager.scan(request_id="scan-exact-first")
+        root_row = next(row for row in scan["sessions"] if row["title"] == "Root")
+        scatter_row = next(row for row in scan["sessions"] if row["title"] == "Archived")
+        manager._search_index.sync(manager.search_index_entries())
+
+        result = manager.search("alpha beta", request_id="search-exact-first")
+        matches = manager._search_state.get("matches") or result.get("matches") or []
+        self.assertIn(root_row["id"], matches)
+        self.assertIn(scatter_row["id"], matches)
+        self.assertLess(
+            matches.index(root_row["id"]),
+            matches.index(scatter_row["id"]),
+            "exact-phrase session must rank before the higher-scoring scatter hit",
+        )
+        # 精确命中会话须被标记，供前端 badge / 排序使用。
+        kinds = manager._search_state.get("matchKinds") or []
+        root_kind = next(
+            (entry for entry in kinds if entry.get("id") == root_row["id"]), None
+        )
+        self.assertIsNotNone(root_kind)
+        self.assertTrue(root_kind.get("exactPhrase"))
+
 
 if __name__ == "__main__":
     unittest.main()

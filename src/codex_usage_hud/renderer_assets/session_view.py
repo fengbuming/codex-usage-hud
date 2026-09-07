@@ -1887,13 +1887,17 @@ TEXT = r"""
       if (!panel) {
         panel = document.createElement("div");
         panel.id = "codex-usage-hud-search-float";
-        panel.className = "codex-usage-hud-search-float";
         const host = document.getElementById(rootId) || document.body;
         host.appendChild(panel);
+        // 拖拽吸附只在面板创建时绑定一次，避免 applySearchJump 重复 addEventListener。
+        bindSearchFloatDrag(panel);
       }
       const { query, tokens, matches, revision, currentId } = searchFloat;
       const total = matches.length;
       const idx = matches.findIndex((entry) => entry.id === currentId);
+      const collapsed = searchFloat.collapsed ? " is-collapsed" : "";
+      const side = searchFloat.side ? ` ${searchFloat.side}` : "";
+      panel.className = `codex-usage-hud-search-float${collapsed}${side}`;
       const chips = (tokens || [])
         .map((token) => `<button type="button" class="codex-usage-hud-search-chip" data-token="${escapeAttr(token)}">${escapeHtml(token)}</button>`)
         .join("");
@@ -1906,6 +1910,7 @@ TEXT = r"""
           </li>`)
         .join("");
       panel.innerHTML = `
+        <button type="button" class="codex-usage-hud-search-toggle" data-action="toggle" title="${searchFloat.collapsed ? "展开" : "折叠"}">${searchFloat.collapsed ? "»" : "«"}</button>
         <div class="codex-usage-hud-search-head">
           <span class="codex-usage-hud-search-query" title="${escapeAttr(query)}">${escapeHtml(query)}</span>
           <button type="button" class="codex-usage-hud-search-close" data-action="close" title="关闭">×</button>
@@ -1918,6 +1923,12 @@ TEXT = r"""
           <button type="button" data-action="next" ${(idx < 0 || idx >= total - 1) ? "disabled" : ""}>下一个</button>
           <button type="button" data-action="return" class="codex-usage-hud-search-return">返回会话管理</button>
         </div>`;
+    }
+
+    function toggleSearchFloat() {
+      if (!searchFloat) return;
+      searchFloat.collapsed = !searchFloat.collapsed;
+      renderSearchFloat();
     }
 
     function bindSearchFloat(panel) {
@@ -1937,6 +1948,7 @@ TEXT = r"""
         }
         if (!action) return;
         const name = action.dataset.action;
+        if (name === "toggle") { toggleSearchFloat(); return; }
         if (name === "close") { closeSearchFloat(); return; }
         if (name === "return") {
           closeSearchFloat();
@@ -1957,9 +1969,70 @@ TEXT = r"""
       };
     }
 
+    function bindSearchFloatDrag(panel) {
+      let startX = 0, startY = 0, originLeft = 0, originTop = 0, dragging = false;
+      panel.addEventListener("pointerdown", (event) => {
+        if (searchFloat?.collapsed) return;
+        if (event.target?.closest?.("button, .codex-usage-hud-search-row, .codex-usage-hud-search-chip")) return;
+        dragging = true;
+        panel.classList.add("is-dragging");
+        panel.classList.remove("side-left", "side-right");
+        const rect = panel.getBoundingClientRect();
+        panel.style.left = `${rect.left}px`;
+        panel.style.top = `${rect.top}px`;
+        panel.style.right = "auto";
+        originLeft = rect.left;
+        originTop = rect.top;
+        startX = event.clientX;
+        startY = event.clientY;
+        try { panel.setPointerCapture(event.pointerId); } catch (_) {}
+      });
+      panel.addEventListener("pointermove", (event) => {
+        if (!dragging) return;
+        const dx = event.clientX - startX;
+        const dy = event.clientY - startY;
+        const nx = Math.max(4, Math.min(window.innerWidth - panel.offsetWidth - 4, originLeft + dx));
+        const ny = Math.max(4, Math.min(window.innerHeight - panel.offsetHeight - 4, originTop + dy));
+        panel.style.left = `${nx}px`;
+        panel.style.top = `${ny}px`;
+      });
+      const end = (event) => {
+        if (!dragging) return;
+        dragging = false;
+        panel.classList.remove("is-dragging");
+        try { panel.releasePointerCapture(event.pointerId); } catch (_) {}
+        if (!searchFloat) return;
+        const rect = panel.getBoundingClientRect();
+        const cx = rect.left + rect.width / 2;
+        if (cx < window.innerWidth * 0.33) {
+          searchFloat.side = "side-left";
+          panel.classList.add("side-left");
+        } else if (cx > window.innerWidth * 0.67) {
+          searchFloat.side = "side-right";
+          panel.classList.add("side-right");
+        } else {
+          searchFloat.side = "";
+        }
+        if (searchFloat.side) {
+          panel.style.left = "";
+          panel.style.top = "";
+          panel.style.right = "";
+        }
+      };
+      panel.addEventListener("pointerup", end);
+      panel.addEventListener("pointercancel", end);
+    }
+
     function jumpToSearchResult(itemId, revision) {
       if (!itemId) return;
       const query = String(searchFloat?.query || "");
+      // 点击浮窗某会话：自动把命中关键词注入 Codex 自带搜索框做定位。
+      // 若目标就是当前会话（无需跳转），直接打开原生查找；否则先跳转，
+      // 落地回执由 applySearchJump 再一次打开原生查找。
+      if (String(itemId) === String(searchFloat?.currentId || "")) {
+        if (query) openThreadFind(query);
+        return;
+      }
       prepareSearchJump(itemId);
       const sent = ctx.bindings.send(settingsCommandBindingName, {
         id: `search-jump-${Date.now()}-${Math.random().toString(36).slice(2)}`,
@@ -1984,17 +2057,21 @@ TEXT = r"""
       if (!response || !response.search) return;
       const query = String(response.search?.query || "").trim();
       // 刷新浮窗上下文：维护排序后的命中列表、分词与当前所在会话。
+      // 保留用户已设置的折叠 / 吸附侧边状态，不每次覆盖。
       if (
         response.itemId
         && Array.isArray(response.search.matches)
         && response.search.matches.length
       ) {
+        const previous = searchFloat || {};
         searchFloat = {
           query,
           tokens: Array.isArray(response.search.tokens) ? response.search.tokens : [],
           matches: response.search.matches,
           revision: String(response.search.revision || ""),
           currentId: String(response.itemId || ""),
+          collapsed: Boolean(previous.collapsed),
+          side: previous.side || "",
         };
         renderSearchFloat();
         bindSearchFloat(document.getElementById("codex-usage-hud-search-float"));
