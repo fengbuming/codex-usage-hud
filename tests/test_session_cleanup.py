@@ -2665,6 +2665,13 @@ class SessionCleanupManagerTests(unittest.TestCase):
         self.assertIn("kinds", first)
         self.assertIn("score", first)
         self.assertIn("exactPhrase", first)
+        self.assertIn("matchedTokens", first)
+        # 每个命中会话只携带「该会话实际命中的分词」，未被命中的分词不列出。
+        self.assertIsInstance(first["matchedTokens"], list)
+        self.assertTrue(
+            set(first["matchedTokens"]).issubset(set(search_terms("fuzzy-marker"))),
+            "matchedTokens must be a subset of the query tokens",
+        )
         # The match order must mirror the resident index ranking (verbatim
         # phrase above scattered token hits, then by relevance score).
         self.assertEqual(

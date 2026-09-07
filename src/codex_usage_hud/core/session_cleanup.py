@@ -1137,10 +1137,15 @@ class SessionCleanupManager:
             for entry in (self._search_state.get("matchKinds") or [])
             if isinstance(entry, Mapping)
         }
+        terms = list(search_terms(query))
+        indexed_documents = getattr(self._search_index, "_documents", None)
         ranked: list[dict[str, object]] = []
         for match_id in ordered_ids:
             entry = kind_map.get(match_id) or {}
             match_item = self._items.get(match_id)
+            document = indexed_documents.get(match_id) if indexed_documents is not None else None
+            token_set = getattr(document, "token_set", frozenset()) if document is not None else frozenset()
+            matched_tokens = [term for term in terms if term in token_set]
             ranked.append(
                 {
                     "id": match_id,
@@ -1152,6 +1157,7 @@ class SessionCleanupManager:
                     "kinds": list(entry.get("kinds") or []),
                     "score": float(entry.get("score") or 0),
                     "exactPhrase": bool(entry.get("exactPhrase") or False),
+                    "matchedTokens": matched_tokens,
                 }
             )
         return {

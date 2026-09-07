@@ -6667,9 +6667,6 @@ TEXT = r"""
           }
           #${rootId} .codex-usage-hud-search-float {
             position: fixed;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
             z-index: 2147482640;
             width: 320px;
             max-width: calc(100vw - 36px);
@@ -6690,7 +6687,7 @@ TEXT = r"""
             touch-action: none;
             cursor: move;
           }
-          /* 自由拖拽中：JS 写入 left/top，取消居中变换 */
+          /* 自由拖拽中：JS 写入 left/top，取消任何居中变换，避免松手后漂移 */
           #${rootId} .codex-usage-hud-search-float.is-dragging {
             transform: none !important;
             user-select: none;
@@ -6770,10 +6767,11 @@ TEXT = r"""
             background: rgba(255, 107, 107, .18);
             color: var(--codex-usage-hud-error, #ff6b6b);
           }
-          #${rootId} .codex-usage-hud-search-float .codex-usage-hud-search-chips {
+          #${rootId} .codex-usage-hud-search-float .codex-usage-hud-search-row-chips {
+            flex: 1 1 100%;
             display: flex;
             flex-wrap: wrap;
-            gap: 6px;
+            gap: 4px;
           }
           #${rootId} .codex-usage-hud-search-float .codex-usage-hud-search-chip {
             padding: 3px 9px;
@@ -6802,6 +6800,7 @@ TEXT = r"""
           }
           #${rootId} .codex-usage-hud-search-float .codex-usage-hud-search-row {
             display: flex;
+            flex-wrap: wrap;
             align-items: center;
             gap: 8px;
             padding: 6px;

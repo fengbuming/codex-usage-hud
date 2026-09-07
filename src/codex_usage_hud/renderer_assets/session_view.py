@@ -1898,16 +1898,21 @@ TEXT = r"""
       const collapsed = searchFloat.collapsed ? " is-collapsed" : "";
       const side = searchFloat.side ? ` ${searchFloat.side}` : "";
       panel.className = `codex-usage-hud-search-float${collapsed}${side}`;
-      const chips = (tokens || [])
-        .map((token) => `<button type="button" class="codex-usage-hud-search-chip" data-token="${escapeAttr(token)}">${escapeHtml(token)}</button>`)
-        .join("");
       const rows = matches
-        .map((entry, i) => `
+        .map((entry, i) => {
+          // 只在每个命中的会话内部展示「该会话实际命中的分词」；未被命中的分词
+          // 不列出，整行没有任何命中分词时也不显示分词区。
+          const rowChips = (entry.matchedTokens || [])
+            .map((token) => `<button type="button" class="codex-usage-hud-search-chip" data-token="${escapeAttr(token)}">${escapeHtml(token)}</button>`)
+            .join("");
+          return `
           <li class="codex-usage-hud-search-row${entry.id === currentId ? " is-current" : ""}" data-item-id="${escapeAttr(entry.id)}" data-revision="${escapeAttr(revision)}">
             <span class="codex-usage-hud-search-index">${i + 1}</span>
             <span class="codex-usage-hud-search-title">${escapeHtml(entry.title || entry.id)}</span>
             ${entry.exactPhrase ? '<span class="codex-usage-hud-search-badge">精确命中</span>' : ""}
-          </li>`)
+            ${rowChips ? `<span class="codex-usage-hud-search-row-chips">${rowChips}</span>` : ""}
+          </li>`;
+        })
         .join("");
       panel.innerHTML = `
         <button type="button" class="codex-usage-hud-search-toggle" data-action="toggle" title="${searchFloat.collapsed ? "展开" : "折叠"}">${searchFloat.collapsed ? "»" : "«"}</button>
@@ -1915,7 +1920,6 @@ TEXT = r"""
           <span class="codex-usage-hud-search-query" title="${escapeAttr(query)}">${escapeHtml(query)}</span>
           <button type="button" class="codex-usage-hud-search-close" data-action="close" title="关闭">×</button>
         </div>
-        <div class="codex-usage-hud-search-chips">${chips || '<span class="codex-usage-hud-search-empty">无分词</span>'}</div>
         <div class="codex-usage-hud-search-meta">${total} 个命中 · 当前第 ${idx >= 0 ? idx + 1 : "-"} / ${total}</div>
         <ul class="codex-usage-hud-search-list">${rows}</ul>
         <div class="codex-usage-hud-search-nav">
@@ -2026,13 +2030,11 @@ TEXT = r"""
     function jumpToSearchResult(itemId, revision) {
       if (!itemId) return;
       const query = String(searchFloat?.query || "");
-      // 点击浮窗某会话：自动把命中关键词注入 Codex 自带搜索框做定位。
-      // 若目标就是当前会话（无需跳转），直接打开原生查找；否则先跳转，
-      // 落地回执由 applySearchJump 再一次打开原生查找。
-      if (String(itemId) === String(searchFloat?.currentId || "")) {
-        if (query) openThreadFind(query);
-        return;
-      }
+      // 点击浮窗某会话：无论是否已在当前会话，都把命中关键词立即注入 Codex
+      // 自带搜索框定位；同时始终发起会话跳转命令，确保即使用户在 Codex 里手动
+      // 切到了其它会话，也能点此行跳回该命中会话（落地回执由 applySearchJump
+      // 再次打开原生查找栏）。
+      if (query) openThreadFind(query);
       prepareSearchJump(itemId);
       const sent = ctx.bindings.send(settingsCommandBindingName, {
         id: `search-jump-${Date.now()}-${Math.random().toString(36).slice(2)}`,
@@ -2071,7 +2073,7 @@ TEXT = r"""
           revision: String(response.search.revision || ""),
           currentId: String(response.itemId || ""),
           collapsed: Boolean(previous.collapsed),
-          side: previous.side || "",
+          side: previous.side || "side-right",
         };
         renderSearchFloat();
         bindSearchFloat(document.getElementById("codex-usage-hud-search-float"));
