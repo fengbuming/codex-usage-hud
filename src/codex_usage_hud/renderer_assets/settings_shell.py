@@ -4620,6 +4620,7 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
 
       function applySettingsCommandStatus(payload) {
         const status = payload?.settingsCommandStatus;
+        sessionViewDomain.applySearchJump(status?.sessionCleanupSessionJump);
         const sessionIndex = status?.sessionIndex || payload?.sessionIndex;
         if (sessionIndex && typeof sessionIndex === "object") {
           // Capture the prior job state BEFORE the optimistic overwrite so we

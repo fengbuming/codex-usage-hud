@@ -1813,6 +1813,88 @@ TEXT = r"""
     applyActiveSessionSequence(payload);
   }
 
+    // 索引检索跳转：高亮、滚动定位与上/下命中导航全部交给 Codex 原生的
+    // 「在会话中查找」（Ctrl+F，内部命令 findInThread，消息 type
+    // `find-in-thread`）；HUD 只负责在跳转落地后打开它并填入检索词。
+    // 原生查找栏的输入框 id 为 content-search-input，虚拟列表与计数
+    // （N / M results）均由它自己处理，HUD 不再做任何命中定位。
+    let threadFindJump = null;
+    let pendingSearchJump = "";
+
+    function cancelThreadFindJump() {
+      if (threadFindJump?.timer) ctx.lifecycle.clearTimeout(threadFindJump.timer);
+      threadFindJump = null;
+    }
+
+    function prepareSearchJump(itemId) {
+      cancelThreadFindJump();
+      pendingSearchJump = itemId;
+    }
+
+    function fillThreadFindInput(input, query) {
+      // React 受控输入：必须走 native value setter + input 事件才会触发 onChange。
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+      if (!input || !setter || input.value === query) return false;
+      setter.call(input, query);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      return true;
+    }
+
+    function openThreadFind(query) {
+      // Codex 的消息中枢监听 window message（信封只要求同源 + string type），
+      // 因此与官方 Ctrl+F 完全同通道：postMessage 即可打开查找栏。
+      window.postMessage({ type: "find-in-thread" }, "*");
+      const state = { query, timer: 0 };
+      threadFindJump = state;
+      let elapsed = 0;
+      const step = () => {
+        if (threadFindJump !== state) return;
+        const input = document.getElementById("content-search-input");
+        if (input) {
+          fillThreadFindInput(input, query);
+          // 会话可能在查找栏打开后才挂载完；若输入框仍是我们填的词
+          // （用户没有开始手动输入），补触发一次让原生检索重扫已挂载内容。
+          state.timer = ctx.lifecycle.timeout("thread_find_refill", () => {
+            if (threadFindJump !== state) return;
+            const current = document.getElementById("content-search-input");
+            if (current && current.value === query) fillThreadFindInput(current, query);
+          }, 800);
+          return;
+        }
+        elapsed += 80;
+        if (elapsed < 2400) state.timer = ctx.lifecycle.timeout("thread_find_open", step, 80);
+      };
+      step();
+    }
+
+    async function applySearchJump(response) {
+      if (!pendingSearchJump || response?.itemId !== pendingSearchJump) return;
+      const query = String(response.search?.query || "").trim();
+      if (!query || response.search?.error || !response.verified) { pendingSearchJump = ""; return; }
+      pendingSearchJump = "";
+      const targetKey = String(response.search?.targetKey || "");
+      // 跳转回执可能早于 Codex 的 active-session 事件到达；轮询等待落地会话与
+      // 跳转目标一致后再打开原生查找栏，避免因为时序差静默放弃检索高亮。
+      let waited = 0;
+      const state = { timer: 0 };
+      threadFindJump = state;
+      const probe = async () => {
+        if (threadFindJump !== state) return;
+        const identity = String(readActiveSessionRef()?.sessionId || "");
+        if (!identity || waited >= 2600) { cancelThreadFindJump(); return; }
+        const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(identity));
+        const key = Array.from(new Uint8Array(digest), (value) => value.toString(16).padStart(2, "0")).join("");
+        if (key !== targetKey) {
+          waited += 90;
+          state.timer = ctx.lifecycle.timeout("thread_find_identity", () => { void probe(); }, 90);
+          return;
+        }
+        cancelThreadFindJump();
+        openThreadFind(query);
+      };
+      void probe();
+    }
+
     let installed = false;
     let activeActivityScroll = null;
     let activityScrollSerial = 0;
@@ -1834,6 +1916,7 @@ TEXT = r"""
     function dispose() {
       const wasInstalled = installed;
       installed = false;
+      cancelThreadFindJump();
       cancelActivityScroll();
       ctx.observers?.clear?.("activity_request_materialization");
       const root = document.getElementById(rootId);
@@ -1860,6 +1943,8 @@ TEXT = r"""
       selectActivityTaskIndex,
       scrollToActivityRequest,
       scrollToActivityRound,
+      prepareSearchJump,
+      applySearchJump,
       setFieldTitle,
       setText,
     };

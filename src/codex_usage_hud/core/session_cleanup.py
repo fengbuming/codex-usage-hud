@@ -1108,6 +1108,28 @@ class SessionCleanupManager:
             "cwd": str(item._cwd or ""),
         }
 
+    def thread_find_for_item(
+        self, item_id: object, revision: object, query: str
+    ) -> dict[str, object]:
+        """Payload for driving Codex's native in-thread find after a jump.
+
+        Highlighting, scrolling and prev/next navigation are owned by the
+        native find bar; the HUD only needs the query plus a target key so the
+        renderer can confirm the landed session before opening it.
+        """
+        import hashlib
+
+        target = self.session_route_target_for_item(item_id, revision)
+        item = self._items.get(str(item_id or "").strip())
+        if target is None or item is None:
+            return {"query": query, "error": "inventory-changed"}
+        if str(revision) != self._revision or self._items.get(str(item_id)) is not item:
+            return {"query": query, "error": "inventory-changed"}
+        return {
+            "query": query,
+            "targetKey": hashlib.sha256(item._session_id.encode()).hexdigest(),
+        }
+
     def workdir_for_transfer_target(
         self,
         session_id: object,

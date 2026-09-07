@@ -1071,11 +1071,14 @@ TEXT = r"""
         const inventoryRevision = String(action.dataset.sessionCleanupInventoryRevision || "").trim();
         if (!itemId || !inventoryRevision) return;
         const submitted = submitSettingsCommand(
-          { action: "openSessionCleanupSession", itemId, inventoryRevision },
+          { action: "openSessionCleanupSession", itemId, inventoryRevision,
+            searchQuery: sessionCleanupState.searchResultMatches.has(itemId)
+              ? String(sessionCleanupState.searchResultQuery || "") : "" },
           "正在打开会话...",
           { preserveOverlay: true },
         );
         if (submitted) {
+          sessionViewDomain.prepareSearchJump(itemId);
           markSessionCleanupJumpInflight(itemId, "jump");
           // 跳转意图是离开设置页、去到 Codex 会话，提交成功后即收起设置页让位。
           closeSettingsModal();

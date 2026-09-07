@@ -330,10 +330,12 @@ def test_open_session_jump_translates_navigator_failure() -> None:
     assert payload["canResume"] is True
 
 
-def test_open_session_jump_without_injected_navigator_falls_back_to_constructor() -> None:
+@patch("codex_usage_hud.runtime_commands.DesktopThreadNavigator")
+def test_open_session_jump_without_injected_navigator_falls_back_to_constructor(constructor) -> None:
     from pathlib import Path
 
     manager = _inventory_stub()
+    constructor.return_value.navigate.side_effect = DesktopThreadNavigationError("desktop missing")
     status = handle_cleanup_command(
         {
             "action": "openSessionCleanupSession",

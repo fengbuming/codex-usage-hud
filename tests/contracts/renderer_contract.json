@@ -6,8 +6,8 @@
   },
   "currentBundle": {
     "phase": "P6.7",
-    "sha256": "1e1be01fe8c0e20cbcbd06ea3194475614b3259329de3f619ba2bb68757b3102",
-    "byteLength": 1217219
+    "sha256": "2c79ee9a75f4ddd904fc7282de02552d491472300893ca2afff25a4dfdadebb8",
+    "byteLength": 1221479
   },
   "sha256": "f83d65265c55143fa775f509f09ce109c2aa75a03946b42cf462cb6cbd4ea637",
   "byteLength": 548705,
@@ -42,7 +42,7 @@
     "mutationObservers": 8,
     "resizeObservers": 1,
     "setIntervals": 6,
-    "setTimeouts": 37,
+    "setTimeouts": 40,
     "kernelSetIntervals": 1,
     "kernelSetTimeouts": 2
   },
@@ -135,15 +135,16 @@
   "currentTimeoutOwners": [
     "model_picker", "theme", "session_view_progress", "copy_feedback", "activity_trail_locate",
     "activity_virtualization_frame", "activity_request_materialization",
-    "activity_round_expand_settle", "conversation_locate_pulse", "session_cleanup_scan_watchdog",
-    "storage", "session_index_control_watchdog", "background_usage_policy",
-    "background_usage_request", "background_usage_fetch", "codex_cli_launch_timeout",
-    "codex_cli_launch_min_visible", "session_index_status_watchdog", "settings_restart",
-    "layout_settle", "layout_settle", "layout_settle", "composer_layout", "layout_bootstrap",
-    "layout_bootstrap", "composer_attachments", "layout_report", "active_session",
-    "active_session", "active_session", "active_session", "active_session_bootstrap",
-    "session_cleanup_search", "session_transfer_selection", "session_transfer_select_all",
-    "session_transfer_selection", "stale_guard"
+    "activity_round_expand_settle", "conversation_locate_pulse", "thread_find_refill",
+    "thread_find_open", "thread_find_identity", "session_cleanup_scan_watchdog", "storage",
+    "session_index_control_watchdog", "background_usage_policy", "background_usage_request",
+    "background_usage_fetch", "codex_cli_launch_timeout", "codex_cli_launch_min_visible",
+    "session_index_status_watchdog", "settings_restart", "layout_settle", "layout_settle",
+    "layout_settle", "composer_layout", "layout_bootstrap", "layout_bootstrap",
+    "composer_attachments", "layout_report", "active_session", "active_session", "active_session",
+    "active_session", "active_session_bootstrap", "session_cleanup_search",
+    "session_transfer_selection", "session_transfer_select_all", "session_transfer_selection",
+    "stale_guard"
   ],
   "timeoutInventory": [
     {"owner": "model_picker", "creation": "ctx.lifecycle.timeout(\"model_picker\", patchCodexModelPicker, delay)", "cleanup": "ctx.lifecycle.clearTimeout(timer)"},

@@ -1014,11 +1014,24 @@ def _open_session_cleanup_session(
             can_resume=True,
         )
     if report.verified:
-        return _session_jump_status(
+        status = _session_jump_status(
             "已跳转到 Codex Desktop 会话。",
             item_id=item_id,
             verified=True,
         )
+        query = str(command.get("searchQuery") or "").strip()[:500]
+        thread_find = getattr(ports.cleanup_manager, "thread_find_for_item", None)
+        if query and callable(thread_find):
+            try:
+                status["sessionCleanupSessionJump"]["search"] = thread_find(
+                    item_id, str(command.get("inventoryRevision") or ""), query
+                )
+            except Exception as exc:
+                _exc_detail_log(exc, tag="session_thread_find_failed")
+                status["sessionCleanupSessionJump"]["search"] = {
+                    "query": query, "error": "thread-find-unavailable"
+                }
+        return status
     error = str(report.error or "navigation-unverified").strip()
     message = _SESSION_JUMP_ERROR_MESSAGES.get(error) or "未能跳转到该会话。"
     return _session_jump_status(

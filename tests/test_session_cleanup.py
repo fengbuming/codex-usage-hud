@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from contextlib import closing
 from datetime import datetime, timezone
+import hashlib
 import json
 from pathlib import Path
 import sqlite3
@@ -2589,6 +2590,39 @@ class SessionCleanupManagerTests(unittest.TestCase):
             )
         # Fallback unlink + rmdir must have reclaimed the staging.
         self.assertFalse((root / ".hud-session-delete-staging").exists())
+
+    def test_thread_find_for_item_returns_query_and_session_target_key(self) -> None:
+        """Native in-thread find payload: query is echoed, targetKey lets the
+        renderer confirm the landed session before opening Codex's find bar."""
+        fixture = self._fixture()
+        temporary, _root, _state, _index, _rollouts, manager = fixture
+        self.addCleanup(temporary.cleanup)
+        scan = manager.scan(request_id="scan-thread-find")
+        root_row = next(row for row in scan["sessions"] if row["title"] == "Root")
+
+        result = manager.thread_find_for_item(root_row["id"], scan["revision"], "fuzzy-marker")
+
+        self.assertEqual(result.get("query"), "fuzzy-marker")
+        self.assertEqual(result.get("error"), None)
+        self.assertEqual(
+            result.get("targetKey"),
+            hashlib.sha256(ROOT_ID.encode()).hexdigest(),
+        )
+
+    def test_thread_find_for_item_rejects_stale_or_unknown_inventory(self) -> None:
+        fixture = self._fixture()
+        temporary, _root, _state, _index, _rollouts, manager = fixture
+        self.addCleanup(temporary.cleanup)
+        scan = manager.scan(request_id="scan-thread-find-stale")
+        root_row = next(row for row in scan["sessions"] if row["title"] == "Root")
+
+        stale = manager.thread_find_for_item(root_row["id"], "stale-revision", "q")
+        self.assertEqual(stale.get("error"), "inventory-changed")
+        self.assertEqual(stale.get("targetKey"), None)
+
+        unknown = manager.thread_find_for_item("does-not-exist", scan["revision"], "q")
+        self.assertEqual(unknown.get("error"), "inventory-changed")
+        self.assertEqual(unknown.get("targetKey"), None)
 
 
 if __name__ == "__main__":
