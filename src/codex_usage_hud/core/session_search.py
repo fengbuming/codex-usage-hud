@@ -2081,13 +2081,13 @@ class SessionSearchIndex:
                     break
 
             weights = {"file": 12, "user": 10, "assistant": 8, "tool": 5, "metadata": 3}
-            # ``search_text`` stores the token stream (fields joined by ``\x01``,
-            # tokens within a field joined by ``\x00``), not the raw prose. A
-            # verbatim phrase is therefore a *token-contiguous* run: the query
-            # tokens in order joined by ``\x00`` must appear as a substring of
-            # ``search_text``. Punctuation and whitespace in the query are
-            # already absent from the token stream, so this is exact at the
-            # token level (matches Codex's native Ctrl+F "whole phrase" intent).
+            # ``field_text`` stores each field's token stream (tokens joined by
+            # ``\x00``). A verbatim phrase is a *token-contiguous* run in one of
+            # the fields rendered by Codex's conversation body. Metadata is
+            # searchable for locating a session, but it is not present in the
+            # native in-thread find surface, so metadata-only hits must not be
+            # advertised as "exact" or the subsequent native search will show
+            # zero results.
             phrase_key = "\x00".join(search_terms(query))
             matches: list[dict[str, object]] = []
             for session_id in candidates:
@@ -2136,7 +2136,10 @@ class SessionSearchIndex:
                         ],
                         "score": round(score, 3),
                         "exact_phrase": bool(phrase_key)
-                        and phrase_key in (document.search_text or ""),
+                        and any(
+                            field_name in {"user", "assistant"} and phrase_key in field_text
+                            for field_name, _tokens, _grams, field_text in document.fields
+                        ),
                     }
                 )
             # Rank a verbatim-phrase hit above scattered token matches, then by

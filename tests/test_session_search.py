@@ -212,6 +212,51 @@ def test_search_ranks_exact_phrase_above_token_hits(tmp_path: Path) -> None:
     assert scattered_match["exact_phrase"] is False
 
 
+def test_metadata_only_phrase_is_not_an_exact_in_thread_match(tmp_path: Path) -> None:
+    rollout = tmp_path / "metadata-only.jsonl"
+    rollout.write_text(
+        json.dumps(
+            {
+                "type": "event_msg",
+                "payload": {
+                    "type": "user_message",
+                    "message": "正文里没有目标短语",
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    index = SessionSearchIndex(tmp_path / "metadata-only.sqlite")
+    index.upsert("session", (rollout,), title="点击没有反应")
+
+    result = index.search("点击没有反应")
+
+    assert result["matches"][0]["sessionId"] == "session"
+    assert result["matches"][0]["kinds"] == ["metadata"]
+    assert result["matches"][0]["exact_phrase"] is False
+
+
+def test_tool_phrase_is_not_advertised_as_native_exact_match(tmp_path: Path) -> None:
+    rollout = tmp_path / "tool-only.jsonl"
+    rollout.write_text(
+        json.dumps(
+            {
+                "type": "response_item",
+                "payload": {"type": "custom_tool_call", "arguments": "点击没有反应"},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    index = SessionSearchIndex(tmp_path / "tool-only.sqlite")
+    index.upsert("session", (rollout,))
+    match = index.search("点击没有反应")["matches"][0]
+    assert match["kinds"] == ["tool"]
+    assert match["exact_phrase"] is False
+
+
 def test_search_terms_support_fuzzy_path_fragments(tmp_path: Path) -> None:
     rollout = tmp_path / "path.jsonl"
     rollout.write_text(

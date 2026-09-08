@@ -1535,6 +1535,41 @@ class RendererHudPayloadTests(unittest.TestCase):
         self.assertIn("resetSessionCleanupPendingRequests();", script)
         self.assertIn("an empty/mismatched request id is a", script)
 
+    def test_session_jump_float_reuses_native_find_and_locks_drag_origin(self) -> None:
+        script = renderer_hud.RENDERER_HUD_SCRIPT
+
+        # Reopening an already-mounted native find bar must execute a fresh
+        # search instead of posting the toggle message a second time.
+        self.assertIn(
+            'function fillThreadFindInput(input, query, { force = false } = {})',
+            script,
+        )
+        self.assertIn('const existingInput = document.getElementById("content-search-input");', script)
+        self.assertIn("function threadFindInputVisible(input)", script)
+        self.assertIn("if (threadFindInputVisible(existingInput))", script)
+        self.assertIn('fillThreadFindInput(existingInput, value, { force: true });', script)
+        self.assertIn('setter.call(input, "");', script)
+        self.assertIn('input.dispatchEvent(new KeyboardEvent("keydown"', script)
+        self.assertIn('key: "Enter", code: "Enter", keyCode: 13, which: 13', script)
+        self.assertIn("正文精确命中", script)
+        self.assertIn("索引命中", script)
+        self.assertIn("命中索引内容，打开后可能无法被 Codex 原生查找定位", script)
+
+        # The pointer origin is captured while the side-anchored panel still
+        # has its visual transform; only then is the transform removed.
+        self.assertIn("const rect = panel.getBoundingClientRect();\n        dragging = true;", script)
+        self.assertIn('panel.style.bottom = "auto";', script)
+        self.assertIn('panel.classList.remove("side-left", "side-right");', script)
+        self.assertIn('searchFloat.dragging = true;', script)
+        self.assertIn('searchFloat.dragging = false;', script)
+
+        # The result list has a stable header, metadata row, and three-button
+        # footer so long titles and match chips do not shift controls around.
+        self.assertIn("codex-usage-hud-search-heading", script)
+        self.assertIn("codex-usage-hud-search-row-main", script)
+        self.assertIn("grid-template-columns: repeat(3, minmax(0, 1fr));", script)
+        self.assertIn("max-height: min(42vh, 360px);", script)
+
     def test_session_cleanup_filters_survive_renderer_reinject(self) -> None:
         script = renderer_hud.RENDERER_HUD_SCRIPT
 

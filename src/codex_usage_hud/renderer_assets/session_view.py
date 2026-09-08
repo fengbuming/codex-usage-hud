@@ -1831,11 +1831,19 @@ TEXT = r"""
       pendingSearchJump = itemId;
     }
 
-    function fillThreadFindInput(input, query) {
+    function fillThreadFindInput(input, query, { force = false } = {}) {
       // React 受控输入：必须走 native value setter + input 事件才会触发 onChange。
+      const value = String(query || "");
       const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
-      if (!input || !setter || input.value === query) return false;
-      setter.call(input, query);
+      if (!input || !setter || (!force && input.value === value)) return false;
+      // React tracks the last value it observed. When a repeated jump uses the
+      // same query, setting that same value again can be treated as a no-op;
+      // clear once to produce a real change event before restoring the query.
+      if (force && input.value === value) {
+        setter.call(input, "");
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      }
+      setter.call(input, value);
       input.dispatchEvent(new Event("input", { bubbles: true }));
       // 必须再触发回车，否则 Codex 原生查找栏只显示填充文本但不执行检索
       //（截图复现：搜索框有词但显示「0 个结果」，手动按回车后才高亮）。
@@ -1846,24 +1854,50 @@ TEXT = r"""
       return true;
     }
 
+    function threadFindInputVisible(input) {
+      if (!input?.isConnected) return false;
+      const style = window.getComputedStyle?.(input);
+      if (style && (style.display === "none" || style.visibility === "hidden")) return false;
+      const rect = input.getBoundingClientRect?.();
+      return !!rect && rect.width > 0 && rect.height > 0;
+    }
+
     function openThreadFind(query) {
+      const value = String(query || "").trim();
+      if (!value) return;
+      cancelThreadFindJump();
+      const existingInput = document.getElementById("content-search-input");
+      const state = { query: value, timer: 0 };
+      threadFindJump = state;
+      // Sending find-in-thread while the native bar is already open toggles it
+      // closed. Reuse the mounted input and force a fresh search instead, so a
+      // repeated click on the same result keeps the match highlighted.
+      if (threadFindInputVisible(existingInput)) {
+        fillThreadFindInput(existingInput, value, { force: true });
+        state.timer = ctx.lifecycle.timeout("thread_find_refill", () => {
+          if (threadFindJump !== state) return;
+          const current = document.getElementById("content-search-input");
+          if (current) fillThreadFindInput(current, value, { force: true });
+        }, 120);
+        return;
+      }
       // Codex 的消息中枢监听 window message（信封只要求同源 + string type），
       // 因此与官方 Ctrl+F 完全同通道：postMessage 即可打开查找栏。
       window.postMessage({ type: "find-in-thread" }, "*");
-      const state = { query, timer: 0 };
-      threadFindJump = state;
       let elapsed = 0;
       const step = () => {
         if (threadFindJump !== state) return;
         const input = document.getElementById("content-search-input");
         if (input) {
-          fillThreadFindInput(input, query);
+          fillThreadFindInput(input, value, { force: true });
           // 会话可能在查找栏打开后才挂载完；若输入框仍是我们填的词
           // （用户没有开始手动输入），补触发一次让原生检索重扫已挂载内容。
           state.timer = ctx.lifecycle.timeout("thread_find_refill", () => {
             if (threadFindJump !== state) return;
             const current = document.getElementById("content-search-input");
-            if (current && current.value === query) fillThreadFindInput(current, query);
+            if (current && current.value === value) {
+              fillThreadFindInput(current, value, { force: true });
+            }
           }, 800);
           return;
         }
@@ -1917,12 +1951,13 @@ TEXT = r"""
         // 拖拽吸附只在面板创建时绑定一次，避免 applySearchJump 重复 addEventListener。
         bindSearchFloatDrag(panel);
       }
-      const { query, tokens, matches, revision, currentId } = searchFloat;
+      const { query, matches, revision, currentId } = searchFloat;
       const total = matches.length;
       const idx = matches.findIndex((entry) => entry.id === currentId);
       const collapsed = searchFloat.collapsed ? " is-collapsed" : "";
-      const side = searchFloat.side ? ` ${searchFloat.side}` : "";
-      panel.className = `codex-usage-hud-search-float${collapsed}${side}`;
+      const dragging = Boolean(searchFloat.dragging || panel.classList.contains("is-dragging"));
+      const side = !dragging && searchFloat.side ? ` ${searchFloat.side}` : "";
+      panel.className = `codex-usage-hud-search-float${collapsed}${side}${dragging ? " is-dragging" : ""}`;
       // 按月分组（月份降序：最新在前），组内沿用检索排序；每个分组标题
       // 显示月份与命中数量，逐行额外展示该会话的日期（月-日）。
       const buckets = new Map();
@@ -1946,28 +1981,42 @@ TEXT = r"""
             .map((token) => `<button type="button" class="codex-usage-hud-search-chip" data-token="${escapeAttr(token)}">${escapeHtml(token)}</button>`)
             .join("");
           const dateLabel = sessionDateLabel(entry.updatedAt);
+          const kinds = Array.isArray(entry.kinds) ? entry.kinds : [];
+          const indexOnly = !entry.exactPhrase
+            && kinds.length > 0
+            && kinds.every((kind) => kind !== "user" && kind !== "assistant");
+          const rowMeta = [
+            entry.exactPhrase
+              ? '<span class="codex-usage-hud-search-badge">正文精确命中</span>'
+              : (indexOnly ? '<span class="codex-usage-hud-search-badge is-index-only" title="命中索引内容，打开后可能无法被 Codex 原生查找定位">索引命中</span>' : ""),
+            dateLabel ? `<span class="codex-usage-hud-search-date">${dateLabel}</span>` : "",
+          ].filter(Boolean).join("");
           rowsHtml += `
           <li class="codex-usage-hud-search-row${entry.id === currentId ? " is-current" : ""}" data-item-id="${escapeAttr(entry.id)}" data-revision="${escapeAttr(revision)}">
             <span class="codex-usage-hud-search-index">${displayIndex}</span>
-            <span class="codex-usage-hud-search-title">${escapeHtml(entry.title || entry.id)}</span>
-            ${entry.exactPhrase ? '<span class="codex-usage-hud-search-badge">精确命中</span>' : ""}
-            ${dateLabel ? `<span class="codex-usage-hud-search-date">${dateLabel}</span>` : ""}
-            ${rowChips ? `<span class="codex-usage-hud-search-row-chips">${rowChips}</span>` : ""}
+            <span class="codex-usage-hud-search-row-main">
+              <span class="codex-usage-hud-search-title">${escapeHtml(entry.title || entry.id)}</span>
+              ${rowMeta ? `<span class="codex-usage-hud-search-row-meta">${rowMeta}</span>` : ""}
+              ${rowChips ? `<span class="codex-usage-hud-search-row-chips">${rowChips}</span>` : ""}
+            </span>
           </li>`;
         });
       });
       panel.innerHTML = `
-        <button type="button" class="codex-usage-hud-search-toggle" data-action="toggle" title="${searchFloat.collapsed ? "展开" : "折叠"}">${searchFloat.collapsed ? "»" : "«"}</button>
         <div class="codex-usage-hud-search-head">
-          <span class="codex-usage-hud-search-query" title="${escapeAttr(query)}">${escapeHtml(query)}</span>
-          <button type="button" class="codex-usage-hud-search-close" data-action="close" title="关闭">×</button>
+          <button type="button" class="codex-usage-hud-search-toggle" data-action="toggle" title="${searchFloat.collapsed ? "展开" : "折叠"}" aria-label="${searchFloat.collapsed ? "展开检索浮窗" : "折叠检索浮窗"}"><span aria-hidden="true">${searchFloat.collapsed ? "»" : "«"}</span></button>
+          <div class="codex-usage-hud-search-heading">
+            <span class="codex-usage-hud-search-kicker">会话命中</span>
+            <span class="codex-usage-hud-search-query" title="${escapeAttr(query)}">${escapeHtml(query)}</span>
+          </div>
+          <button type="button" class="codex-usage-hud-search-close" data-action="close" title="关闭" aria-label="关闭检索浮窗"><span aria-hidden="true">×</span></button>
         </div>
-        <div class="codex-usage-hud-search-meta">${total} 个命中 · 当前第 ${idx >= 0 ? idx + 1 : "-"} / ${total}</div>
+        <div class="codex-usage-hud-search-meta"><span class="codex-usage-hud-search-meta-count">${total} 个命中</span><span aria-hidden="true">·</span><span>当前第 ${idx >= 0 ? idx + 1 : "-"} / ${total}</span></div>
         <ul class="codex-usage-hud-search-list">${rowsHtml}</ul>
         <div class="codex-usage-hud-search-nav">
-          <button type="button" data-action="prev" ${idx <= 0 ? "disabled" : ""}>上一个</button>
-          <button type="button" data-action="next" ${(idx < 0 || idx >= total - 1) ? "disabled" : ""}>下一个</button>
-          <button type="button" data-action="return" class="codex-usage-hud-search-return">返回会话管理</button>
+          <button type="button" data-action="prev" aria-label="上一个命中" ${idx <= 0 ? "disabled" : ""}><span class="codex-usage-hud-search-nav-icon" aria-hidden="true">←</span><span>上一个</span></button>
+          <button type="button" data-action="next" aria-label="下一个命中" ${(idx < 0 || idx >= total - 1) ? "disabled" : ""}><span>下一个</span><span class="codex-usage-hud-search-nav-icon" aria-hidden="true">→</span></button>
+          <button type="button" data-action="return" class="codex-usage-hud-search-return" aria-label="返回会话管理"><span class="codex-usage-hud-search-nav-icon" aria-hidden="true">↩</span><span>会话管理</span></button>
         </div>`;
     }
 
@@ -2045,13 +2094,18 @@ TEXT = r"""
         // 排除交互元素与可滚动列表（含其滚动条），避免按住滚动条时
         // 面板被当拖拽起点而飘到 (0,0)。
         if (event.target?.closest?.("button, .codex-usage-hud-search-row, .codex-usage-hud-search-chip, .codex-usage-hud-search-list")) return;
-        dragging = true;
-        panel.classList.add("is-dragging");
-        panel.classList.remove("side-left", "side-right");
         const rect = panel.getBoundingClientRect();
+        dragging = true;
+        if (searchFloat) searchFloat.dragging = true;
+        panel.classList.add("is-dragging");
+        // Read the visual rect before removing the centered side class. With
+        // all fixed insets set to auto, the HUD root's static position is
+        // (0, 0), which used to make the panel jump as soon as it was held.
         panel.style.left = `${rect.left}px`;
         panel.style.top = `${rect.top}px`;
         panel.style.right = "auto";
+        panel.style.bottom = "auto";
+        panel.classList.remove("side-left", "side-right");
         originLeft = rect.left;
         originTop = rect.top;
         startX = event.clientX;
@@ -2073,6 +2127,7 @@ TEXT = r"""
         panel.classList.remove("is-dragging");
         try { panel.releasePointerCapture(event.pointerId); } catch (_) {}
         if (!searchFloat) return;
+        searchFloat.dragging = false;
         const rect = panel.getBoundingClientRect();
         const cx = rect.left + rect.width / 2;
         if (cx < window.innerWidth * 0.33) {
@@ -2146,6 +2201,7 @@ TEXT = r"""
           currentId: String(response.itemId || ""),
           collapsed: Boolean(previous.collapsed),
           side: previous.side || "side-right",
+          dragging: Boolean(previous.dragging),
         };
         renderSearchFloat();
         bindSearchFloat(document.getElementById("codex-usage-hud-search-float"));

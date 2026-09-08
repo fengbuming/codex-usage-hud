@@ -6668,17 +6668,18 @@ TEXT = r"""
           #${rootId} .codex-usage-hud-search-float {
             position: fixed;
             z-index: 2147482640;
-            width: 320px;
-            max-width: calc(100vw - 36px);
-            max-height: 70vh;
+            width: min(360px, calc(100vw - 24px));
+            max-width: calc(100vw - 24px);
+            max-height: min(72vh, 560px);
             display: flex;
             flex-direction: column;
             box-sizing: border-box;
-            gap: 8px;
-            padding: 12px 12px 10px;
+            gap: 0;
+            padding: 10px;
+            overflow: hidden;
             border: 1px solid var(--codex-usage-hud-panel-border, #3a485a);
-            border-radius: 12px;
-            background: linear-gradient(150deg, rgba(28, 36, 47, .98), rgba(15, 21, 29, .98));
+            border-radius: 10px;
+            background: rgba(20, 27, 36, .98);
             box-shadow: 0 18px 44px rgba(0, 0, 0, .42), inset 0 1px 0 rgba(255, 255, 255, .06);
             color: var(--codex-usage-hud-text, #e8eef7);
             font: 12px/1.4 "Microsoft YaHei UI", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -6691,6 +6692,7 @@ TEXT = r"""
           #${rootId} .codex-usage-hud-search-float.is-dragging {
             transform: none !important;
             user-select: none;
+            cursor: grabbing;
           }
           /* 吸附到 Codex 正文区域左 / 右边缘 */
           #${rootId} .codex-usage-hud-search-float.side-left {
@@ -6712,7 +6714,7 @@ TEXT = r"""
             max-height: none;
             flex-direction: row;
             gap: 0;
-            padding: 7px 10px;
+            padding: 6px;
             transform: none !important;
             cursor: pointer;
           }
@@ -6720,7 +6722,19 @@ TEXT = r"""
           #${rootId} .codex-usage-hud-search-float.is-collapsed.side-right {
             transform: translateY(-50%) !important;
           }
-          #${rootId} .codex-usage-hud-search-float.is-collapsed > *:not(.codex-usage-hud-search-toggle) {
+          #${rootId} .codex-usage-hud-search-float.is-collapsed > .codex-usage-hud-search-head {
+            display: flex;
+            width: auto;
+            border-bottom: 0;
+            padding-bottom: 0;
+          }
+          #${rootId} .codex-usage-hud-search-float.is-collapsed > .codex-usage-hud-search-meta,
+          #${rootId} .codex-usage-hud-search-float.is-collapsed > .codex-usage-hud-search-list,
+          #${rootId} .codex-usage-hud-search-float.is-collapsed > .codex-usage-hud-search-nav {
+            display: none;
+          }
+          #${rootId} .codex-usage-hud-search-float.is-collapsed .codex-usage-hud-search-heading,
+          #${rootId} .codex-usage-hud-search-float.is-collapsed .codex-usage-hud-search-close {
             display: none;
           }
           #${rootId} .codex-usage-hud-search-float .codex-usage-hud-search-toggle {
@@ -6741,15 +6755,32 @@ TEXT = r"""
           }
           #${rootId} .codex-usage-hud-search-float .codex-usage-hud-search-head {
             display: flex;
-            align-items: flex-start;
+            align-items: center;
             gap: 8px;
+            min-width: 0;
+            padding-bottom: 8px;
+            border-bottom: 1px solid var(--codex-usage-hud-divider, #273241);
+          }
+          #${rootId} .codex-usage-hud-search-float .codex-usage-hud-search-heading {
+            min-width: 0;
+            flex: 1 1 auto;
+            display: flex;
+            flex-direction: column;
+            gap: 1px;
+          }
+          #${rootId} .codex-usage-hud-search-float .codex-usage-hud-search-kicker {
+            color: var(--codex-usage-hud-muted, #8492a6);
+            font-size: 10px;
+            font-weight: 700;
+            letter-spacing: .04em;
+            line-height: 1.2;
           }
           #${rootId} .codex-usage-hud-search-float .codex-usage-hud-search-query {
-            flex: 1 1 auto;
             min-width: 0;
             font-weight: 700;
             color: var(--codex-usage-hud-accent, #f3d27a);
             word-break: break-word;
+            line-height: 1.35;
           }
           #${rootId} .codex-usage-hud-search-float .codex-usage-hud-search-close {
             flex: 0 0 auto;
@@ -6767,8 +6798,21 @@ TEXT = r"""
             background: rgba(255, 107, 107, .18);
             color: var(--codex-usage-hud-error, #ff6b6b);
           }
+          #${rootId} .codex-usage-hud-search-float .codex-usage-hud-search-meta {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            min-height: 28px;
+            color: var(--codex-usage-hud-muted, #8492a6);
+            font-size: 11px;
+            font-variant-numeric: tabular-nums;
+          }
+          #${rootId} .codex-usage-hud-search-float .codex-usage-hud-search-meta-count {
+            color: var(--codex-usage-hud-info, #9ccbff);
+            font-weight: 700;
+          }
           #${rootId} .codex-usage-hud-search-float .codex-usage-hud-search-row-chips {
-            flex: 1 1 100%;
+            grid-column: 1 / -1;
             display: flex;
             flex-wrap: wrap;
             gap: 4px;
@@ -6786,25 +6830,23 @@ TEXT = r"""
           #${rootId} .codex-usage-hud-search-float .codex-usage-hud-search-chip:hover {
             background: rgba(156, 203, 255, .22);
           }
-          #${rootId} .codex-usage-hud-search-float .codex-usage-hud-search-meta {
-            color: var(--codex-usage-hud-muted, #8492a6);
-            font-size: 11px;
-          }
           #${rootId} .codex-usage-hud-search-float .codex-usage-hud-search-list {
+            flex: 1 1 auto;
+            min-height: 0;
             list-style: none;
             margin: 0;
-            padding: 4px 0 0;
+            padding: 6px 0;
             overflow-y: auto;
             border-top: 1px solid var(--codex-usage-hud-divider, #273241);
-            max-height: 38vh;
+            max-height: min(42vh, 360px);
           }
           #${rootId} .codex-usage-hud-search-float .codex-usage-hud-search-row {
-            display: flex;
-            flex-wrap: wrap;
-            align-items: center;
-            gap: 8px;
-            padding: 6px;
-            border-radius: 8px;
+            display: grid;
+            grid-template-columns: 22px minmax(0, 1fr);
+            align-items: start;
+            gap: 0 8px;
+            padding: 8px 7px;
+            border-radius: 7px;
             cursor: pointer;
           }
           #${rootId} .codex-usage-hud-search-float .codex-usage-hud-search-row:hover {
@@ -6816,17 +6858,30 @@ TEXT = r"""
           }
           #${rootId} .codex-usage-hud-search-float .codex-usage-hud-search-index {
             flex: 0 0 auto;
-            width: 18px;
+            width: 22px;
             text-align: right;
             color: var(--codex-usage-hud-muted, #8492a6);
             font-variant-numeric: tabular-nums;
           }
+          #${rootId} .codex-usage-hud-search-float .codex-usage-hud-search-row-main {
+            min-width: 0;
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto;
+            align-items: center;
+            gap: 4px 8px;
+          }
           #${rootId} .codex-usage-hud-search-float .codex-usage-hud-search-title {
-            flex: 1 1 auto;
             min-width: 0;
             overflow: hidden;
             text-overflow: ellipsis;
             white-space: nowrap;
+          }
+          #${rootId} .codex-usage-hud-search-float .codex-usage-hud-search-row-meta {
+            min-width: 0;
+            display: flex;
+            align-items: center;
+            justify-content: flex-end;
+            gap: 6px;
           }
           #${rootId} .codex-usage-hud-search-float .codex-usage-hud-search-badge {
             flex: 0 0 auto;
@@ -6862,21 +6917,27 @@ TEXT = r"""
           }
           /* 逐行展示会话日期（月-日），推到行首信息右侧 */
           #${rootId} .codex-usage-hud-search-float .codex-usage-hud-search-date {
-            flex: 0 0 auto;
-            margin-left: auto;
             color: var(--codex-usage-hud-muted, #8492a6);
             font-size: 11px;
             font-variant-numeric: tabular-nums;
           }
           #${rootId} .codex-usage-hud-search-float .codex-usage-hud-search-nav {
-            display: flex;
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
             gap: 6px;
+            padding-top: 8px;
+            border-top: 1px solid var(--codex-usage-hud-divider, #273241);
           }
           #${rootId} .codex-usage-hud-search-float .codex-usage-hud-search-nav button {
-            flex: 1 1 0;
-            padding: 6px 8px;
+            min-width: 0;
+            min-height: 30px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 4px;
+            padding: 5px 6px;
             border: 1px solid var(--codex-usage-hud-panel-border, #3a485a);
-            border-radius: 8px;
+            border-radius: 7px;
             background: rgba(255, 255, 255, .06);
             color: var(--codex-usage-hud-text, #e8eef7);
             font-size: 11px;
@@ -6889,6 +6950,11 @@ TEXT = r"""
           #${rootId} .codex-usage-hud-search-float .codex-usage-hud-search-nav button[disabled] {
             opacity: .4;
             cursor: default;
+          }
+          #${rootId} .codex-usage-hud-search-float .codex-usage-hud-search-nav-icon {
+            color: var(--codex-usage-hud-info, #9ccbff);
+            font-size: 13px;
+            line-height: 1;
           }
           #${rootId} .codex-usage-hud-search-float .codex-usage-hud-search-return {
             color: var(--codex-usage-hud-info, #9ccbff) !important;
