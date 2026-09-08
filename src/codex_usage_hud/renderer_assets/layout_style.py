@@ -6811,6 +6811,44 @@ TEXT = r"""
             color: var(--codex-usage-hud-info, #9ccbff);
             font-weight: 700;
           }
+          #${rootId} .codex-usage-hud-search-float .codex-usage-hud-search-filter {
+            margin-left: auto;
+            padding: 3px 9px;
+            border: 1px solid var(--codex-usage-hud-panel-border, #3a485a);
+            border-radius: 999px;
+            background: transparent;
+            color: var(--codex-usage-hud-muted, #8492a6);
+            font-size: 11px;
+            font-weight: 600;
+            cursor: pointer;
+            white-space: nowrap;
+          }
+          #${rootId} .codex-usage-hud-search-float .codex-usage-hud-search-filter:hover {
+            border-color: var(--codex-usage-hud-info, #9ccbff);
+            color: var(--codex-usage-hud-info, #9ccbff);
+          }
+          #${rootId} .codex-usage-hud-search-float .codex-usage-hud-search-filter.is-on {
+            border-color: var(--codex-usage-hud-info, #9ccbff);
+            background: rgba(156, 203, 255, .18);
+            color: var(--codex-usage-hud-info, #9ccbff);
+          }
+          #${rootId} .codex-usage-hud-search-float .codex-usage-hud-search-notice {
+            margin: 0 10px 6px;
+            padding: 6px 9px;
+            border: 1px solid rgba(214, 158, 46, .45);
+            border-radius: 8px;
+            background: rgba(214, 158, 46, .14);
+            color: #e8c07a;
+            font-size: 11px;
+            line-height: 1.5;
+          }
+          #${rootId} .codex-usage-hud-search-float .codex-usage-hud-search-empty {
+            padding: 14px 12px;
+            color: var(--codex-usage-hud-muted, #8492a6);
+            font-size: 11px;
+            line-height: 1.6;
+            text-align: center;
+          }
           #${rootId} .codex-usage-hud-search-float .codex-usage-hud-search-row-chips {
             grid-column: 1 / -1;
             display: flex;

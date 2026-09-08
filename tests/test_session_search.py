@@ -257,6 +257,124 @@ def test_tool_phrase_is_not_advertised_as_native_exact_match(tmp_path: Path) -> 
     assert match["exact_phrase"] is False
 
 
+def test_ui_snapshot_noise_in_tool_output_is_not_searchable(tmp_path: Path) -> None:
+    """CDP/无障碍树/read_thread 抓来的界面与会话元数据不该污染召回。
+
+    这些内容会把「别的会话的标题与摘要」带进本会话的工具输出，导致本会话
+    被一个与自身无关的关键字召回，跳转后又无法被 Codex 原生查找高亮。
+    """
+
+    marker = "点击没有反应"
+    rollout = tmp_path / "ui-snapshot.jsonl"
+    records = [
+        # 无障碍树：命中文本出现在 button 文案里，紧邻 [ref=eNNN]
+        {
+            "type": "response_item",
+            "payload": {
+                "type": "custom_tool_call",
+                "arguments": f'- button "{marker}" [ref=e536]: - generic [ref=e538]:',
+            },
+        },
+        # CDP 整页快照：整页可见文本落在 body 值里
+        {
+            "type": "response_item",
+            "payload": {
+                "type": "custom_tool_call",
+                "arguments": json.dumps(
+                    {
+                        "title": "ChatGPT",
+                        "url": "app://-/index.html",
+                        "body": f"文件\n编辑\n{marker}\n展开显示",
+                    },
+                    ensure_ascii=False,
+                ),
+            },
+        },
+        # read_thread 返回的会话摘要
+        {
+            "type": "response_item",
+            "payload": {
+                "type": "custom_tool_call",
+                "arguments": json.dumps(
+                    {"title": "x", "preview": f"我通过{marker}关键字检索"},
+                    ensure_ascii=False,
+                ),
+            },
+        },
+    ]
+    rollout.write_text(
+        "\n".join(json.dumps(record, ensure_ascii=False) for record in records) + "\n",
+        encoding="utf-8",
+    )
+
+    index = SessionSearchIndex(tmp_path / "ui-snapshot.sqlite")
+    index.upsert("session", (rollout,))
+    assert index.search(marker)["matches"] == []
+
+
+def test_real_tool_output_survives_ui_snapshot_strip(tmp_path: Path) -> None:
+    """普通工具输出里的目标短语必须照常可搜，不能被清洗误删。"""
+
+    marker = "点击没有反应"
+    rollout = tmp_path / "real-tool.jsonl"
+    rollout.write_text(
+        json.dumps(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call",
+                    "arguments": f"执行结果：{marker}，请检查日志",
+                },
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    index = SessionSearchIndex(tmp_path / "real-tool.sqlite")
+    index.upsert("session", (rollout,))
+    matches = index.search(marker)["matches"]
+    assert len(matches) == 1
+    assert matches[0]["kinds"] == ["tool"]
+
+
+def test_ui_snapshot_strip_does_not_touch_user_or_assistant_text(tmp_path: Path) -> None:
+    """清洗只作用于工具输出，用户与助手正文必须原样保留。"""
+
+    marker = "点击没有反应"
+    rollout = tmp_path / "conversation.jsonl"
+    rollout.write_text(
+        json.dumps(
+            {
+                "type": "event_msg",
+                "payload": {"type": "user_message", "message": f"索引{marker}"},
+            },
+            ensure_ascii=False,
+        )
+        + "\n"
+        + json.dumps(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"text": f"复现了{marker}的问题"}],
+                },
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    index = SessionSearchIndex(tmp_path / "conversation.sqlite")
+    index.upsert("session", (rollout,))
+    match = index.search(marker)["matches"][0]
+    assert match["exact_phrase"] is True
+    assert set(match["kinds"]) >= {"user", "assistant"}
+
+
 def test_search_terms_support_fuzzy_path_fragments(tmp_path: Path) -> None:
     rollout = tmp_path / "path.jsonl"
     rollout.write_text(

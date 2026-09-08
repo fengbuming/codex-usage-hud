@@ -379,6 +379,37 @@ def _window_text(value: str) -> str:
     return f"{value[:_BULK_TEXT_HEAD]} {value[-_BULK_TEXT_TAIL:]}"
 
 
+# --- UI 自动化快照噪声 ---------------------------------------------------
+# agent 用 CDP / 无障碍树 / read_thread 抓取界面时，会把「别的会话的标题、
+# 预览和正文」整段带回本会话的工具输出。这些内容被索引后，本会话会被一个
+# 与自身无关的关键字召回，跳转后又因为正文里根本没有该词而无法被 Codex
+# 原生查找高亮（即「索引命中」）。下面只剥离结构特征明确、几乎不可能出现在
+# 真实工具输出里的部分；跨会话读取到的普通对话正文无法安全区分，保留原样。
+# 无障碍树行形如 ``- button "会话标题" [ref=e536]:``，标题位于 ref 之前，
+# 因此片段必须向前覆盖到行首的 ``- role``，不能只取紧邻的非空字符。
+_UI_A11Y_REF_RE = re.compile(r"-{1,}\s*[A-Za-z ]*[^\n]{0,400}?\[ref=e\d+\][^\n]{0,200}?")
+_UI_PAGE_BODY_RE = re.compile(r'"body"\s*:\s*"[^"]*"')
+_UI_PAGE_URL_RE = re.compile(r'"url"\s*:')
+_UI_THREAD_PREVIEW_RE = re.compile(r'"preview"\s*:\s*"[^"]*"')
+
+
+def _strip_ui_snapshot(text: str) -> str:
+    """Strip UI-automation noise out of one tool-output chunk.
+
+    三类结构按置信度处理：无障碍树的 ``[ref=eNNN]`` 标记、CDP 整页快照的
+    ``body`` 整页文本（仅在同段出现 ``url`` 键时认定）、以及线程列表的
+    ``preview`` 会话摘要。真实代码与命令输出极少同时具备这些特征，
+    因此误伤可控。
+    """
+
+    if not text:
+        return text
+    cleaned = _UI_A11Y_REF_RE.sub(" ", text)
+    if _UI_PAGE_URL_RE.search(cleaned):
+        cleaned = _UI_PAGE_BODY_RE.sub(" ", cleaned)
+    return _UI_THREAD_PREVIEW_RE.sub(" ", cleaned)
+
+
 class _TextBucket:
     """Append-only text collector with O(1) length accounting.
 
@@ -665,6 +696,10 @@ def parse_rollout(paths: Sequence[Path]) -> tuple[str, str, str, tuple[str, ...]
                         _collect_text(source, parts, [remaining])
                         if parts:
                             text = " ".join(parts)
+                            # 仅工具输出需要剥离 UI 快照噪声：用户与助手消息
+                            # 本身就是正文，清洗会破坏真实命中。
+                            if target is tools:
+                                text = _strip_ui_snapshot(text)
                             target.add(text)
                             budget -= min(len(text), budget)
 

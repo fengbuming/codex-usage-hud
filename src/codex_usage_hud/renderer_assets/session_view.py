@@ -1951,7 +1951,13 @@ TEXT = r"""
         // 拖拽吸附只在面板创建时绑定一次，避免 applySearchJump 重复 addEventListener。
         bindSearchFloatDrag(panel);
       }
-      const { query, matches, revision, currentId } = searchFloat;
+      const { query, revision, currentId } = searchFloat;
+      // 「只看可高亮」把仅命中工具输出、跳转后无法被 Codex 原生查找高亮的
+      // 会话整条滤掉，避免用户反复点进没有结果的会话。
+      const onlyExact = Boolean(searchFloat.onlyExact);
+      const matches = onlyExact
+        ? (searchFloat.matches || []).filter((entry) => entry.exactPhrase)
+        : (searchFloat.matches || []);
       const total = matches.length;
       const idx = matches.findIndex((entry) => entry.id === currentId);
       const collapsed = searchFloat.collapsed ? " is-collapsed" : "";
@@ -2011,8 +2017,14 @@ TEXT = r"""
           </div>
           <button type="button" class="codex-usage-hud-search-close" data-action="close" title="关闭" aria-label="关闭检索浮窗"><span aria-hidden="true">×</span></button>
         </div>
-        <div class="codex-usage-hud-search-meta"><span class="codex-usage-hud-search-meta-count">${total} 个命中</span><span aria-hidden="true">·</span><span>当前第 ${idx >= 0 ? idx + 1 : "-"} / ${total}</span></div>
-        <ul class="codex-usage-hud-search-list">${rowsHtml}</ul>
+        <div class="codex-usage-hud-search-meta">
+          <span class="codex-usage-hud-search-meta-count">${total} 个命中</span>
+          <span aria-hidden="true">·</span>
+          <span>当前第 ${idx >= 0 ? idx + 1 : "-"} / ${total}</span>
+          <button type="button" data-action="only-exact" class="codex-usage-hud-search-filter${onlyExact ? " is-on" : ""}" aria-pressed="${onlyExact ? "true" : "false"}" title="只列出正文连续命中、跳转后可被 Codex 查找高亮的会话">只看可高亮</button>
+        </div>
+        ${searchFloat.notice ? `<div class="codex-usage-hud-search-notice">${escapeHtml(searchFloat.notice)}</div>` : ""}
+        ${total ? `<ul class="codex-usage-hud-search-list">${rowsHtml}</ul>` : '<div class="codex-usage-hud-search-empty">没有正文连续命中的会话，可关闭「只看可高亮」查看索引命中。</div>'}
         <div class="codex-usage-hud-search-nav">
           <button type="button" data-action="prev" aria-label="上一个命中" ${idx <= 0 ? "disabled" : ""}><span class="codex-usage-hud-search-nav-icon" aria-hidden="true">←</span><span>上一个</span></button>
           <button type="button" data-action="next" aria-label="下一个命中" ${(idx < 0 || idx >= total - 1) ? "disabled" : ""}><span>下一个</span><span class="codex-usage-hud-search-nav-icon" aria-hidden="true">→</span></button>
@@ -2045,6 +2057,12 @@ TEXT = r"""
         const name = action.dataset.action;
         if (name === "toggle") { toggleSearchFloat(); return; }
         if (name === "close") { closeSearchFloat(); return; }
+        if (name === "only-exact") {
+          searchFloat.onlyExact = !searchFloat.onlyExact;
+          searchFloat.notice = "";
+          renderSearchFloat();
+          return;
+        }
         if (name === "return") {
           closeSearchFloat();
           if (typeof window.__codexUsageHudOpenSessionCleanup === "function") {
@@ -2161,6 +2179,15 @@ TEXT = r"""
       // 自带搜索框定位；同时始终发起会话跳转命令，确保即使用户在 Codex 里手动
       // 切到了其它会话，也能点此行跳回该命中会话（落地回执由 applySearchJump
       // 再次打开原生查找栏）。
+      // 仅工具输出命中的会话，正文里并没有这段连续关键词，跳转后 Codex
+      // 原生查找多半无高亮。先就地说明，避免用户误以为跳转或高亮坏了。
+      const entry = (searchFloat?.matches || []).find((item) => item.id === itemId);
+      if (searchFloat) {
+        searchFloat.notice = entry && !entry.exactPhrase
+          ? "该会话正文没有这段完整关键词（命中来自工具输出），跳转后 Codex 查找可能无高亮"
+          : "";
+        renderSearchFloat();
+      }
       if (query) openThreadFind(query);
       prepareSearchJump(itemId);
       const sent = ctx.bindings.send(settingsCommandBindingName, {
