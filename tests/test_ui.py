@@ -17770,6 +17770,7 @@ class DaemonLifecycleTests(unittest.TestCase):
             fake_context,
             refresh_budget_aggregate=True,
             refresh_budget_paths=(),
+            scan_active_work_candidates=False,
         )
         fake_client.update.assert_called_once()
         self.assertEqual(fake_work_overlay.update.call_count, 1)
@@ -20530,7 +20531,9 @@ class DaemonLifecycleTests(unittest.TestCase):
         self.assertEqual(build_snapshot.call_count, 2)
         published = [call.args[0] for call in fake_work_overlay.update.call_args_list]
         self.assertEqual(published[0][0].status, "active")
-        self.assertEqual(published[1][0].status, "recent")
+        # The async recent-work pump may publish one stale active scan between
+        # the event refreshes; the current-session projection must win last.
+        self.assertEqual(published[-1][0].status, "recent")
 
     def test_renderer_loop_handles_layout_event_without_snapshot_refresh(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

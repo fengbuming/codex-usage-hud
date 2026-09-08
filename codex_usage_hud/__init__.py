@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-__version__ = "1.1.0"
+__version__ = "1.2.0"
 
 _SRC_PACKAGE = Path(__file__).resolve().parent.parent / "src" / "codex_usage_hud"
 if _SRC_PACKAGE.is_dir():

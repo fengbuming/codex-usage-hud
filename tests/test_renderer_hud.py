@@ -244,7 +244,7 @@ class RendererHudPayloadTests(unittest.TestCase):
         self.assertEqual(payload["theme"]["variant"], "dark")
         self.assertEqual(payload["theme"]["tokens"]["accent"], "#339cff")
         self.assertIn("updateState", payload)
-        self.assertEqual(payload["appVersion"], "1.1.0")
+        self.assertEqual(payload["appVersion"], "1.2.0")
         self.assertIn("本会话用量", renderer_hud.RENDERER_HUD_SCRIPT)
         self.assertNotIn("实时请求", renderer_hud.RENDERER_HUD_SCRIPT)
         self.assertNotIn("符号说明", renderer_hud.RENDERER_HUD_SCRIPT)
@@ -1551,7 +1551,9 @@ class RendererHudPayloadTests(unittest.TestCase):
         self.assertIn('setter.call(input, "");', script)
         self.assertIn('input.dispatchEvent(new KeyboardEvent("keydown"', script)
         self.assertIn('key: "Enter", code: "Enter", keyCode: 13, which: 13', script)
-        self.assertIn("正文精确命中", script)
+        # The current UI labels this broader, user-facing source category
+        # "正文匹配"; it deliberately does not promise native Find accuracy.
+        self.assertIn("正文匹配", script)
         self.assertIn("索引命中", script)
         self.assertIn("命中索引内容，打开后可能无法被 Codex 原生查找定位", script)
 

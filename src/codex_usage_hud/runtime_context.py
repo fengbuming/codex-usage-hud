@@ -243,6 +243,7 @@ def _initialize_runtime_context_resources(context: RuntimeContext) -> None:
         context.session_index_payload = dict(
             context.session_index_warm_job.status()
         )
+        warm_job = context.session_index_warm_job
         # The warm job needs the manager's candidate inventory.  Build that
         # inventory in the background at startup so first-use indexing does
         # not wait for the user to open session management and click Scan.
@@ -259,9 +260,7 @@ def _initialize_runtime_context_resources(context: RuntimeContext) -> None:
                 watcher_start = getattr(context.session_cleanup_worker, "_start_search_watcher", None)
                 if callable(watcher_start):
                     watcher_start()
-                context.session_index_warm_job.start(
-                    _session_index_startup_range(context)
-                )
+                warm_job.start(_session_index_startup_range(context))
             except Exception as exc:
                 _LOGGER.exception("session_index_warm_start_failed error=%s", exc)
 

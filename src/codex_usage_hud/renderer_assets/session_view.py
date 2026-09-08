@@ -1279,7 +1279,9 @@ TEXT = r"""
       // A wrapper can combine several rounds or hidden search copies. Only
       // keep the innermost match for each needle, never its enclosing turn.
       .filter((match, _index, matches) => !matches.some((other) => (
-        other.node !== match.node && match.node.contains(other.node)
+        other.node !== match.node
+        && typeof match.node.contains === "function"
+        && match.node.contains(other.node)
       )))
       // Prefer visible renderings over the hidden search-index copy, then the
       // smallest exact container.

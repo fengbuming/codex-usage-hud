@@ -1315,7 +1315,8 @@ const makeNode = ({ key = "", text = "", user = false, round = 0 }) => {
       const mine = Number(node.round || 0);
       const theirs = Number(other?.round || 0);
       if (mine === theirs) return 0;
-      return mine > theirs ? 4 : 2;
+      // node.compareDocumentPosition(other) describes `other` relative to node.
+      return mine > theirs ? 2 : 4;
     },
     scrollIntoView(options = {}) { events.push({ kind: "scroll", node, behavior: options.behavior || "auto" }); },
     animate() { events.push({ kind: "animate", node }); return { cancel() {} }; },
@@ -1505,7 +1506,8 @@ const makeNode = ({ key = "", text = "", user = false, round = 0, drift = false 
       const mine = Number(node.round || 0);
       const theirs = Number(other?.round || 0);
       if (mine === theirs) return 0;
-      return mine > theirs ? 4 : 2;
+      // node.compareDocumentPosition(other) describes `other` relative to node.
+      return mine > theirs ? 2 : 4;
     },
     scrollIntoView(options = {}) {
       events.push({ kind: "scroll", node, behavior: options.behavior || "auto" });

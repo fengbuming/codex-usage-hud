@@ -7,12 +7,44 @@ and this repository follows Semantic Versioning for release tags.
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-09-08
+
+Session Search, Navigation, and Event-Driven Renderer Edition.
+
 ### Added
 
+- Persistent session indexing with configurable scope, progress reporting,
+  pagination, work-directory filtering, background warming, and physical index
+  cleanup.
+- Session search with source-aware matches, exact-phrase ranking, index-only
+  disclosure, and noise filtering for captured UI/tool output.
+- Direct navigation from search results into Codex Desktop conversations,
+  including a draggable result preview, native find integration, round-aware
+  output targeting, and repeated-match navigation.
+- Contributor-facing CI, issue, pull-request, and ownership metadata.
 - Background usage detail panel now shows the official English name of each
   Codex App background task next to its Chinese label, and the subtitle line
   now explains that the requests are initiated by the official agent tool and
   describes the official purpose of the selected background task.
+
+### Changed
+
+- Renderer startup and refresh paths defer expensive session and active-work
+  scans, warm search state in the background, and favor event-driven updates.
+- Work bubbles show the latest tool action immediately and preserve completed
+  state more reliably across renderer/session handoffs.
+
+### Fixed
+
+- Session-index completion could freeze or remain blank after reaching 100%.
+- Clearing the session index now removes its on-disk database, sidecars, and
+  warm snapshot while preserving the disabled state across restarts.
+- Search results no longer advertise metadata/tool-only matches as native
+  in-thread exact hits, and exact body matches rank ahead of scattered tokens.
+- Conversation navigation now handles virtualized content, repeated output,
+  collapsed work rounds, and document-order round selection correctly.
+- Renderer session handoff, new-session startup state, and active-work refresh
+  no longer retain stale state during common transitions.
 
 ### Removed
 
