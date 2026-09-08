@@ -857,3 +857,17 @@ def test_ensure_scan_index_covers_stamp_scans_and_reports_repairs(tmp_path: Path
     result = index.load()
     assert result["memoryLoaded"] is True
     assert result["reconciled"] == 0
+
+def test_preview_uses_original_text_after_restart_and_caches(tmp_path: Path) -> None:
+    rollout = tmp_path / "preview.jsonl"
+    original = "原始上下文：请检查 renderer_contract.json，保留标点与路径。"
+    rollout.write_text(json.dumps({"type": "event_msg", "payload": {
+        "type": "user_message", "message": original}}, ensure_ascii=False) + "\n", encoding="utf-8")
+    index = SessionSearchIndex(tmp_path / "preview.sqlite")
+    index.upsert("session", (rollout,))
+    restarted = SessionSearchIndex(tmp_path / "preview.sqlite")
+    restarted.search("renderer_contract.json")
+    preview = restarted.preview_matches(["session"], "renderer_contract.json")
+    assert preview["session"] == {"text": original, "kind": "user"}
+    with patch.object(restarted, "_connect", side_effect=AssertionError("cached preview reopened DB")):
+        assert restarted.preview_matches(["session"], "renderer_contract.json") == preview

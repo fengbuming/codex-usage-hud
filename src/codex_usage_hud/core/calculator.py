@@ -275,7 +275,7 @@ class UsageCalculator:
                         ),
                     )
             return self._resolve_from_profiles(
-                self._builtin_profiles,
+                [*self._price_profiles, *self._builtin_profiles],
                 model_name,
                 provider=provider,
                 base_url=base_url,

@@ -199,6 +199,58 @@ class UsageCalculatorTests(unittest.TestCase):
         self.assertEqual(unavailable_snapshot["status"], "unavailable")
         self.assertIsNone(unavailable_snapshot["prices"])
 
+    def test_legacy_current_price_fallback_when_no_eligible_version(self) -> None:
+        # Regression: a versioned price for a model may have an effective_at that
+        # is *after* the usage event (e.g. the user adds the price after already
+        # using the model). In that case no versioned profile is eligible, and the
+        # calculator must fall back to the user's legacy "current" price
+        # (model_prices / provider_settings) instead of only the builtin table.
+        # Otherwise past usage becomes "unavailable" even though a price exists.
+        versioned = self._version(
+            "astra-version",
+            model="gpt-6-astra",
+            provider="custom",
+            input_price=5,
+            effective_at="2026-09-08T02:35:52Z",
+        )
+        legacy_price = {
+            "model": "gpt-6-astra",
+            "provider": "custom",
+            "input": 10.0,
+            "cached_input": 1.0,
+            "cache_write": 1.0,
+            "output": 50.0,
+            "reasoning": 50.0,
+        }
+        calculator = UsageCalculator(
+            {"custom/gpt-6-astra": legacy_price},
+            pricing_versions=(versioned,),
+        )
+
+        past_cost, past_snapshot = calculator.calculate_cost_with_snapshot(
+            "gpt-6-astra",
+            input_tokens=1_000_000,
+            cached_input_tokens=0,
+            output_tokens=0,
+            provider="custom",
+            occurred_at="2026-09-07T02:38:02Z",
+        )
+        self.assertEqual(past_cost, 10.0)
+        self.assertEqual(past_snapshot["status"], "fallback")
+        self.assertEqual(past_snapshot["prices"]["input"], 10.0)
+        self.assertIsNone(past_snapshot["version_id"])
+
+        future_cost, future_snapshot = calculator.calculate_cost_with_snapshot(
+            "gpt-6-astra",
+            input_tokens=1_000_000,
+            cached_input_tokens=0,
+            output_tokens=0,
+            provider="custom",
+            occurred_at="2026-09-09T00:00:00Z",
+        )
+        self.assertEqual(future_cost, 5.0)
+        self.assertEqual(future_snapshot["version_id"], "astra-version")
+
     def test_explicit_naive_occurred_at_is_rejected(self) -> None:
         calculator = UsageCalculator({}, pricing_versions=())
         with self.assertRaises(ValueError):

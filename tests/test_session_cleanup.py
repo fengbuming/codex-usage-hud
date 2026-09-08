@@ -2668,6 +2668,9 @@ class SessionCleanupManagerTests(unittest.TestCase):
         self.assertIn("matchedTokens", first)
         # 每个命中会话只携带「该会话实际命中的分词」，未被命中的分词不列出。
         self.assertIsInstance(first["matchedTokens"], list)
+        self.assertTrue(first["matchedTokens"])
+        self.assertIn("fuzzy-marker", first["preview"]["text"])
+        self.assertEqual(first["preview"]["kind"], "user")
         self.assertTrue(
             set(first["matchedTokens"]).issubset(set(search_terms("fuzzy-marker"))),
             "matchedTokens must be a subset of the query tokens",

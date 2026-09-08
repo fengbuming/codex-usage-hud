@@ -6,8 +6,8 @@
   },
   "currentBundle": {
     "phase": "P6.7",
-    "sha256": "1043cf1f8f9dad7f37870e0296b05be74047c0e124b1c85699bd027b6494773c",
-    "byteLength": 1258334
+    "sha256": "20ef1dd49afdf1d2b9114a7a2f6dd6e5fec2913bbb81965973e53bc258908699",
+    "byteLength": 1260780
   },
   "sha256": "f83d65265c55143fa775f509f09ce109c2aa75a03946b42cf462cb6cbd4ea637",
   "byteLength": 548705,
@@ -44,7 +44,7 @@
     "mutationObservers": 8,
     "resizeObservers": 1,
     "setIntervals": 6,
-    "setTimeouts": 41,
+    "setTimeouts": 42,
     "kernelSetIntervals": 1,
     "kernelSetTimeouts": 2
   },
@@ -138,7 +138,7 @@
     "model_picker", "theme", "session_view_progress", "copy_feedback", "activity_trail_locate",
     "activity_virtualization_frame", "activity_request_materialization",
     "activity_round_expand_settle", "conversation_locate_pulse", "thread_find_refill",
-    "thread_find_refill", "thread_find_open", "thread_find_identity",
+    "thread_find_refill", "thread_find_open", "thread_find_identity", "thread_find_identity",
     "session_cleanup_scan_watchdog", "storage", "session_index_control_watchdog",
     "background_usage_policy", "background_usage_request", "background_usage_fetch",
     "codex_cli_launch_timeout", "codex_cli_launch_min_visible", "session_index_status_watchdog",

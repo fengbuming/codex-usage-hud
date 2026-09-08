@@ -1921,18 +1921,25 @@ TEXT = r"""
     // 穿梭；高亮、滚动与计数完全交给 Codex 原生 find-in-thread。
     let searchFloat = null;
 
-    // 把会话 ISO 时间戳拆成年/月/日标签，供浮窗按月分组与逐行展示日期。
-    function sessionMonthKeyFromIso(iso) {
-      if (!iso || typeof iso !== "string") return "";
-      const m = /^(\d{4})-(\d{2})/.exec(iso);
-      if (!m) return "";
-      return m[1] + "-" + m[2];
+    function visibleSearchMatches() {
+      return (searchFloat?.matches || []).filter((entry) =>
+        !searchFloat.onlyExact || (entry.kinds || []).some((kind) => kind === "user" || kind === "assistant"));
     }
-    function sessionMonthLabel(key) {
-      if (!key) return "未知日期";
-      const parts = key.split("-");
-      return parts[0] + "年" + parseInt(parts[1], 10) + "月";
+
+    function searchPreviewHtml(entry) {
+      const text = String(entry.preview?.text || "");
+      if (!text) return '<span class="codex-usage-hud-search-preview">暂无命中片段，可打开会话核对</span>';
+      const terms = [searchFloat.query, ...(entry.matchedTokens || [])].filter(Boolean).sort((a, b) => b.length - a.length);
+      const folded = text.toLowerCase();
+      let html = "";
+      for (let at = 0; at < text.length;) {
+        const term = terms.find((value) => folded.startsWith(value.toLowerCase(), at));
+        if (term) { html += `<mark>${escapeHtml(text.slice(at, at + term.length))}</mark>`; at += term.length; }
+        else { html += escapeHtml(text[at]); at += 1; }
+      }
+      return `<details class="codex-usage-hud-search-evidence"><summary>查看命中上下文</summary><span>${html}</span></details><span class="codex-usage-hud-search-preview">${html}</span>`;
     }
+
     function sessionDateLabel(iso) {
       if (!iso || typeof iso !== "string") return "";
       const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso);
@@ -1952,36 +1959,21 @@ TEXT = r"""
         bindSearchFloatDrag(panel);
       }
       const { query, revision, currentId } = searchFloat;
-      // 「只看可高亮」把仅命中工具输出、跳转后无法被 Codex 原生查找高亮的
+      // 「正文命中」把仅命中工具输出、跳转后无法被 Codex 原生查找高亮的
       // 会话整条滤掉，避免用户反复点进没有结果的会话。
       const onlyExact = Boolean(searchFloat.onlyExact);
-      const matches = onlyExact
-        ? (searchFloat.matches || []).filter((entry) => entry.exactPhrase)
-        : (searchFloat.matches || []);
+      const matches = visibleSearchMatches();
       const total = matches.length;
       const idx = matches.findIndex((entry) => entry.id === currentId);
       const collapsed = searchFloat.collapsed ? " is-collapsed" : "";
       const dragging = Boolean(searchFloat.dragging || panel.classList.contains("is-dragging"));
       const side = !dragging && searchFloat.side ? ` ${searchFloat.side}` : "";
       panel.className = `codex-usage-hud-search-float${collapsed}${side}${dragging ? " is-dragging" : ""}`;
-      // 按月分组（月份降序：最新在前），组内沿用检索排序；每个分组标题
-      // 显示月份与命中数量，逐行额外展示该会话的日期（月-日）。
-      const buckets = new Map();
-      matches.forEach((entry) => {
-        const key = sessionMonthKeyFromIso(entry.updatedAt);
-        if (!buckets.has(key)) buckets.set(key, []);
-        buckets.get(key).push(entry);
-      });
-      const monthOrder = [...buckets.keys()]
-        .filter((k) => k)
-        .sort((a, b) => (a < b ? 1 : -1));
-      if (buckets.has("")) monthOrder.push("");
+      const oldList = panel.querySelector(".codex-usage-hud-search-list");
+      const oldScroll = oldList?.scrollTop || 0;
       let rowsHtml = "";
       let displayIndex = 0;
-      monthOrder.forEach((key) => {
-        const groupItems = buckets.get(key);
-        rowsHtml += `<li class="codex-usage-hud-search-group"><span>${escapeHtml(sessionMonthLabel(key))}</span><span class="codex-usage-hud-search-group-count">${groupItems.length}</span></li>`;
-        groupItems.forEach((entry) => {
+      matches.forEach((entry) => {
           displayIndex += 1;
           const rowChips = (entry.matchedTokens || [])
             .map((token) => `<button type="button" class="codex-usage-hud-search-chip" data-token="${escapeAttr(token)}">${escapeHtml(token)}</button>`)
@@ -1991,9 +1983,11 @@ TEXT = r"""
           const indexOnly = !entry.exactPhrase
             && kinds.length > 0
             && kinds.every((kind) => kind !== "user" && kind !== "assistant");
+          const sourceLabels = {user: "用户提问", assistant: "助手回答", tool: "工具输出", file: "改动文件", metadata: "会话信息"};
           const rowMeta = [
+            escapeHtml(sourceLabels[entry.preview?.kind] || ""),
             entry.exactPhrase
-              ? '<span class="codex-usage-hud-search-badge">正文精确命中</span>'
+              ? '<span class="codex-usage-hud-search-badge">正文匹配</span>'
               : (indexOnly ? '<span class="codex-usage-hud-search-badge is-index-only" title="命中索引内容，打开后可能无法被 Codex 原生查找定位">索引命中</span>' : ""),
             dateLabel ? `<span class="codex-usage-hud-search-date">${dateLabel}</span>` : "",
           ].filter(Boolean).join("");
@@ -2001,12 +1995,12 @@ TEXT = r"""
           <li class="codex-usage-hud-search-row${entry.id === currentId ? " is-current" : ""}" data-item-id="${escapeAttr(entry.id)}" data-revision="${escapeAttr(revision)}">
             <span class="codex-usage-hud-search-index">${displayIndex}</span>
             <span class="codex-usage-hud-search-row-main">
-              <span class="codex-usage-hud-search-title">${escapeHtml(entry.title || entry.id)}</span>
+              <button type="button" class="codex-usage-hud-search-title" title="${escapeAttr(entry.title || entry.id)}">${escapeHtml(entry.title || entry.id)}</button>
               ${rowMeta ? `<span class="codex-usage-hud-search-row-meta">${rowMeta}</span>` : ""}
+              ${searchPreviewHtml(entry)}
               ${rowChips ? `<span class="codex-usage-hud-search-row-chips">${rowChips}</span>` : ""}
             </span>
           </li>`;
-        });
       });
       panel.innerHTML = `
         <div class="codex-usage-hud-search-head">
@@ -2020,16 +2014,22 @@ TEXT = r"""
         <div class="codex-usage-hud-search-meta">
           <span class="codex-usage-hud-search-meta-count">${total} 个命中</span>
           <span aria-hidden="true">·</span>
-          <span>当前第 ${idx >= 0 ? idx + 1 : "-"} / ${total}</span>
-          <button type="button" data-action="only-exact" class="codex-usage-hud-search-filter${onlyExact ? " is-on" : ""}" aria-pressed="${onlyExact ? "true" : "false"}" title="只列出正文连续命中、跳转后可被 Codex 查找高亮的会话">只看可高亮</button>
+          <span>当前第 ${idx >= 0 ? idx + 1 : "未在列表"} / ${total}</span>
+          <button type="button" data-action="only-exact" class="codex-usage-hud-search-filter${onlyExact ? " is-on" : ""}" aria-pressed="${onlyExact ? "true" : "false"}" title="只列出用户提问或助手回答中包含关键词的会话；不保证原生查找可定位">正文命中</button>
         </div>
         ${searchFloat.notice ? `<div class="codex-usage-hud-search-notice">${escapeHtml(searchFloat.notice)}</div>` : ""}
-        ${total ? `<ul class="codex-usage-hud-search-list">${rowsHtml}</ul>` : '<div class="codex-usage-hud-search-empty">没有正文连续命中的会话，可关闭「只看可高亮」查看索引命中。</div>'}
+        ${total ? `<ul class="codex-usage-hud-search-list">${rowsHtml}</ul>` : '<div class="codex-usage-hud-search-empty">没有正文命中的会话，可关闭筛选查看文件或工具命中。</div>'}
         <div class="codex-usage-hud-search-nav">
           <button type="button" data-action="prev" aria-label="上一个命中" ${idx <= 0 ? "disabled" : ""}><span class="codex-usage-hud-search-nav-icon" aria-hidden="true">←</span><span>上一个</span></button>
           <button type="button" data-action="next" aria-label="下一个命中" ${(idx < 0 || idx >= total - 1) ? "disabled" : ""}><span>下一个</span><span class="codex-usage-hud-search-nav-icon" aria-hidden="true">→</span></button>
           <button type="button" data-action="return" class="codex-usage-hud-search-return" aria-label="返回会话管理"><span class="codex-usage-hud-search-nav-icon" aria-hidden="true">↩</span><span>会话管理</span></button>
         </div>`;
+      const list = panel.querySelector(".codex-usage-hud-search-list");
+      if (list) list.scrollTop = oldScroll;
+      if (searchFloat.revealCurrent) {
+        panel.querySelector(".is-current")?.scrollIntoView({block: "nearest"});
+        searchFloat.revealCurrent = false;
+      }
     }
 
     function toggleSearchFloat() {
@@ -2043,9 +2043,10 @@ TEXT = r"""
         const chip = event.target?.closest?.(".codex-usage-hud-search-chip");
         const row = event.target?.closest?.(".codex-usage-hud-search-row");
         const action = event.target?.closest?.("[data-action]");
+        if (event.target?.closest?.("details")) return;
         if (chip) {
           event.preventDefault();
-          openThreadFind(String(chip.dataset.token || ""));
+          jumpToSearchResult(String(row?.dataset.itemId || ""), String(row?.dataset.revision || ""), String(chip.dataset.token || ""));
           return;
         }
         if (row) {
@@ -2073,10 +2074,11 @@ TEXT = r"""
         if (name === "prev" || name === "next") {
           const ctxFloat = searchFloat;
           if (!ctxFloat || !ctxFloat.matches) return;
-          const at = ctxFloat.matches.findIndex((entry) => entry.id === ctxFloat.currentId);
+          const matches = visibleSearchMatches();
+          const at = matches.findIndex((entry) => entry.id === ctxFloat.currentId);
           const next = name === "prev" ? at - 1 : at + 1;
-          if (next >= 0 && next < ctxFloat.matches.length) {
-            jumpToSearchResult(ctxFloat.matches[next].id, ctxFloat.revision);
+          if (next >= 0 && next < matches.length) {
+            jumpToSearchResult(matches[next].id, ctxFloat.revision);
           }
         }
       };
@@ -2172,7 +2174,7 @@ TEXT = r"""
       panel.addEventListener("pointercancel", end);
     }
 
-    function jumpToSearchResult(itemId, revision) {
+    function jumpToSearchResult(itemId, revision, token = "") {
       if (!itemId) return;
       const query = String(searchFloat?.query || "");
       // 点击浮窗某会话：无论是否已在当前会话，都把命中关键词立即注入 Codex
@@ -2186,6 +2188,7 @@ TEXT = r"""
           : "";
         renderSearchFloat();
       }
+      if (searchFloat) searchFloat.pendingToken = token;
       prepareSearchJump(itemId);
       const sent = ctx.bindings.send(settingsCommandBindingName, {
         id: `search-jump-${Date.now()}-${Math.random().toString(36).slice(2)}`,
@@ -2272,7 +2275,7 @@ TEXT = r"""
     async function applySearchJump(response) {
       if (!response || !response.search) return;
       const query = String(response.search?.query || "").trim();
-      const locateQuery = String(response.search?.locateQuery || query).trim();
+      const locateQuery = String(searchFloat?.pendingToken || response.search?.locateQuery || query).trim();
       // 刷新浮窗上下文：维护排序后的命中列表、分词与当前所在会话。
       // 保留用户已设置的折叠 / 吸附侧边状态，不每次覆盖。
       if (
@@ -2288,6 +2291,9 @@ TEXT = r"""
           matches: response.search.matches,
           revision: String(response.search.revision || ""),
           currentId: String(response.itemId || ""),
+          onlyExact: previous.query === query && Boolean(previous.onlyExact),
+          revealCurrent: true,
+          notice: "已打开会话；正在核对可见内容。",
           collapsed: Boolean(previous.collapsed),
           side: previous.side || "side-right",
           dragging: Boolean(previous.dragging),
@@ -2296,7 +2302,10 @@ TEXT = r"""
         bindSearchFloat(document.getElementById("codex-usage-hud-search-float"));
       }
       if (!pendingSearchJump || response?.itemId !== pendingSearchJump) return;
-      if (!query || response.search?.error || !response.verified) { pendingSearchJump = ""; return; }
+      if (!query || response.search?.error || !response.verified) {
+        if (searchFloat) { searchFloat.notice = "未能确认跳转，请重试或返回会话管理。"; renderSearchFloat(); }
+        pendingSearchJump = ""; return;
+      }
       pendingSearchJump = "";
       const targetKey = String(response.search?.targetKey || "");
       // 跳转回执可能早于 Codex 的 active-session 事件到达；轮询等待落地会话与
@@ -2307,7 +2316,12 @@ TEXT = r"""
       const probe = async () => {
         if (threadFindJump !== state) return;
         const identity = String(readActiveSessionRef()?.sessionId || "");
-        if (!identity || waited >= 2600) { cancelThreadFindJump(); return; }
+        if (waited >= 2600) {
+          cancelThreadFindJump();
+          if (searchFloat) { searchFloat.notice = "尚未确认目标会话，命中依据可在列表中查看。"; renderSearchFloat(); }
+          return;
+        }
+        if (!identity) { waited += 90; state.timer = ctx.lifecycle.timeout("thread_find_identity", () => { void probe(); }, 90); return; }
         const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(identity));
         const key = Array.from(new Uint8Array(digest), (value) => value.toString(16).padStart(2, "0")).join("");
         if (key !== targetKey) {
@@ -2326,10 +2340,10 @@ TEXT = r"""
           locateQuery || query,
           Array.isArray(currentEntry?.kinds) ? currentEntry.kinds : [],
         );
-        if (searchFloat && !currentEntry?.exactPhrase) {
+        if (searchFloat) {
           searchFloat.notice = located
-            ? `已定位到 ${(currentEntry?.kinds || []).join("、") || "索引"} 命中位置`
-            : `已打开会话，使用“${locateQuery || query}”查找可见内容`;
+            ? "已定位到当前可见内容。"
+            : "当前可见正文未定位到关键词；可展开命中上下文核对，或使用聊天查找继续查找。";
           renderSearchFloat();
         }
         openThreadFind(locateQuery || query);

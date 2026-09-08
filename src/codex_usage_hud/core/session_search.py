@@ -2245,6 +2245,91 @@ class SessionSearchIndex:
                 "memoryLoaded": True,
             }
 
+    def preview_matches(self, session_ids: Sequence[str], query: str) -> dict[str, dict[str, str]]:
+        """Read bounded original excerpts on navigation, never on the search hot path.
+
+        Token streams are not quotations. Fetch the original indexed field and
+        return only a short window; cache by resident document identity so updates
+        cannot reuse stale evidence. No rollout parsing or background polling.
+        """
+        terms = search_terms(query)
+        if not terms:
+            return {}
+        cache = getattr(self, "_preview_cache", None)
+        if cache is None:
+            cache = self._preview_cache = {}
+        result: dict[str, dict[str, str]] = {}
+        columns = {"user": "user_text", "assistant": "assistant_text",
+                   "tool": "tool_text", "metadata": "title"}
+        connection = None
+        try:
+            for session_id in session_ids:
+                document = self._documents.get(session_id)
+                if document is None:
+                    continue
+                key = (session_id, query, id(document))
+                if key in cache:
+                    result[session_id] = cache[key]
+                    continue
+                if connection is None:
+                    connection = self._connect()
+                evidence: dict[str, str] = {}
+                # Prefer an actual changed path for file-name queries.
+                if any(ch in query for ch in (".", "/", "\\")):
+                    row = connection.execute(
+                        f"SELECT changed_paths FROM {_DOC_TABLE} WHERE session_id = ?",
+                        (session_id,),
+                    ).fetchone()
+                    try:
+                        paths = json.loads(row[0]) if row else []
+                    except (ValueError, TypeError):
+                        paths = []
+                    for path in paths:
+                        if any(term in str(path).casefold() for term in terms):
+                            evidence = {"text": str(path), "kind": "file"}
+                            break
+                if not evidence:
+                    for kind, _tokens, _grams, field_text in document.fields:
+                        column = columns.get(kind)
+                        needles = [term for term in terms if term in field_text]
+                        if not column or not needles:
+                            continue
+                        needle = max(needles, key=len)
+                        row = connection.execute(
+                            f"WITH hit AS (SELECT {column} AS body, "
+                            f"instr(lower({column}), lower(?)) AS phrase, "
+                            f"instr(lower({column}), lower(?)) AS token "
+                            f"FROM {_DOC_TABLE} WHERE session_id = ?) "
+                            "SELECT substr(body, max(1, (CASE WHEN phrase > 0 "
+                            "THEN phrase ELSE token END) - 80), 320), "
+                            "CASE WHEN phrase > 0 THEN phrase ELSE token END "
+                            "FROM hit WHERE phrase > 0 OR token > 0",
+                            (query.strip(), needle, session_id),
+                        ).fetchone()
+                        if row:
+                            excerpt = str(row[0])
+                            # Old indexed prompts may contain an environment wrapper.
+                            # Keep the quote after the final closing tag before the hit.
+                            positions = [excerpt.casefold().find(term) for term in terms]
+                            hit = min((pos for pos in positions if pos >= 0), default=0)
+                            boundary = excerpt.rfind(">", 0, hit)
+                            if boundary >= 0:
+                                excerpt = excerpt[boundary + 1:].lstrip()
+                            evidence = {"text": ("…" if row[1] > 81 else "") + excerpt
+                                        + ("…" if len(excerpt) == 320 else ""), "kind": kind}
+                            break
+                if len(cache) >= 512:
+                    cache.clear()
+                cache[key] = evidence
+                result[session_id] = evidence
+        except (OSError, sqlite3.Error):
+            # A missing preview must not prevent opening a valid session.
+            return result
+        finally:
+            if connection is not None:
+                connection.close()
+        return result
+
     def count(self, *, connection: sqlite3.Connection | None = None) -> int:
         own = connection is None
         if connection is None and self.memory_loaded:

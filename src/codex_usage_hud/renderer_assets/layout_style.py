@@ -6930,6 +6930,14 @@ TEXT = r"""
             font-size: 10px;
             font-weight: 700;
           }
+          #${rootId} .codex-usage-hud-search-float .codex-usage-hud-search-row-main { display: flex; flex-direction: column; align-items: stretch; }
+          #${rootId} .codex-usage-hud-search-float .codex-usage-hud-search-title { text-align: left; border: 0; padding: 0; background: none; color: inherit; font: inherit; cursor: pointer; }
+          #${rootId} .codex-usage-hud-search-float .codex-usage-hud-search-row-meta { justify-content: flex-start; font-size: 10px; }
+          #${rootId} .codex-usage-hud-search-preview { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; color: var(--codex-usage-hud-muted, #a6b1bf); }
+          #${rootId} .codex-usage-hud-search-evidence { font-size: 11px; overflow-wrap: anywhere; white-space: pre-wrap; }
+          #${rootId} .codex-usage-hud-search-evidence summary { cursor: pointer; color: var(--codex-usage-hud-accent, #81b7ff); }
+          #${rootId} .codex-usage-hud-search-evidence[open] + .codex-usage-hud-search-preview { display: none; }
+          #${rootId} .codex-usage-hud-search-float mark { background: #675322; color: #fff1b8; border-radius: 2px; }
           /* 按月分组标题：滚动时吸顶，显示月份与当月命中数 */
           #${rootId} .codex-usage-hud-search-float .codex-usage-hud-search-group {
             position: sticky;

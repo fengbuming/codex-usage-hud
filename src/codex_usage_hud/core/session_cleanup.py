@@ -1140,13 +1140,17 @@ class SessionCleanupManager:
         }
         terms = list(search_terms(query))
         indexed_documents = getattr(self._search_index, "_documents", None)
+        preview = getattr(self._search_index, "preview_matches", None)
+        previews = preview(
+            [self._items[value]._session_id for value in ordered_ids if value in self._items], query
+        ) if callable(preview) else {}
         ranked: list[dict[str, object]] = []
         for match_id in ordered_ids:
             entry = kind_map.get(match_id) or {}
             match_item = self._items.get(match_id)
-            document = indexed_documents.get(match_id) if indexed_documents is not None else None
+            document = indexed_documents.get(match_item._session_id) if indexed_documents is not None and match_item is not None else None
             token_set = getattr(document, "token_set", frozenset()) if document is not None else frozenset()
-            matched_tokens = [term for term in terms if term in token_set]
+            matched_tokens = [term for term in terms if term in token_set or term in getattr(document, "search_text", "")]
             ranked.append(
                 {
                     "id": match_id,
@@ -1164,6 +1168,7 @@ class SessionCleanupManager:
                     "score": float(entry.get("score") or 0),
                     "exactPhrase": bool(entry.get("exactPhrase") or False),
                     "matchedTokens": matched_tokens,
+                    "preview": previews.get(match_item._session_id, {}) if match_item else {},
                     "findQuery": str(entry.get("findQuery") or ""),
                 }
             )
