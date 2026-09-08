@@ -935,7 +935,7 @@ class SessionCleanupManager:
                     **self._search_state,
                     "query": text,
                     "workdirId": selected_workdir,
-                    "state": "completed",
+                    "state": "indexing" if result.get("memoryLoaded") is False else "completed",
                     "indexState": index_state,
                     "matches": matches,
                     "matchKinds": match_kinds,

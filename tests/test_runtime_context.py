@@ -119,6 +119,7 @@ def test_session_index_progress_publishes_only_while_renderer_is_attached(
         session_index_warm_job=None,
         session_index_payload={},
         session_cleanup_manager=object(),
+        session_cleanup_worker=MagicMock(),
     )
     monkeypatch.setattr(runtime_context_module, "hud_runtime_dir", lambda: tmp_path)
     job = runtime_context_module._build_session_index_warm_job(context)
@@ -133,6 +134,7 @@ def test_session_index_progress_publishes_only_while_renderer_is_attached(
 
     job._progress_callback(snapshot)
     assert event_bus.drain() == []
+    context.session_cleanup_worker.refresh_warm_search.assert_called_once_with()
     context.session_index_warm_job._state.job_state = "running"
     assert job.attach() is True
     job._progress_callback(snapshot)

@@ -55,6 +55,44 @@ def _create_state(path: Path, rows: list[tuple[object, ...]]) -> None:
 
 
 class SessionCleanupManagerTests(unittest.TestCase):
+    def test_cold_search_refreshes_after_resident_load_without_reopening(self):
+        from codex_usage_hud.core.session_search import SessionSearchIndex
+        from codex_usage_hud.session_cleanup_runtime import SessionCleanupWorker
+        from codex_usage_hud.core.runtime_events import RuntimeEventBus
+        import time
+
+        temporary, root, _, _, rollouts, manager = self._fixture()
+        self.addCleanup(temporary.cleanup)
+        with rollouts[ROOT_ID].open("a", encoding="utf-8") as stream:
+            stream.write(json.dumps({"type": "event_msg", "payload": {
+                "type": "user_message", "message": "cold-content-marker",
+            }}) + "\n")
+        manager._search_index = SessionSearchIndex(root / "cold.sqlite")
+        inventory = manager.scan()
+        manager._search_index.sync(manager.search_index_entries())
+        self.assertTrue(manager.search("cold-content-marker")["search"]["matches"])
+        manager._search_index = SessionSearchIndex(root / "cold.sqlite")
+        context = SimpleNamespace(
+            session_cleanup_payload=inventory, runtime_events=RuntimeEventBus(),
+            session_index_payload={"enabled": True, "jobState": "idle", "builtCount": 2, "totalCount": 2},
+        )
+        worker = SessionCleanupWorker(context, manager, on_deleted=lambda *_args: None)
+        self.addCleanup(worker.close)
+        cold = manager.search("cold-content-marker", request_id="cold-search")
+        self.assertEqual(cold["search"]["state"], "indexing")
+        self.assertEqual(cold["search"]["matches"], [])
+        worker._publish(cold)
+        manager._search_index.load()
+        worker.refresh_warm_search()
+        deadline = time.monotonic() + 3
+        while not context.session_cleanup_payload["search"]["matches"]:
+            self.assertLess(time.monotonic(), deadline)
+            time.sleep(0.01)
+        refreshed = context.session_cleanup_payload["search"]
+        self.assertEqual(refreshed["state"], "completed")
+        self.assertEqual(refreshed["requestId"], "")
+        self.assertEqual(refreshed["query"], "cold-content-marker")
+
     def _fixture(self, *, child_status: str = "closed"):
         temporary = tempfile.TemporaryDirectory()
         root = Path(temporary.name)

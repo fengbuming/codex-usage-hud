@@ -322,6 +322,13 @@ def _build_session_index_warm_job(context: RuntimeContext) -> object:
     def publish_progress(snapshot: object) -> None:
         payload = _session_index_snapshot_payload(snapshot)
         context.session_index_payload = payload
+        # Coverage can be complete before the delayed resident-memory load.
+        # Refresh the submitted query on progress (including that final load),
+        # even while detached, so reopening cannot inherit a stale empty result.
+        worker = getattr(context, "session_cleanup_worker", None)
+        refresh = getattr(worker, "refresh_warm_search", None)
+        if callable(refresh) and payload["enabled"]:
+            refresh()
         current_job = getattr(context, "session_index_warm_job", None)
         attached = bool(
             callable(getattr(current_job, "is_attached", None))

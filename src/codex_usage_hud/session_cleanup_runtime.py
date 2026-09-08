@@ -263,6 +263,11 @@ class SessionCleanupWorker:
     def _real_search_manager(self) -> SessionCleanupManager | None:
         return self.manager if isinstance(self.manager, SessionCleanupManager) else None
 
+    def refresh_warm_search(self) -> None:
+        """Serialize warm-index notifications behind pending search responses."""
+        if not self._closed.is_set():
+            self._queue.put_nowait({"action": "sessionCleanupWarmSearch"})
+
     def _start_search_watcher(self) -> None:
         manager = self._real_search_manager()
         if manager is None:
@@ -647,6 +652,30 @@ class SessionCleanupWorker:
                     if indexed_snapshot is not None:
                         snapshot = indexed_snapshot
                     self._start_search_watcher()
+                elif action == "sessionCleanupWarmSearch":
+                    manager = self._real_search_manager()
+                    status = getattr(self._context, "session_index_payload", {})
+                    if manager is None or not status.get("enabled", True):
+                        continue
+                    current = manager.snapshot(include_sessions=False)
+                    search = current.get("search", {})
+                    if not str(search.get("query") or "").strip():
+                        continue
+                    index_state = (
+                        "failed" if status.get("jobState") == "error"
+                        else "indexing" if status.get("jobState") in {"running", "attached"}
+                        or not manager._search_index.memory_loaded
+                        else "ready"
+                    )
+                    snapshot = manager.update_search_index(
+                        str(current.get("revision") or ""),
+                        int(status.get("builtCount") or 0),
+                        int(status.get("totalCount") or 0),
+                        int(status.get("builtCount") or 0),
+                        state=index_state,
+                        error=str(status.get("error") or ""),
+                        generation=int(search.get("generation") or 0),
+                    )
                 elif action == "sessionCleanupSearch":
                     snapshot = self.manager.search(
                         str(command.get("query") or command.get("search") or ""),
