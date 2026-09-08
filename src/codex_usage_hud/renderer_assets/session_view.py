@@ -1236,7 +1236,17 @@ TEXT = r"""
 
   function activityNodeIsEffectivelyVisible(node) {
     const rect = node.getBoundingClientRect?.();
-    return !!rect && rect.width > 0 && rect.height > 0;
+    if (!rect || rect.width <= 0 || rect.height <= 0) return false;
+    for (let parent = node.parentElement; parent; parent = parent.parentElement) {
+      const style = window.getComputedStyle(parent);
+      if (style.display === "none" || style.visibility === "hidden") return false;
+      if (/(hidden|clip)/.test(`${style.overflow} ${style.overflowY}`)) {
+        const bounds = parent.getBoundingClientRect();
+        if (bounds.height <= 0 || bounds.width <= 0
+          || rect.bottom <= bounds.top || rect.top >= bounds.bottom) return false;
+      }
+    }
+    return true;
   }
 
   function activityTextMatches(scope, needle) {
@@ -1266,6 +1276,11 @@ TEXT = r"""
         text: activityComparableText(node.textContent),
       }))
       .filter(({ text }) => text.includes(needle))
+      // A wrapper can combine several rounds or hidden search copies. Only
+      // keep the innermost match for each needle, never its enclosing turn.
+      .filter((match, _index, matches) => !matches.some((other) => (
+        other.node !== match.node && match.node.contains(other.node)
+      )))
       // Prefer visible renderings over the hidden search-index copy, then the
       // smallest exact container.
       .sort((left, right) => (
@@ -1295,11 +1310,11 @@ TEXT = r"""
       }
       if (typeof node.compareDocumentPosition !== "function") break;
       const bits = node.compareDocumentPosition(header);
-      if (bits & DOM_POSITION_FOLLOWING) {
+      if (bits & DOM_POSITION_PRECEDING) {
         ordinal += 1;
         continue;
       }
-      if (bits & DOM_POSITION_PRECEDING) break;
+      if (bits & DOM_POSITION_FOLLOWING) break;
       ordinal += 1;
       break;
     }
@@ -1348,21 +1363,17 @@ TEXT = r"""
     const selectRoundAware = (list) => {
       // The same tool output can appear in several rounds of a task, and the
       // tightest text match would then land on the first occurrence instead of
-      // the requested one. Prefer a candidate whose round ordinal is closest
-      // to the requested round index.
+      // the requested one. An exact hidden hit must beat another round's
+      // visible duplicate so the requested disclosure gets expanded.
       if (expectedRound <= 0 || !list.length) return null;
       const ordinals = list
         .map((node) => ({ node, ordinal: activityRoundOrdinal(node, requestScope, headers) }))
-        .filter((entry) => entry.ordinal > 0)
-        .sort((left, right) => (
-          Math.abs(left.ordinal - expectedRound) - Math.abs(right.ordinal - expectedRound)
-          || left.ordinal - right.ordinal
-        ));
+        .filter((entry) => entry.ordinal === expectedRound);
       return ordinals[0]?.node || null;
     };
     return selectRoundAware(visibleMatches)
-      || visibleMatches[0]
       || selectRoundAware(hiddenMatches)
+      || visibleMatches[0]
       || hiddenMatches[0]
       || null;
   }
@@ -1534,16 +1545,9 @@ TEXT = r"""
 
   function pulseActivityConversationTarget(target, roundIndex = 0) {
     if (!target) return;
-    // Pulse the enclosing round-scoped unit as well as the leaf so the
-    // highlight stays visible even when the matched text node is small.
-    const hudRoot = document.getElementById(rootId);
-    const container = target.closest?.("[data-content-search-unit-key]");
-    const pulseNodes = [];
-    if (container && container !== target && !hudRoot?.contains?.(container)) {
-      pulseNodes.push(container, target);
-    } else {
-      pulseNodes.push(target);
-    }
+    // Search units may contain the entire expanded answer and several rounds.
+    // Highlight only the matched leaf (or the explicit disclosure fallback).
+    const pulseNodes = [target];
     for (const node of pulseNodes) {
       const token = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
       node.dataset.codexHudLocatePulse = token;
