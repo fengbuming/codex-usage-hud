@@ -2179,16 +2179,13 @@ TEXT = r"""
       // 自带搜索框定位；同时始终发起会话跳转命令，确保即使用户在 Codex 里手动
       // 切到了其它会话，也能点此行跳回该命中会话（落地回执由 applySearchJump
       // 再次打开原生查找栏）。
-      // 仅工具输出命中的会话，正文里并没有这段连续关键词，跳转后 Codex
-      // 原生查找多半无高亮。先就地说明，避免用户误以为跳转或高亮坏了。
       const entry = (searchFloat?.matches || []).find((item) => item.id === itemId);
       if (searchFloat) {
         searchFloat.notice = entry && !entry.exactPhrase
-          ? "该会话正文没有这段完整关键词（命中来自工具输出），跳转后 Codex 查找可能无高亮"
+          ? `命中来源：${(entry.kinds || []).join("、") || "索引"}；将使用“${entry.findQuery || query}”定位可见内容`
           : "";
         renderSearchFloat();
       }
-      if (query) openThreadFind(query);
       prepareSearchJump(itemId);
       const sent = ctx.bindings.send(settingsCommandBindingName, {
         id: `search-jump-${Date.now()}-${Math.random().toString(36).slice(2)}`,
@@ -2197,6 +2194,7 @@ TEXT = r"""
         itemId,
         inventoryRevision: revision,
         searchQuery: query,
+        locateQuery: String(entry?.findQuery || query),
       });
       if (sent === false) {
         console.warn("search jump command channel unavailable");
@@ -2209,9 +2207,72 @@ TEXT = r"""
       searchFloat = null;
     }
 
+    function normalizedSearchLocateValue(value) {
+      let text = String(value || "");
+      try { text = decodeURIComponent(text); } catch (_error) { /* keep raw href */ }
+      return text.replace(/\\/g, "/").replace(/\s+/g, " ").trim().toLowerCase();
+    }
+
+    function findRenderedSearchTarget(locateQuery, kinds = []) {
+      const needle = normalizedSearchLocateValue(locateQuery);
+      if (!needle) return null;
+      const timeline = document.querySelector("[data-app-action-timeline-scroll]") || document;
+      const hudRoot = document.getElementById(rootId);
+      const fileHit = Array.isArray(kinds) && kinds.includes("file");
+      if (fileHit) {
+        const links = Array.from(timeline.querySelectorAll?.("a[href]") || [])
+          .filter((node) => !hudRoot?.contains(node))
+          .map((node) => ({
+            node,
+            visible: activityNodeIsEffectivelyVisible(node),
+            text: normalizedSearchLocateValue([
+              node.textContent,
+              node.getAttribute("title"),
+              node.getAttribute("aria-label"),
+              node.getAttribute("href"),
+            ].filter(Boolean).join(" ")),
+          }))
+          .filter(({ text }) => text.includes(needle))
+          .sort((left, right) => Number(right.visible) - Number(left.visible) || left.text.length - right.text.length);
+        if (links.length) return links[0].node;
+      }
+      const comparable = activityComparableText(locateQuery);
+      if (!comparable) return null;
+      const match = activityTextMatches(timeline, comparable)[0];
+      return match?.node || null;
+    }
+
+    function locateRenderedSearchTarget(locateQuery, kinds = []) {
+      const target = findRenderedSearchTarget(locateQuery, kinds);
+      if (!target || !activityNodeIsEffectivelyVisible(target)) return false;
+      const visible = visibleActivityNode(target) || target;
+      visible.scrollIntoView?.({ block: "center", inline: "nearest", behavior: "smooth" });
+      pulseActivityConversationTarget(visible);
+      return true;
+    }
+
+    async function expandSearchFileDisclosures(kinds = []) {
+      if (!Array.isArray(kinds) || !kinds.includes("file")) return false;
+      const timeline = document.querySelector("[data-app-action-timeline-scroll]") || document;
+      const hudRoot = document.getElementById(rootId);
+      const toggles = Array.from(timeline.querySelectorAll?.("button[aria-expanded='false'], button[data-state='closed']") || [])
+        .filter((node) => !hudRoot?.contains(node))
+        .filter((node) => /(?:文件已更改|files? changed|changed files)/i.test(
+          normalizedActivityText(node.innerText || node.textContent),
+        ))
+        .slice(0, 8);
+      let expanded = false;
+      for (const toggle of toggles) {
+        if (clickActivityDisclosureToggle(toggle)) expanded = true;
+      }
+      if (expanded) await activityExpandSettleDelay(260);
+      return expanded;
+    }
+
     async function applySearchJump(response) {
       if (!response || !response.search) return;
       const query = String(response.search?.query || "").trim();
+      const locateQuery = String(response.search?.locateQuery || query).trim();
       // 刷新浮窗上下文：维护排序后的命中列表、分词与当前所在会话。
       // 保留用户已设置的折叠 / 吸附侧边状态，不每次覆盖。
       if (
@@ -2222,6 +2283,7 @@ TEXT = r"""
         const previous = searchFloat || {};
         searchFloat = {
           query,
+          locateQuery,
           tokens: Array.isArray(response.search.tokens) ? response.search.tokens : [],
           matches: response.search.matches,
           revision: String(response.search.revision || ""),
@@ -2254,7 +2316,23 @@ TEXT = r"""
           return;
         }
         cancelThreadFindJump();
-        openThreadFind(query);
+        const currentEntry = (searchFloat?.matches || []).find(
+          (entry) => String(entry?.id || "") === String(response.itemId || ""),
+        );
+        await expandSearchFileDisclosures(
+          Array.isArray(currentEntry?.kinds) ? currentEntry.kinds : [],
+        );
+        const located = locateRenderedSearchTarget(
+          locateQuery || query,
+          Array.isArray(currentEntry?.kinds) ? currentEntry.kinds : [],
+        );
+        if (searchFloat && !currentEntry?.exactPhrase) {
+          searchFloat.notice = located
+            ? `已定位到 ${(currentEntry?.kinds || []).join("、") || "索引"} 命中位置`
+            : `已打开会话，使用“${locateQuery || query}”查找可见内容`;
+          renderSearchFloat();
+        }
+        openThreadFind(locateQuery || query);
       };
       void probe();
     }

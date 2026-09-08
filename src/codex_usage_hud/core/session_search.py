@@ -976,6 +976,9 @@ class _MemoryDocument:
     fields: tuple[tuple[str, tuple[str, ...], frozenset[str], str], ...]
     search_text: str
     token_set: frozenset[str]
+    # Kept outside the token stream so file links can be searched by their
+    # actual rendered basename (including dots and separators).
+    changed_paths: tuple[str, ...] = ()
 
 
 class SessionSearchIndex:
@@ -1142,6 +1145,7 @@ class SessionSearchIndex:
                 for _field_name, tokens, _grams, _field_text in fields
                 for token in tokens
             ),
+            tuple(document.changed_paths),
         )
         self._documents[canonical] = memory_document
         for _field_name, _tokens, grams, _field_text in memory_document.fields:
@@ -2174,6 +2178,51 @@ class SessionSearchIndex:
                         and any(
                             field_name in {"user", "assistant"} and phrase_key in field_text
                             for field_name, _tokens, _grams, field_text in document.fields
+                        ),
+                        # The native Codex find bar can only highlight text
+                        # that is rendered in the conversation.  For
+                        # scattered tool/file hits, carry one rendered token
+                        # as a fallback instead of sending the whole query.
+                        "find_query": (
+                            str(query or "").strip()
+                            if bool(phrase_key)
+                            and any(
+                                field_name in {"user", "assistant"}
+                                and phrase_key in field_text
+                                for field_name, _tokens, _grams, field_text in document.fields
+                            )
+                            else next(
+                                (
+                                    Path(path).name
+                                    for path in next(
+                                        (field_text for field_name, _tokens, _grams, field_text in document.fields if field_name == "file"),
+                                        "",
+                                    ).split("\x00")
+                                    if any(term in path.casefold() for term in terms)
+                                    and Path(path).name
+                                ),
+                                next(
+                                    (
+                                        term
+                                        for term in reversed(terms)
+                                        if term in next(
+                                            (field_text for field_name, _tokens, _grams, field_text in document.fields if field_name == "file"),
+                                            "",
+                                        ).casefold()
+                                    ),
+                                    next(
+                                        (
+                                        term
+                                        for term in reversed(terms)
+                                        if term in next(
+                                            (field_text for field_name, _tokens, _grams, field_text in document.fields if field_name == "tool"),
+                                            "",
+                                        ).casefold()
+                                        ),
+                                        next((term for term in reversed(terms) if term in document.search_text.casefold()), ""),
+                                    ),
+                                ),
+                            )
                         ),
                     }
                 )

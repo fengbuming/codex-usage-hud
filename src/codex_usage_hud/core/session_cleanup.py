@@ -806,6 +806,7 @@ class SessionCleanupManager:
                         else [],
                         "score": float(raw.get("score") or 0),
                         "exactPhrase": bool(raw.get("exact_phrase") or False),
+                        "findQuery": str(raw.get("find_query") or ""),
                     }
         if query.strip():
             for item in visible_items:
@@ -1163,10 +1164,13 @@ class SessionCleanupManager:
                     "score": float(entry.get("score") or 0),
                     "exactPhrase": bool(entry.get("exactPhrase") or False),
                     "matchedTokens": matched_tokens,
+                    "findQuery": str(entry.get("findQuery") or ""),
                 }
             )
+        target_entry = next((entry for entry in ranked if entry["id"] == str(item.id)), None)
         return {
             "query": query,
+            "locateQuery": str((target_entry or {}).get("findQuery") or query),
             "targetKey": hashlib.sha256(item._session_id.encode()).hexdigest(),
             "tokens": list(search_terms(query)),
             "revision": self._revision,
