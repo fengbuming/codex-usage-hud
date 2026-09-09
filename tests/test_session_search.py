@@ -257,6 +257,137 @@ def test_tool_phrase_is_not_advertised_as_native_exact_match(tmp_path: Path) -> 
     assert match["exact_phrase"] is False
 
 
+def _phrase_fixture(tmp_path: Path, name: str, messages: list[str]) -> Path:
+    rollout = tmp_path / f"{name}.jsonl"
+    lines = [
+        json.dumps(
+            {
+                "type": "event_msg",
+                "payload": {"type": "user_message", "message": message},
+            },
+            ensure_ascii=False,
+        )
+        for message in messages
+    ]
+    rollout.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return rollout
+
+
+def test_phrase_matches_recovers_phrase_that_dedup_broke(tmp_path: Path) -> None:
+    """Regression: 高频词先于完整短语出现时，去重 token 流丢失连续性。
+
+    ``search()`` 的 exact_phrase 预信号此时误报 False，但 ``phrase_matches``
+    读原始 user/assistant 文本，必须把权威判定纠正为 True。
+    """
+    query = "renderer contract 已更新并保持一致"
+    rollout = _phrase_fixture(
+        tmp_path,
+        "dedup-broken",
+        [
+            "先讨论 renderer 模式与 contract 语义",
+            "最终确认 renderer contract 已更新并保持一致",
+        ],
+    )
+
+    index = SessionSearchIndex(tmp_path / "dedup-broken.sqlite")
+    index.upsert("session", (rollout,))
+
+    heuristic = index.search(query)["matches"][0]
+    assert heuristic["exact_phrase"] is False, "fixture must reproduce the misclassification"
+
+    verified = index.phrase_matches(["session"], query)
+    assert verified == {"session": True}
+
+
+def test_phrase_matches_rejects_scattered_tokens(tmp_path: Path) -> None:
+    query = "renderer contract 已更新并保持一致"
+    rollout = _phrase_fixture(
+        tmp_path,
+        "scattered-phrase",
+        ["renderer 模式，contract 语义，已更新并保持一致 三个点分散讨论"],
+    )
+
+    index = SessionSearchIndex(tmp_path / "scattered-phrase.sqlite")
+    index.upsert("session", (rollout,))
+
+    assert index.phrase_matches(["session"], query) == {"session": False}
+
+
+def test_phrase_matches_downgrades_token_contiguous_punctuation(tmp_path: Path) -> None:
+    """token 连续但原文被标点隔开（如 ``alpha,beta``）不算 verbatim 短语。"""
+    rollout = _phrase_fixture(tmp_path, "punctuated", ["请检查 alpha,bet 配置"])
+
+    index = SessionSearchIndex(tmp_path / "punctuated.sqlite")
+    index.upsert("session", (rollout,))
+
+    heuristic = index.search("alpha bet")["matches"][0]
+    assert heuristic["exact_phrase"] is True, "token-contiguous pre-signal is expected here"
+
+    assert index.phrase_matches(["session"], "alpha bet") == {"session": False}
+
+
+def test_find_query_fallback_prefers_rendered_body_term_over_file_basename() -> None:
+    """Regression: 分散命中的兜底关键字不应被文件名（如 renderer_assets）抢占。
+
+    正文里实际出现的最长分词优先——它是渲染在对话体里、原生查找最可能
+    高亮的内容；文件名只在正文分词全部缺席时才兜底。
+    """
+    from codex_usage_hud.core.session_search import (
+        _MemoryDocument,
+        _find_query_fallback,
+        _memory_field,
+        search_terms,
+    )
+
+    fields = (
+        _memory_field("user", "renderer 先出现，后来 renderer contract 已更新并保持一致"),
+        _memory_field("assistant", ""),
+        _memory_field("tool", ""),
+        _memory_field("file", "src/renderer_assets/panel.py"),
+    )
+    document = _MemoryDocument(
+        session_id="session",
+        fields=fields,
+        search_text="\x01".join(field[3] for field in fields),
+        token_set=frozenset(
+            token for _name, tokens, _grams, _text in fields for token in tokens
+        ),
+        changed_paths=("src/renderer_assets/panel.py",),
+    )
+
+    fallback = _find_query_fallback(document, search_terms("renderer contract 已更新并保持一致"))
+    assert fallback == "已更新并保持一致"
+    assert fallback != "renderer_assets"
+
+
+def test_find_query_fallback_uses_file_token_when_body_has_no_term() -> None:
+    from codex_usage_hud.core.session_search import (
+        _MemoryDocument,
+        _find_query_fallback,
+        _memory_field,
+        search_terms,
+    )
+
+    fields = (
+        _memory_field("user", ""),
+        _memory_field("assistant", ""),
+        _memory_field("tool", ""),
+        _memory_field("file", "src/renderer_assets/panel.py"),
+    )
+    document = _MemoryDocument(
+        session_id="session",
+        fields=fields,
+        search_text="\x01".join(field[3] for field in fields),
+        token_set=frozenset(
+            token for _name, tokens, _grams, _text in fields for token in tokens
+        ),
+        changed_paths=("src/renderer_assets/panel.py",),
+    )
+
+    fallback = _find_query_fallback(document, search_terms("renderer"))
+    assert fallback == "renderer_assets"
+
+
 def test_ui_snapshot_noise_in_tool_output_is_not_searchable(tmp_path: Path) -> None:
     """CDP/无障碍树/read_thread 抓来的界面与会话元数据不该污染召回。
 

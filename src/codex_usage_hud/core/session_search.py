@@ -805,6 +805,58 @@ def _memory_field(
     return name, tokens, grams, "\x00".join(tokens)
 
 
+def _find_query_fallback(document: "_MemoryDocument", terms: tuple[str, ...]) -> str:
+    """Pick one *rendered* needle for Codex's native find bar.
+
+    The native find bar can only highlight text the conversation body actually
+    renders, so the fallback walks rendered surfaces in order: a query term
+    that occurs in a user/assistant message (always rendered), then a
+    changed-path basename (rendered as a file chip), then a tool-output term
+    (often collapsed away), and finally any indexed term.  Within a group the
+    longest term wins; equal lengths prefer the later query term, which in a
+    phrase query is typically the distinctive head noun.
+    """
+
+    def pick(candidates: Iterable[str]) -> str:
+        ordered = sorted(
+            enumerate(candidates), key=lambda pair: (-len(pair[1]), -pair[0])
+        )
+        return ordered[0][1] if ordered else ""
+
+    body_terms = [
+        term
+        for term in terms
+        if any(
+            name in {"user", "assistant"} and term in field_text
+            for name, _tokens, _grams, field_text in document.fields
+        )
+    ]
+    if body_terms:
+        return pick(body_terms)
+    for path in document.changed_paths:
+        name = Path(path).name
+        if name and any(term in name.casefold() for term in terms):
+            return name
+    file_text = next(
+        (field_text for name, _tokens, _grams, field_text in document.fields if name == "file"),
+        "",
+    )
+    for token in file_text.split("\x00"):
+        if token and any(term in token.casefold() for term in terms):
+            return token
+    tool_terms = [
+        term
+        for term in terms
+        if any(
+            name == "tool" and term in field_text
+            for name, _tokens, _grams, field_text in document.fields
+        )
+    ]
+    if tool_terms:
+        return pick(tool_terms)
+    return pick(term for term in terms if term in document.search_text)
+
+
 def _memory_fields(
     document: SearchDocument,
 ) -> tuple[tuple[str, tuple[str, ...], frozenset[str], str], ...]:
@@ -2174,15 +2226,22 @@ class SessionSearchIndex:
                             if name in matched_kinds
                         ],
                         "score": round(score, 3),
+                        # NOTE: this is a cheap *pre-signal*, not proof. The
+                        # token streams are deduplicated, so a verbatim phrase
+                        # whose earlier terms already appeared in the field is
+                        # NOT contiguous in ``field_text`` (and a token-
+                        # contiguous run may straddle punctuation in the
+                        # original text). ``phrase_matches`` verifies against
+                        # the original text wherever the flag is user-facing.
                         "exact_phrase": bool(phrase_key)
                         and any(
                             field_name in {"user", "assistant"} and phrase_key in field_text
                             for field_name, _tokens, _grams, field_text in document.fields
                         ),
                         # The native Codex find bar can only highlight text
-                        # that is rendered in the conversation.  For
-                        # scattered tool/file hits, carry one rendered token
-                        # as a fallback instead of sending the whole query.
+                        # that is rendered in the conversation.  When the
+                        # query is not a verbatim phrase, carry one rendered
+                        # needle instead of sending the whole query.
                         "find_query": (
                             str(query or "").strip()
                             if bool(phrase_key)
@@ -2191,38 +2250,7 @@ class SessionSearchIndex:
                                 and phrase_key in field_text
                                 for field_name, _tokens, _grams, field_text in document.fields
                             )
-                            else next(
-                                (
-                                    Path(path).name
-                                    for path in next(
-                                        (field_text for field_name, _tokens, _grams, field_text in document.fields if field_name == "file"),
-                                        "",
-                                    ).split("\x00")
-                                    if any(term in path.casefold() for term in terms)
-                                    and Path(path).name
-                                ),
-                                next(
-                                    (
-                                        term
-                                        for term in reversed(terms)
-                                        if term in next(
-                                            (field_text for field_name, _tokens, _grams, field_text in document.fields if field_name == "file"),
-                                            "",
-                                        ).casefold()
-                                    ),
-                                    next(
-                                        (
-                                        term
-                                        for term in reversed(terms)
-                                        if term in next(
-                                            (field_text for field_name, _tokens, _grams, field_text in document.fields if field_name == "tool"),
-                                            "",
-                                        ).casefold()
-                                        ),
-                                        next((term for term in reversed(terms) if term in document.search_text.casefold()), ""),
-                                    ),
-                                ),
-                            )
+                            else _find_query_fallback(document, terms)
                         ),
                     }
                 )
@@ -2324,6 +2352,57 @@ class SessionSearchIndex:
                 result[session_id] = evidence
         except (OSError, sqlite3.Error):
             # A missing preview must not prevent opening a valid session.
+            return result
+        finally:
+            if connection is not None:
+                connection.close()
+        return result
+
+    def phrase_matches(
+        self, session_ids: Iterable[str], query: str
+    ) -> dict[str, bool]:
+        """Verify a verbatim phrase against the original indexed text.
+
+        The resident token streams are deduplicated to bound memory, so a
+        token-contiguous run there proves nothing about the original text: a
+        high-frequency term that already occurred earlier in the field keeps
+        its first position and breaks the contiguous run.  Verification
+        therefore reads the original ``user_text``/``assistant_text`` columns
+        from the durable snapshot (the same columns previews already read,
+        never the interactive search hot path) and reports, per session,
+        whether the query occurs verbatim — which is exactly what Codex's
+        native find bar will be able to highlight.
+        """
+
+        phrase = str(query or "").strip()
+        wanted: list[str] = []
+        seen: set[str] = set()
+        for value in session_ids:
+            canonical = str(value or "").strip()
+            if canonical and canonical not in seen:
+                seen.add(canonical)
+                wanted.append(canonical)
+        if not phrase or not wanted:
+            return {}
+        needle = phrase.casefold()
+        result: dict[str, bool] = {}
+        connection = None
+        try:
+            connection = self._connect()
+            for start in range(0, len(wanted), 200):
+                chunk = wanted[start : start + 200]
+                placeholders = ",".join("?" for _ in chunk)
+                rows = connection.execute(
+                    f"SELECT session_id, instr(lower(user_text), ?) > 0, "
+                    f"instr(lower(assistant_text), ?) > 0 "
+                    f"FROM {_DOC_TABLE} WHERE session_id IN ({placeholders})",
+                    (needle, needle, *chunk),
+                ).fetchall()
+                for session_id, user_hit, assistant_hit in rows:
+                    result[str(session_id)] = bool(user_hit) or bool(assistant_hit)
+        except (OSError, sqlite3.Error):
+            # A failed verification must degrade to the heuristic signal,
+            # never break navigation.
             return result
         finally:
             if connection is not None:

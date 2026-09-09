@@ -1252,6 +1252,10 @@ TEXT = r"""
   function activityTextMatches(scope, needle) {
     if (!scope || !needle) return [];
     const hudRoot = document.getElementById(rootId);
+    // Codex's native find is case-insensitive; the HUD locator must agree or
+    // it reports "not located" for mixed-case hits the find bar just
+    // highlighted (e.g. a lowercase query against a capitalised heading).
+    const foldedNeedle = String(needle).toLowerCase();
     const selectors = [
       "[data-content-search-unit-key]",
       "[data-markdown-text-style='assistant-message']",
@@ -1273,9 +1277,9 @@ TEXT = r"""
       .map((node) => ({
         node,
         visible: activityNodeIsEffectivelyVisible(node),
-        text: activityComparableText(node.textContent),
+        text: activityComparableText(node.textContent).toLowerCase(),
       }))
-      .filter(({ text }) => text.includes(needle))
+      .filter(({ text }) => text.includes(foldedNeedle))
       // A wrapper can combine several rounds or hidden search copies. Only
       // keep the innermost match for each needle, never its enclosing turn.
       .filter((match, _index, matches) => !matches.some((other) => (
@@ -1287,7 +1291,7 @@ TEXT = r"""
       // smallest exact container.
       .sort((left, right) => (
         Number(right.visible) - Number(left.visible)
-        || (left.text.length - needle.length) - (right.text.length - needle.length)
+        || (left.text.length - foldedNeedle.length) - (right.text.length - foldedNeedle.length)
       ));
   }
 
@@ -2023,7 +2027,7 @@ TEXT = r"""
           <span>当前第 ${idx >= 0 ? idx + 1 : "未在列表"} / ${total}</span>
           <button type="button" data-action="only-exact" class="codex-usage-hud-search-filter${onlyExact ? " is-on" : ""}" aria-pressed="${onlyExact ? "true" : "false"}" title="只列出用户提问或助手回答中包含关键词的会话；不保证原生查找可定位">正文命中</button>
         </div>
-        ${searchFloat.notice ? `<div class="codex-usage-hud-search-notice">${escapeHtml(searchFloat.notice)}</div>` : ""}
+        ${searchFloat.notice && !searchFloat.collapsed ? `<div class="codex-usage-hud-search-notice">${escapeHtml(searchFloat.notice)}</div>` : ""}
         ${total ? `<ul class="codex-usage-hud-search-list">${rowsHtml}</ul>` : '<div class="codex-usage-hud-search-empty">没有正文命中的会话，可关闭筛选查看文件或工具命中。</div>'}
         <div class="codex-usage-hud-search-nav">
           <button type="button" data-action="prev" aria-label="上一个命中" ${idx <= 0 ? "disabled" : ""}><span class="codex-usage-hud-search-nav-icon" aria-hidden="true">←</span><span>上一个</span></button>

@@ -2720,6 +2720,103 @@ class SessionCleanupManagerTests(unittest.TestCase):
             list(manager._search_state.get("matches") or []),
         )
 
+    def test_thread_find_for_item_verifies_exact_phrase_in_original_text(self) -> None:
+        """Regression: 去重 token 流会把「先散落后完整」的短语误判为分词命中。
+
+        ``search()`` 的 exact_phrase 只是廉价预信号；浮窗载荷必须用原始
+        正文校准——短语在原文逐字出现时标记 exactPhrase，并把完整查询
+        交给 Codex 原生查找，而不是退回文件名兜底。
+        """
+        fixture = self._fixture()
+        temporary, _root, _state, _index, rollouts, manager = fixture
+        self.addCleanup(temporary.cleanup)
+        query = "renderer contract 已更新并保持一致"
+        lines = [
+            {
+                "type": "event_msg",
+                "payload": {"type": "user_message", "message": "先讨论 renderer 模式与 contract 语义"},
+            },
+            {
+                "type": "event_msg",
+                "payload": {"type": "user_message", "message": "最终确认 renderer contract 已更新并保持一致"},
+            },
+        ]
+        rollouts[ROOT_ID].write_text(
+            rollouts[ROOT_ID].read_text(encoding="utf-8")
+            + "".join(json.dumps(line, ensure_ascii=False) + "\n" for line in lines),
+            encoding="utf-8",
+        )
+        scan = manager.scan(request_id="scan-phrase-verify")
+        root_row = next(row for row in scan["sessions"] if row["title"] == "Root")
+        manager._search_index.sync(manager.search_index_entries())
+        manager.search(query, request_id="search-phrase-verify")
+
+        # 前置：常驻索引的预信号确实误判为分词命中（否则回归场景不成立）。
+        heuristic = next(
+            (
+                entry
+                for entry in (manager._search_state.get("matchKinds") or [])
+                if entry.get("id") == root_row["id"]
+            ),
+            None,
+        )
+        self.assertIsNotNone(heuristic)
+        self.assertFalse(heuristic.get("exactPhrase"))
+
+        result = manager.thread_find_for_item(root_row["id"], scan["revision"], query)
+        first = next(
+            entry for entry in result["matches"] if entry["id"] == root_row["id"]
+        )
+        self.assertTrue(first["exactPhrase"])
+        self.assertEqual(first["findQuery"], query)
+
+    def test_thread_find_for_item_downgrades_token_contiguous_punctuation(self) -> None:
+        """token 连续但原文被标点隔开（如 ``alpha,bet``）不得按精确短语跳转。
+
+        预信号此时误报 True 并把完整查询交给原生查找（必然零命中）；
+        浮窗载荷须降级为 exactPhrase=False 并换成真正渲染在正文里的分词。
+        """
+        fixture = self._fixture()
+        temporary, _root, _state, _index, rollouts, manager = fixture
+        self.addCleanup(temporary.cleanup)
+        query = "alpha bet"
+        rollouts[ROOT_ID].write_text(
+            rollouts[ROOT_ID].read_text(encoding="utf-8")
+            + json.dumps(
+                {
+                    "type": "event_msg",
+                    "payload": {"type": "user_message", "message": "请检查 alpha,bet 配置"},
+                },
+                ensure_ascii=False,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        scan = manager.scan(request_id="scan-phrase-downgrade")
+        root_row = next(row for row in scan["sessions"] if row["title"] == "Root")
+        manager._search_index.sync(manager.search_index_entries())
+        manager.search(query, request_id="search-phrase-downgrade")
+
+        # 前置：预信号因 token 连续而误报精确命中。
+        heuristic = next(
+            (
+                entry
+                for entry in (manager._search_state.get("matchKinds") or [])
+                if entry.get("id") == root_row["id"]
+            ),
+            None,
+        )
+        self.assertIsNotNone(heuristic)
+        self.assertTrue(heuristic.get("exactPhrase"))
+
+        result = manager.thread_find_for_item(root_row["id"], scan["revision"], query)
+        first = next(
+            entry for entry in result["matches"] if entry["id"] == root_row["id"]
+        )
+        self.assertFalse(first["exactPhrase"])
+        self.assertNotEqual(first["findQuery"], query)
+        self.assertIn(first["findQuery"], ("alpha", "bet"))
+
     def test_thread_find_for_item_rejects_stale_or_unknown_inventory(self) -> None:
         fixture = self._fixture()
         temporary, _root, _state, _index, _rollouts, manager = fixture

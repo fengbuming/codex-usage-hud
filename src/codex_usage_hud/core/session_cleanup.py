@@ -22,6 +22,7 @@ from ..codex_cli_launcher import discover_workdirs
 from .parser import classify_session_client
 from .session_search import (
     SessionSearchIndex,
+    _find_query_fallback,
     normalise_workdir,
     search_terms,
     workdir_identity,
@@ -1141,16 +1142,55 @@ class SessionCleanupManager:
         terms = list(search_terms(query))
         indexed_documents = getattr(self._search_index, "_documents", None)
         preview = getattr(self._search_index, "preview_matches", None)
-        previews = preview(
-            [self._items[value]._session_id for value in ordered_ids if value in self._items], query
-        ) if callable(preview) else {}
+        preview_ids = [
+            self._items[value]._session_id
+            for value in ordered_ids
+            if value in self._items
+        ]
+        previews = preview(preview_ids, query) if callable(preview) else {}
+        # The deduplicated token streams cannot prove phrase contiguity, so
+        # the user-facing "exact" flag is verified against the original
+        # user/assistant text before the float renders it. Single-term
+        # queries degenerate to a substring check the heuristic already
+        # models correctly, so they skip the extra column reads.
+        phrase_hits: dict[str, bool] = {}
+        phrase_check = getattr(self._search_index, "phrase_matches", None)
+        if len(terms) >= 2 and callable(phrase_check):
+            phrase_hits = phrase_check(preview_ids, query)
         ranked: list[dict[str, object]] = []
         for match_id in ordered_ids:
             entry = kind_map.get(match_id) or {}
             match_item = self._items.get(match_id)
-            document = indexed_documents.get(match_item._session_id) if indexed_documents is not None and match_item is not None else None
-            token_set = getattr(document, "token_set", frozenset()) if document is not None else frozenset()
-            matched_tokens = [term for term in terms if term in token_set or term in getattr(document, "search_text", "")]
+            session_id = match_item._session_id if match_item is not None else ""
+            document = (
+                indexed_documents.get(session_id)
+                if indexed_documents is not None and session_id
+                else None
+            )
+            token_set = (
+                getattr(document, "token_set", frozenset())
+                if document is not None
+                else frozenset()
+            )
+            matched_tokens = [
+                term
+                for term in terms
+                if term in token_set or term in getattr(document, "search_text", "")
+            ]
+            exact_phrase = bool(entry.get("exactPhrase") or False)
+            find_query = str(entry.get("findQuery") or "")
+            if session_id and session_id in phrase_hits:
+                exact_phrase = phrase_hits[session_id]
+                if exact_phrase:
+                    find_query = str(query or "").strip()
+                else:
+                    fallback = (
+                        _find_query_fallback(document, tuple(terms))
+                        if document is not None
+                        else ""
+                    )
+                    if fallback:
+                        find_query = fallback
             ranked.append(
                 {
                     "id": match_id,
@@ -1166,11 +1206,21 @@ class SessionCleanupManager:
                 ),
                 "kinds": list(entry.get("kinds") or []),
                     "score": float(entry.get("score") or 0),
-                    "exactPhrase": bool(entry.get("exactPhrase") or False),
+                    "exactPhrase": exact_phrase,
                     "matchedTokens": matched_tokens,
-                    "preview": previews.get(match_item._session_id, {}) if match_item else {},
-                    "findQuery": str(entry.get("findQuery") or ""),
+                    "preview": previews.get(session_id, {}) if match_item else {},
+                    "findQuery": find_query,
                 }
+            )
+        if phrase_hits:
+            # Re-tier with the verified flags, keeping the resident ranking
+            # (verbatim first, then relevance) stable within each tier.
+            position = {match_id: index for index, match_id in enumerate(ordered_ids)}
+            ranked.sort(
+                key=lambda row: (
+                    0 if row.get("exactPhrase") else 1,
+                    position.get(str(row.get("id")), 0),
+                )
             )
         target_entry = next((entry for entry in ranked if entry["id"] == str(item.id)), None)
         return {
