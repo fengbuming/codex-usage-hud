@@ -519,7 +519,9 @@ _TEXT_PREFIX = r"""
       }
 
       function codexCliQuickLaunchCopy(phase = codexCliState.quickLaunchPhase) {
-        const provider = String(codexCliState.provider || "Provider");
+        const provider = codexCliState.provider
+          ? providerDisplayName(hudSettingsFromPayload(), codexCliState.provider)
+          : "Provider";
         if (phase === "validating") {
           return {
             title: `正在校验 ${provider} 的上次配置`,
@@ -579,7 +581,7 @@ _TEXT_PREFIX = r"""
         layer.innerHTML = `
           <div class="codex-usage-hud-cli-quick-surface" role="dialog" aria-modal="true" aria-label="${escapeHtml(copy.title)}">
             <div class="codex-usage-hud-cli-quick-head">
-              <div><span>CODEX CLI</span><strong>${escapeHtml(codexCliState.provider || "Provider")}</strong></div>
+              <div><span>CODEX CLI</span><strong>${escapeHtml(codexCliState.provider ? providerDisplayName(hudSettingsFromPayload(), codexCliState.provider) : "Provider")}</strong></div>
               <button type="button" data-codex-cli-quick-action="close" aria-label="关闭 Loading" title="关闭 Loading">×</button>
             </div>
             <div class="codex-usage-hud-cli-quick-title">${escapeHtml(copy.title)}</div>
@@ -1928,6 +1930,16 @@ _TEXT_PREFIX = r"""
         ]));
       }
 
+      // 供应商显示名称：优先取未保存草稿中的名称，其次 config.toml 的 name 键，
+      // 缺省时回退 Provider ID（默认名称与 Provider ID 一致）。
+      function providerDisplayName(settings, provider) {
+        const normalized = String(provider || "").trim().toLowerCase();
+        if (!normalized) return "";
+        const draftName = String(codexProviderDrafts.get(normalized)?.name || "").trim();
+        if (draftName) return draftName;
+        return providerRegistryDisplayName(settings, normalized);
+      }
+
       function suggestedProviderEnvironmentKey(provider) {
         const normalized = String(provider || "")
           .trim()
@@ -1964,6 +1976,14 @@ _TEXT_PREFIX = r"""
         if (parts.length < 2) return "";
         const provider = parts[parts.length - 2];
         return /^[a-z0-9_-]+$/.test(provider) ? provider : "";
+      }
+
+      // Base URL 输入规范化（纯 UI 动作）：去掉首尾空白与尾部斜杠，
+      // 未以 /v1 结尾（忽略大小写）时自动补上 /v1。
+      function normalizeProviderBaseUrlInput(value) {
+        const trimmed = String(value || "").trim().replace(/\/+$/, "");
+        if (!trimmed) return "";
+        return /\/v1$/i.test(trimmed) ? trimmed : `${trimmed}/v1`;
       }
 
       function tomlBasicStringEscape(value) {
@@ -2016,6 +2036,7 @@ _TEXT_PREFIX = r"""
 
       function syncProviderSectionFromFields(layer) {
         const idNode = layer?.querySelector('[data-provider-config-field="provider_id"]');
+        const nameNode = layer?.querySelector('[data-provider-config-field="name"]');
         const baseUrlNode = layer?.querySelector('[data-provider-config-field="base_url"]');
         const envNode = layer?.querySelector('[data-provider-config-field="env_key"]');
         const sectionNode = layer?.querySelector('[data-provider-config-field="section_text"]');
@@ -2025,9 +2046,12 @@ _TEXT_PREFIX = r"""
         const previousHeaderId = providerSectionHeaderId(previous);
         const previousName = providerSectionBasicString(previous, "name");
         let text = setProviderSectionHeader(previous, id);
-        // name 仅在仍等于原 Provider ID（即未手动自定义过）时跟随联动同步，
-        // 避免覆盖用户自行填写的供应商显示名称。
-        if (previousName === previousHeaderId && previousName !== id) {
+        if (nameNode) {
+          // 名称字段为唯一事实来源；留空时回退为 Provider ID（默认名称与 ID 一致）。
+          text = setProviderSectionBasicString(text, "name", String(nameNode.value || "").trim() || id);
+        } else if (previousName === previousHeaderId && previousName !== id) {
+          // name 仅在仍等于原 Provider ID（即未手动自定义过）时跟随联动同步，
+          // 避免覆盖用户自行填写的供应商显示名称。
           text = setProviderSectionBasicString(text, "name", id);
         }
         text = setProviderSectionBasicString(text, "base_url", baseUrlNode?.value || "");
@@ -2036,12 +2060,15 @@ _TEXT_PREFIX = r"""
       }
 
       function syncProviderFieldsFromSection(layer) {
+        const nameNode = layer?.querySelector('[data-provider-config-field="name"]');
         const baseUrlNode = layer?.querySelector('[data-provider-config-field="base_url"]');
         const envNode = layer?.querySelector('[data-provider-config-field="env_key"]');
         const sectionNode = layer?.querySelector('[data-provider-config-field="section_text"]');
         if (!sectionNode) return;
+        const name = providerSectionBasicString(sectionNode.value, "name");
         const baseUrl = providerSectionBasicString(sectionNode.value, "base_url");
         const envKey = providerSectionBasicString(sectionNode.value, "env_key");
+        if (nameNode && name) nameNode.value = name;
         if (baseUrlNode && baseUrl) baseUrlNode.value = baseUrl;
         if (envNode && envKey) envNode.value = envKey;
       }
@@ -2051,6 +2078,7 @@ _TEXT_PREFIX = r"""
         const defined = detail.defined === true;
         return {
           providerId: provider,
+          name: String(detail.name || "").trim(),
           baseUrl: String(detail.baseUrl || ""),
           envKey: String(detail.envKey || (defined ? "" : suggestedProviderEnvironmentKey(provider))),
           configText: String(detail.configText || ""),
@@ -2218,12 +2246,13 @@ _TEXT_PREFIX = r"""
         const draft = ensureSettingsProviderDraft(settings);
         const badge = settingsProviderTabBadge(settings, provider);
         const dirty = settingsDirtyProviders.has(provider);
+        const displayName = providerDisplayName(settings, provider);
         return `
           <button type="button" class="codex-usage-hud-provider-tab" role="tab"
             data-action="settings-provider-tab" data-provider-tab="true" data-provider="${escapeHtml(provider)}"
             aria-selected="${provider === draft.activeProvider}"
-            aria-label="切换到 Provider ${escapeHtml(provider)}">
-            <span>${escapeHtml(provider)}</span>
+            aria-label="切换到 Provider ${escapeHtml(displayName)}">
+            <span>${escapeHtml(displayName)}</span>
             ${badge ? `<span class="codex-usage-hud-provider-tab-badge">${escapeHtml(badge)}</span>` : ""}
             ${dirty ? '<span class="codex-usage-hud-provider-dirty-dot" aria-hidden="true"></span><span class="codex-usage-hud-settings-visually-hidden">有未保存修改</span>' : ""}
           </button>
@@ -2281,6 +2310,7 @@ _TEXT_PREFIX = r"""
         const quickLaunchEnabled = draft.quickLaunchProviders?.has(activeProvider) === true;
         const pricingDraftPending = settingsDirtyProviders.has(activeProvider);
         const meta = settingsProviderMeta(settings, activeProvider);
+        const activeDisplayName = providerDisplayName(settings, activeProvider);
         const weeklyAdjustment = Number(providerSettings.weekly_adjustment_usd);
         const weeklyAdjustmentValue = Number.isFinite(weeklyAdjustment) && weeklyAdjustment > 0
           ? String(weeklyAdjustment)
@@ -2309,13 +2339,13 @@ _TEXT_PREFIX = r"""
                 <span>快捷启动</span>
               </label>
               <button type="button" class="codex-usage-hud-settings-icon-action codex-usage-hud-codex-cli-launch-action" data-action="settings-codex-cli-open" data-provider="${escapeHtml(activeProvider)}" aria-label="以当前 Provider 启动 Codex CLI" title="以当前 Provider 启动 Codex CLI"><span aria-hidden="true">&gt;_</span></button>
-              <button type="button" class="codex-usage-hud-settings-icon-action" data-action="settings-transfer-provider" data-provider="${escapeHtml(activeProvider)}" aria-label="复制或迁移 ${escapeHtml(activeProvider)} 的会话" title="复制或迁移会话"><span aria-hidden="true">⇆</span></button>
+              <button type="button" class="codex-usage-hud-settings-icon-action" data-action="settings-transfer-provider" data-provider="${escapeHtml(activeProvider)}" aria-label="复制或迁移 ${escapeHtml(activeDisplayName)} 的会话" title="复制或迁移会话"><span aria-hidden="true">⇆</span></button>
               ${officialAccount
                 ? '<span class="codex-usage-hud-provider-config-locked" role="img" aria-label="官方账号登录，默认 Provider 不可编辑" title="官方账号登录时由 Codex Desktop 管理，默认 Provider 不可编辑">🔒</span>'
                 : defaultProviderEditable || !required
-                  ? '<button type="button" class="codex-usage-hud-settings-icon-action" data-action="settings-edit-provider" data-provider="' + escapeHtml(activeProvider) + '" aria-label="编辑 ' + escapeHtml(activeProvider) + ' 供应商配置" title="编辑供应商配置">✎</button>'
+                  ? '<button type="button" class="codex-usage-hud-settings-icon-action" data-action="settings-edit-provider" data-provider="' + escapeHtml(activeProvider) + '" aria-label="编辑 ' + escapeHtml(activeDisplayName) + ' 供应商配置" title="编辑供应商配置">✎</button>'
                   : ''}
-              ${required ? "" : '<button type="button" class="codex-usage-hud-settings-icon-action codex-usage-hud-provider-delete-action" data-action="settings-delete-provider" data-provider="' + escapeHtml(activeProvider) + '" aria-label="删除 ' + escapeHtml(activeProvider) + ' 供应商" title="删除供应商"><span aria-hidden="true">⌫</span></button>'}
+              ${required ? "" : '<button type="button" class="codex-usage-hud-settings-icon-action codex-usage-hud-provider-delete-action" data-action="settings-delete-provider" data-provider="' + escapeHtml(activeProvider) + '" aria-label="删除 ' + escapeHtml(activeDisplayName) + ' 供应商" title="删除供应商"><span aria-hidden="true">⌫</span></button>'}
               <button type="button" class="codex-usage-hud-settings-action codex-usage-hud-pricing-apply-action" data-action="settings-pricing-apply" data-primary="true" data-price-draft-pending="${pricingDraftPending}" aria-label="${pricingDraftPending ? "应用模型单价修改，有待应用修改" : "应用模型单价修改"}" title="${pricingDraftPending ? "应用待提交的模型单价修改" : "应用模型单价修改"}">应用<span class="codex-usage-hud-provider-dirty-dot codex-usage-hud-pricing-apply-dirty-dot" data-pricing-apply-dirty-dot="true" aria-hidden="true" ${pricingDraftPending ? "" : "hidden"}></span></button>
             </div>
           </div>
@@ -2779,10 +2809,21 @@ _TEXT_PREFIX = r"""
           if (typeof registryEntry.hasApiKey === "boolean") {
             target.hasApiKey = registryEntry.hasApiKey;
           }
+          target.name = String(registryEntry.name || target.name || "");
           target.envKey = String(registryEntry.envKey || target.originalEnvKey || target.envKey || "");
           target.baseUrl = String(registryEntry.baseUrl || target.baseUrl || "");
           target.configText = String(registryEntry.configText || target.configText || "");
         }
+        // 供应商显示名称：编辑时回显 config.toml 的 name 键，缺省与 Provider ID 一致；
+        // 新增时留空并跟随 Provider ID 输入联动，保存时缺省同样回退为 Provider ID。
+        const initialProviderName = isNew
+          ? ""
+          : String(target?.name || registryEntry.name || normalizedProvider).trim() || normalizedProvider;
+        const providerDisplayTitle = initialProviderName || normalizedProvider;
+        // 自动补 /v1 开关：新增时默认开启；编辑时若现有 Base URL 明确未以 /v1
+        // 结尾则默认关闭，避免失焦时改写用户既有的非 /v1 配置。
+        const initialV1Enabled = isNew
+          || /\/v1\/?$/i.test(String(target?.baseUrl || registryEntry.baseUrl || "").trim());
         const targetEnvKey = target?.envKey || (isNew ? suggestedProviderEnvironmentKey(normalizedProvider) : "");
         const initialConfigText = String(
           target?.configText
@@ -2794,7 +2835,7 @@ _TEXT_PREFIX = r"""
           ? String(settingsProviderDraft.appProvider || "").trim().toLowerCase()
           : "";
         const sourceOptions = settingsProviderDraft.order.map((item) => `
-          <option value="${escapeHtml(item)}" ${item === sourceProvider ? "selected" : ""}>${escapeHtml(item)}</option>
+          <option value="${escapeHtml(item)}" ${item === sourceProvider ? "selected" : ""}>${escapeHtml(providerDisplayName(settings, item))}</option>
         `).join("");
         closeSettingsConfirm();
         const layer = document.createElement("div");
@@ -2806,20 +2847,32 @@ _TEXT_PREFIX = r"""
         layer.innerHTML = `
           <div class="codex-usage-hud-settings-confirm-card codex-usage-hud-provider-config-card" role="dialog" aria-modal="true" aria-label="${isNew ? "新增供应商" : "编辑供应商配置"}">
             <div class="codex-usage-hud-settings-confirm-kicker">Codex model provider</div>
-            <div class="codex-usage-hud-settings-confirm-title">${isNew ? "新增供应商" : `编辑 ${escapeHtml(normalizedProvider)} 供应商`}</div>
+            <div class="codex-usage-hud-settings-confirm-title">${isNew ? "新增供应商" : `编辑 ${escapeHtml(providerDisplayTitle)} 供应商`}</div>
             <div class="codex-usage-hud-provider-config-grid">
-              <label>Provider ID
-                <input data-provider-config-field="provider_id" value="${escapeHtml(normalizedProvider)}" ${isNew ? "" : "readonly"} autocomplete="off">
-              </label>
+              <div class="codex-usage-hud-provider-config-split">
+                <label>Provider ID
+                  <input data-provider-config-field="provider_id" value="${escapeHtml(normalizedProvider)}" ${isNew ? "" : "readonly"} autocomplete="off">
+                </label>
+                <label>供应商名称
+                  <input data-provider-config-field="name" value="${escapeHtml(initialProviderName)}" ${isDefaultProvider ? "readonly" : ""} placeholder="默认与 Provider ID 相同" autocomplete="off">
+                </label>
+              </div>
               ${isNew ? `<label>复制模型列表 / 单价配置
                 <select data-provider-config-field="source_provider">
                   <option value="">不复制，使用当前默认价格</option>
                   ${sourceOptions}
                 </select>
               </label>` : `<div class="codex-usage-hud-provider-config-grid-placeholder" aria-hidden="true"></div>`}
-              <label>Base URL
+              <div class="codex-usage-hud-provider-config-field">
+                <div class="codex-usage-hud-provider-config-headrow">
+                  <span>Base URL</span>
+                  <label class="codex-usage-hud-provider-config-v1-toggle" title="开启后，Base URL 失焦时若未以 /v1 结尾将自动补上">
+                    <input type="checkbox" data-provider-config-field="base_url_v1" ${initialV1Enabled ? "checked" : ""}>
+                    <span>自动补 /v1</span>
+                  </label>
+                </div>
                 <input data-provider-config-field="base_url" value="${escapeHtml(target?.baseUrl || "")}" placeholder="https://api.example.com/v1" autocomplete="url">
-              </label>
+              </div>
               ${isDefaultProvider
                 ? `<div class="codex-usage-hud-provider-config-auth-note">Codex App 使用 auth.json 中的 OPENAI_API_KEY，不使用用户环境变量。</div>`
                 : `<label>用户环境变量名称
@@ -2871,12 +2924,25 @@ _TEXT_PREFIX = r"""
         `;
         dialog.appendChild(layer);
         const idNode = layer.querySelector('[data-provider-config-field="provider_id"]');
+        const nameNode = layer.querySelector('[data-provider-config-field="name"]');
         const envNode = layer.querySelector('[data-provider-config-field="env_key"]');
         const sectionNode = layer.querySelector('[data-provider-config-field="section_text"]');
         const baseUrlNode = layer.querySelector('[data-provider-config-field="base_url"]');
+        const v1Node = layer.querySelector('[data-provider-config-field="base_url_v1"]');
         let generatedEnvKey = isNew
           ? suggestedProviderEnvironmentKey(idNode?.value)
           : "";
+        // 名称跟随 Provider ID 联动：仅当名称仍等于上次程序化同步值（或为空）时跟随，
+        // 用户手动填写过名称后不再覆盖。
+        let generatedName = isNew ? String(idNode?.value || "").trim() : "";
+        const syncNameFromProviderId = (nextId) => {
+          if (!isNew || !nameNode) return;
+          const trimmed = String(nextId || "").trim();
+          if (nameNode.value === generatedName || !nameNode.value) {
+            nameNode.value = trimmed;
+          }
+          generatedName = trimmed;
+        };
         if (isNew && idNode && envNode) {
           idNode.addEventListener("input", () => {
             if (envNode.value === generatedEnvKey || !envNode.value) {
@@ -2885,9 +2951,11 @@ _TEXT_PREFIX = r"""
             } else {
               generatedEnvKey = suggestedProviderEnvironmentKey(idNode.value);
             }
+            syncNameFromProviderId(idNode.value);
             syncProviderSectionFromFields(layer);
           });
         }
+        nameNode?.addEventListener("input", () => syncProviderSectionFromFields(layer));
         [baseUrlNode, envNode].forEach((node) => {
           node?.addEventListener("input", () => {
             if (isNew && node === baseUrlNode && idNode) {
@@ -2897,10 +2965,28 @@ _TEXT_PREFIX = r"""
                 idNode.value = suggestedProvider;
                 generatedEnvKey = suggestedProviderEnvironmentKey(suggestedProvider);
                 if (shouldUpdateEnvKey && envNode) envNode.value = generatedEnvKey;
+                syncNameFromProviderId(suggestedProvider);
               }
             }
             syncProviderSectionFromFields(layer);
           });
+        });
+        // Base URL 失焦时若未以 /v1 结尾且「自动补 /v1」开关开启，则自动补上
+        // （仅 UI 规范化，保存值随之更新；关闭开关后不再自动追加）。
+        baseUrlNode?.addEventListener("change", () => {
+          if (v1Node?.checked) {
+            const next = normalizeProviderBaseUrlInput(baseUrlNode.value);
+            if (next !== baseUrlNode.value) baseUrlNode.value = next;
+          }
+          syncProviderSectionFromFields(layer);
+        });
+        // 开关切换：打开时立即对当前值补 /v1；关闭时保留当前值，仅停止后续自动补全。
+        v1Node?.addEventListener("change", () => {
+          if (v1Node.checked && baseUrlNode) {
+            const next = normalizeProviderBaseUrlInput(baseUrlNode.value);
+            if (next !== baseUrlNode.value) baseUrlNode.value = next;
+          }
+          syncProviderSectionFromFields(layer);
         });
         sectionNode?.addEventListener("input", () => syncProviderFieldsFromSection(layer));
         // 编辑时自动选中 API key 输入框，便于直接替换密钥；
@@ -2926,12 +3012,15 @@ _TEXT_PREFIX = r"""
         if (!layer || !settingsProviderDraft) return false;
         const isNew = layer.dataset.providerConfigMode === "new";
         const idNode = layer.querySelector('[data-provider-config-field="provider_id"]');
+        const nameNode = layer.querySelector('[data-provider-config-field="name"]');
         const sourceNode = layer.querySelector('[data-provider-config-field="source_provider"]');
         const baseUrlNode = layer.querySelector('[data-provider-config-field="base_url"]');
         const envNode = layer.querySelector('[data-provider-config-field="env_key"]');
         const apiKeyNode = layer.querySelector('[data-provider-config-field="api_key"]');
         const sectionNode = layer.querySelector('[data-provider-config-field="section_text"]');
         const provider = String(idNode?.value || "").trim().toLowerCase();
+        // 显示名称缺省时回退 Provider ID（默认名称与 Provider ID 一致）。
+        const displayName = String(nameNode?.value || "").trim() || provider;
         const isAppProvider = !isNew
           && provider === String(settingsProviderDraft.appProvider || "").trim().toLowerCase();
         const settings = hudSettingsFromPayload();
@@ -3025,6 +3114,7 @@ _TEXT_PREFIX = r"""
         }
         codexProviderDrafts.set(provider, {
           providerId: provider,
+          name: displayName,
           baseUrl,
           envKey,
           configText: sectionText,
@@ -3048,7 +3138,7 @@ _TEXT_PREFIX = r"""
         // 新增/编辑供应商后直接自动保存生效，无需再点设置页「保存」。
         if (isNew) {
           // 新增供应商时直接保存新价格，不再弹出「保存新价格」确认对话框。
-          commitSettingsFromDraft(`正在保存供应商 ${provider} 配置...`, {
+          commitSettingsFromDraft(`正在保存供应商 ${displayName} 配置...`, {
             skipPricingDialog: true,
           });
           return true;
@@ -3060,7 +3150,7 @@ _TEXT_PREFIX = r"""
         }
         const submitted = submitSettingsCommand(
           { action: "save", codexProviders: collectCodexProviderUpdates() },
-          `正在保存供应商 ${provider} 配置...`,
+          `正在保存供应商 ${displayName} 配置...`,
         );
         if (submitted) {
           codexProviderDirty.clear();
@@ -3124,7 +3214,7 @@ _TEXT_PREFIX = r"""
         layer.dataset.providerDeleteProvider = normalizedProvider;
         layer.innerHTML = `
           <div class="codex-usage-hud-settings-confirm-card codex-usage-hud-provider-delete-card" data-tone="danger" role="alertdialog" aria-modal="true" aria-label="删除供应商">
-            <div class="codex-usage-hud-settings-confirm-title">删除供应商：${escapeHtml(normalizedProvider)}？</div>
+            <div class="codex-usage-hud-settings-confirm-title">删除供应商：${escapeHtml(providerDisplayName(settings, normalizedProvider))}？</div>
             <div class="codex-usage-hud-settings-confirm-body">默认会删除 config.toml 中该供应商的相关配置，引用它的 Provider profile，以及响应的 API key 用户环境变量。下面两项为可选删除内容，默认不勾选。</div>
             <div class="codex-usage-hud-provider-delete-options">
               <label><input type="checkbox" data-provider-delete-model-prices="true"><span>同时删除模型单价配置</span></label>
@@ -3666,7 +3756,7 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
           <div class="codex-usage-hud-settings-confirm-card" role="alertdialog" aria-modal="true" aria-label="重启 Codex Desktop 确认">
             <div class="codex-usage-hud-settings-confirm-kicker">Codex Desktop</div>
             <div class="codex-usage-hud-settings-confirm-title">重启 Codex Desktop 以生效？</div>
-            <div class="codex-usage-hud-settings-confirm-body">修改默认 Codex App Provider${provider ? `（${escapeHtml(provider)}）` : ""}的 Base URL / API key 后，需要重启 Codex Desktop 才能加载新配置。\n\n选择操作方式：</div>
+            <div class="codex-usage-hud-settings-confirm-body">修改默认 Codex App Provider${provider ? `（${escapeHtml(providerDisplayName(hudSettingsFromPayload(), provider))}）` : ""}的 Base URL / API key 后，需要重启 Codex Desktop 才能加载新配置。\n\n选择操作方式：</div>
             <div class="codex-usage-hud-settings-confirm-actions">
               <button type="button" class="codex-usage-hud-settings-action" data-action="settings-provider-restart-cancel" data-variant="ghost">取消</button>
               <button type="button" class="codex-usage-hud-settings-action" data-action="settings-provider-restart-later">稍后重启</button>
@@ -4325,11 +4415,11 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
             const archivedNotice = item?.archived === true
               ? '<small data-kind="warning">已归档，请先解除归档后再复制或迁移</small>'
               : "";
-            return `<label class="codex-usage-hud-session-transfer-row" data-session-transfer-row="true"><input type="checkbox" data-session-transfer-id="${escapeHtml(id)}" ${checked ? "checked" : ""} ${selectable ? "" : "disabled"}><span class="codex-usage-hud-session-transfer-main"><strong>${escapeHtml(item?.title || "未命名会话")}</strong><small>${escapeHtml(item?.workdirName || "未记录工作目录")} · ${escapeHtml(item?.modelProvider || "unknown")}</small>${archivedNotice}</span><span class="codex-usage-hud-session-transfer-time">${escapeHtml(updated || "--")}</span></label>`;
+            return `<label class="codex-usage-hud-session-transfer-row" data-session-transfer-row="true"><input type="checkbox" data-session-transfer-id="${escapeHtml(id)}" ${checked ? "checked" : ""} ${selectable ? "" : "disabled"}><span class="codex-usage-hud-session-transfer-main"><strong>${escapeHtml(item?.title || "未命名会话")}</strong><small>${escapeHtml(item?.workdirName || "未记录工作目录")} · ${escapeHtml(providerDisplayName(settings, item?.modelProvider || "unknown"))}</small>${archivedNotice}</span><span class="codex-usage-hud-session-transfer-time">${escapeHtml(updated || "--")}</span></label>`;
           }).join("")
           : '<div class="codex-usage-hud-session-transfer-empty">没有找到可选的源 Provider 会话。请先扫描，或调整搜索条件。</div>';
         const targetOptions = targets.length
-          ? targets.map((provider) => `<option value="${escapeHtml(provider)}" ${provider === sessionTransferState.targetProvider ? "selected" : ""}>${escapeHtml(provider)}</option>`).join("")
+          ? targets.map((provider) => `<option value="${escapeHtml(provider)}" ${provider === sessionTransferState.targetProvider ? "selected" : ""}>${escapeHtml(providerDisplayName(settings, provider))}</option>`).join("")
           : '<option value="">没有可用目标 Provider</option>';
         const totalRows = view.allRows.length;
         const pageStart = totalRows ? view.page * sessionTransferPageSize + 1 : 0;
@@ -4344,7 +4434,7 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
         return `<div class="codex-usage-hud-settings-confirm-card codex-usage-hud-session-transfer-card" role="dialog" aria-modal="true" aria-label="复制或迁移 Provider 会话">
           <div class="codex-usage-hud-session-transfer-head"><div><div class="codex-usage-hud-settings-confirm-kicker">Provider 会话</div><div class="codex-usage-hud-settings-confirm-title">复制或迁移会话</div></div><button type="button" class="codex-usage-hud-settings-icon-action" data-action="session-transfer-close" aria-label="关闭" title="关闭">×</button></div>
           <div class="codex-usage-hud-session-transfer-body">
-            <div class="codex-usage-hud-session-transfer-context"><span>源 Provider</span><strong>${escapeHtml(source || "未选择")}</strong><span>目标 Provider</span><select data-session-transfer-target="true" ${busy || !targets.length ? "disabled" : ""}>${targetOptions}</select></div>
+            <div class="codex-usage-hud-session-transfer-context"><span>源 Provider</span><strong>${escapeHtml(source ? providerDisplayName(settings, source) : "未选择")}</strong><span>目标 Provider</span><select data-session-transfer-target="true" ${busy || !targets.length ? "disabled" : ""}>${targetOptions}</select></div>
             <div class="codex-usage-hud-session-transfer-mode"><label><input type="radio" name="codex-session-transfer-mode" data-session-transfer-mode="copy" value="copy" ${sessionTransferState.mode === "copy" ? "checked" : ""} ${busy ? "disabled" : ""}><span>复制</span><small>保留源会话</small></label><label><input type="radio" name="codex-session-transfer-mode" data-session-transfer-mode="migrate" value="migrate" ${sessionTransferState.mode === "migrate" ? "checked" : ""} ${busy ? "disabled" : ""}><span>迁移</span><small>复制成功后删除源会话</small></label></div>
             <div class="codex-usage-hud-session-transfer-search"><span aria-hidden="true">⌕</span><input type="search" data-session-transfer-search="true" value="${escapeHtml(sessionTransferState.search)}" placeholder="搜索标题或工作目录" aria-label="搜索会话" ${busy ? "disabled" : ""}></div>
              <div class="codex-usage-hud-session-transfer-toolbar"><label><input type="checkbox" data-session-transfer-select-all="true" ${allSelected ? "checked" : ""} ${busy || !selectableIds.length ? "disabled" : ""}>全选当前筛选</label><span data-session-transfer-selection-count="true">${selected.size} / ${selectableIds.length} 个可选会话</span></div>
@@ -4792,14 +4882,14 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
             }
             if (String(cleanupOperation.state || "") === "failed") {
               setSettingsStatus(
-                `供应商 ${expectedProvider} 删除失败：${String(cleanupOperation.error || "未知错误")}`,
+                `供应商 ${providerDisplayName(hudSettingsFromPayload(), expectedProvider)} 删除失败：${String(cleanupOperation.error || "未知错误")}`,
                 "error",
               );
               providerDeleteTerminalHandled = true;
             } else {
               const providerResult = cleanupOperation.providerResult;
               const message = String(
-                providerResult?.message || `供应商 ${expectedProvider} 已删除。`,
+                providerResult?.message || `供应商 ${providerDisplayName(hudSettingsFromPayload(), expectedProvider)} 已删除。`,
               );
               setSettingsStatus(message, "");
               // config 删除已在同步 dispatch 阶段完成，此处幂等地确保供应商从界面移除
@@ -6467,12 +6557,15 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
           document.body.appendChild(surface);
           codexCliQuickLaunchMenuState.surface = surface;
         }
-        surface.innerHTML = providers.map((provider) => `
+        surface.innerHTML = providers.map((provider) => {
+          const displayName = providerDisplayName(hudSettingsFromPayload(), provider);
+          return `
           <div data-codex-usage-hud-cli-provider-row="true">
-            <button type="button" role="menuitem" tabindex="-1" data-codex-usage-hud-cli-provider="true" data-provider="${escapeHtml(provider)}">${escapeHtml(provider)}</button>
-            <button type="button" tabindex="-1" data-codex-usage-hud-cli-provider-workdirs="true" data-provider="${escapeHtml(provider)}" aria-label="选择 ${escapeHtml(provider)} 的工作目录">工作目录 <span aria-hidden="true">›</span></button>
+            <button type="button" role="menuitem" tabindex="-1" data-codex-usage-hud-cli-provider="true" data-provider="${escapeHtml(provider)}">${escapeHtml(displayName)}</button>
+            <button type="button" tabindex="-1" data-codex-usage-hud-cli-provider-workdirs="true" data-provider="${escapeHtml(provider)}" aria-label="选择 ${escapeHtml(displayName)} 的工作目录">工作目录 <span aria-hidden="true">›</span></button>
           </div>
-        `).join("");
+        `;
+        }).join("");
         const rect = toggle.getBoundingClientRect();
         const width = Math.min(300, Math.max(190, surface.scrollWidth || 190));
         const left = Math.max(6, Math.min(rect.left, innerWidth - width - 6));
@@ -6575,21 +6668,25 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
         const fallback = String(hudSettingsFromPayload().app_provider || "").trim().toLowerCase();
         if (active) {
           const mismatch = !!fallback && fallback !== active;
+          const settings = hudSettingsFromPayload();
+          const activeName = providerDisplayName(settings, active);
+          const fallbackName = providerDisplayName(settings, fallback);
           return {
             provider: active,
             mismatch,
-            text: `供应商 ${active}`,
+            text: `供应商 ${activeName}`,
             title: mismatch
-              ? `当前会话供应商：${active}（config.toml 默认：${fallback}）`
-              : `当前会话供应商：${active}`,
+              ? `当前会话供应商：${activeName}（config.toml 默认：${fallbackName}）`
+              : `当前会话供应商：${activeName}`,
           };
         }
         if (fallback) {
+          const fallbackName = providerDisplayName(hudSettingsFromPayload(), fallback);
           return {
             provider: fallback,
             mismatch: false,
-            text: `供应商 ${fallback}（默认）`,
-            title: `默认供应商：${fallback}（当前无活跃会话）`,
+            text: `供应商 ${fallbackName}（默认）`,
+            title: `默认供应商：${fallbackName}（当前无活跃会话）`,
           };
         }
         return null;
@@ -6619,6 +6716,8 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
         if (
           label.dataset.provider !== state.provider
           || label.dataset.mismatch !== String(state.mismatch)
+          || label.textContent !== state.text
+          || label.title !== state.title
         ) {
           label.dataset.provider = state.provider;
           label.dataset.mismatch = String(state.mismatch);

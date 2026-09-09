@@ -70,7 +70,9 @@ TEXT = r"""
       function usageInsightsRankLabel(item, kind) {
         if (kind === "sessions") return String(item?.title || item?.name || item?.sessionTitle || item?.id || item?.sessionId || "未命名会话");
         if (kind === "models") return String(item?.model || item?.name || "未知模型");
-        return String(item?.provider || item?.name || "未知 Provider");
+        const rawProvider = String(item?.provider || item?.name || "").trim();
+        if (!rawProvider) return "未知 Provider";
+        return providerRegistryDisplayName(currentPayload()?.settings, rawProvider);
       }
 
       function usageInsightsSessionModelNames(session) {

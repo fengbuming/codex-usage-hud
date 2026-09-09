@@ -4951,7 +4951,15 @@ TEXT = r"""
             gap: 10px;
             padding: 0 18px;
           }
-          #${rootId} .codex-usage-hud-provider-config-grid > label {
+          #${rootId} .codex-usage-hud-provider-config-split {
+            min-width: 0;
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 10px;
+          }
+          #${rootId} .codex-usage-hud-provider-config-grid > label,
+          #${rootId} .codex-usage-hud-provider-config-split > label,
+          #${rootId} .codex-usage-hud-provider-config-grid > .codex-usage-hud-provider-config-field {
             min-width: 0;
             display: grid;
             gap: 4px;
@@ -4960,7 +4968,10 @@ TEXT = r"""
             font-weight: 700;
           }
           #${rootId} .codex-usage-hud-provider-config-grid > label input,
-          #${rootId} .codex-usage-hud-provider-config-grid > label select {
+          #${rootId} .codex-usage-hud-provider-config-grid > label select,
+          #${rootId} .codex-usage-hud-provider-config-split > label input,
+          #${rootId} .codex-usage-hud-provider-config-split > label select,
+          #${rootId} .codex-usage-hud-provider-config-grid > .codex-usage-hud-provider-config-field > input {
             min-width: 0;
             box-sizing: border-box;
             width: 100%;
@@ -4975,12 +4986,43 @@ TEXT = r"""
             font-weight: 400;
           }
           #${rootId} .codex-usage-hud-provider-config-grid > label input:focus,
-          #${rootId} .codex-usage-hud-provider-config-grid > label select:focus {
+          #${rootId} .codex-usage-hud-provider-config-grid > label select:focus,
+          #${rootId} .codex-usage-hud-provider-config-split > label input:focus,
+          #${rootId} .codex-usage-hud-provider-config-split > label select:focus,
+          #${rootId} .codex-usage-hud-provider-config-grid > .codex-usage-hud-provider-config-field > input:focus {
             border-color: var(--codex-usage-hud-accent, #f3d27a);
           }
-          #${rootId} .codex-usage-hud-provider-config-grid > label input[readonly] {
+          #${rootId} .codex-usage-hud-provider-config-grid > label input[readonly],
+          #${rootId} .codex-usage-hud-provider-config-split > label input[readonly],
+          #${rootId} .codex-usage-hud-provider-config-grid > .codex-usage-hud-provider-config-field > input[readonly] {
             opacity: .7;
             cursor: not-allowed;
+          }
+          #${rootId} .codex-usage-hud-provider-config-headrow {
+            min-width: 0;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+          }
+          #${rootId} .codex-usage-hud-provider-config-v1-toggle {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            color: var(--codex-usage-hud-muted, #8492a6);
+            font-size: 10px;
+            font-weight: 700;
+            white-space: nowrap;
+            cursor: pointer;
+          }
+          #${rootId} .codex-usage-hud-provider-config-v1-toggle input {
+            width: 13px;
+            height: 13px;
+            margin: 0;
+            accent-color: var(--codex-usage-hud-accent, #f3d27a);
+          }
+          #${rootId} .codex-usage-hud-provider-config-v1-toggle:has(input:checked) {
+            color: var(--codex-usage-hud-accent, #f3d27a);
           }
           #${rootId} .codex-usage-hud-provider-config-grid-placeholder {
             min-width: 0;

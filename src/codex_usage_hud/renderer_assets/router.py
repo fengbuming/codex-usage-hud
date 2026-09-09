@@ -11,6 +11,19 @@ TEXT = r"""
     }[char]));
   }
 
+  // 供应商显示名称（registry 视图）：取 config.toml 的 name 键，
+  // 缺省时回退 Provider ID（默认名称与 Provider ID 一致）。
+  // 设置界面存在未保存草稿时应优先使用 settings shell 内的 providerDisplayName。
+  function providerRegistryDisplayName(settings, provider) {
+    const normalized = String(provider || "").trim().toLowerCase();
+    if (!normalized) return "";
+    const registry = settings?.provider_registry && typeof settings.provider_registry === "object"
+      ? settings.provider_registry
+      : {};
+    const name = String(registry[normalized]?.name || "").trim();
+    return name || normalized;
+  }
+
   const SESSION_JUMP_INFLIGHT_TTL_MS = 1500;
   const SESSION_JUMP_INFLIGHT_ATTR = "data-session-cleanup-jump-inflight";
 

@@ -939,6 +939,7 @@ def _provider_registry_payload(context: object) -> dict[str, object]:
             "profiles": list(getattr(entry, "profile_names", ())),
             "historicalOnly": bool(getattr(entry, "historical_only", False)),
             "defined": bool(getattr(entry, "from_provider_definition", False)),
+            "name": str(getattr(entry, "name", "") or ""),
             "baseUrl": str(getattr(entry, "base_url", "") or ""),
             "envKey": str(getattr(entry, "env_key", "") or ""),
             "officialAccount": bool(getattr(entry, "official_account", False)),

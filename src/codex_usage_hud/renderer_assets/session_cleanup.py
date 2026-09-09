@@ -324,7 +324,7 @@ TEXT = r"""
         if (sessionCleanupState.archive === "unarchived") labels.push("未归档");
         if (sessionCleanupState.availability !== "all") labels.push(sessionCleanupAvailabilityLabel(sessionCleanupState.availability));
         if (sessionCleanupState.clientKind !== "all") labels.push(sessionCleanupClientLabel(sessionCleanupState.clientKind));
-        if (sessionCleanupState.modelProvider !== "all") labels.push(`提供方：${sessionCleanupState.modelProvider}`);
+        if (sessionCleanupState.modelProvider !== "all") labels.push(`提供方：${providerRegistryDisplayName(currentPayload()?.settings, sessionCleanupState.modelProvider)}`);
         if (String(sessionCleanupState.search || "").trim()) labels.push("搜索");
         if (String(sessionCleanupState.workdirId || "").trim()) labels.push("工作目录");
         const total = Array.isArray(data?.sessions) ? data.sessions.length : 0;
@@ -904,7 +904,7 @@ TEXT = r"""
           const descendants = Math.max(0, Number(item?.descendantCount || 0));
           const updatedAt = item?.updatedAt ? backgroundUsageTime(item.updatedAt, { compact: true }) : "--";
           const client = sessionCleanupClientLabel(item?.clientKind);
-          const provider = String(item?.modelProvider || "unknown");
+          const provider = providerRegistryDisplayName(currentPayload()?.settings, item?.modelProvider || "unknown");
           const workdirName = String(item?.workdirName || "").trim();
           const hitDetail = searchResultActive ? (searchKindsById.get(id) || {}) : {};
           const hitKinds = Array.isArray(hitDetail) ? hitDetail : (hitDetail.kinds || []);
@@ -960,7 +960,7 @@ TEXT = r"""
           control("archive", "归档状态", [["all", "全部"], ["archived", "已归档"], ["unarchived", "未归档"]]),
           control("availability", "删除状态", [["all", "全部"], ["selectable", "可永久删除"], ["protected", "受保护"], ["current", "当前会话"], ["running", "运行中"], ["unresolved", "映射无法确认"], ["unavailable", "暂不可删除"]]),
           control("clientKind", "客户端", [["all", "全部"], ["app", "Codex App"], ["cli", "CLI"], ["unknown", "来源未知"]]),
-          control("modelProvider", "模型提供方", [["all", "全部"], ...providers.map((value) => [value, value])]),
+          control("modelProvider", "模型提供方", [["all", "全部"], ...providers.map((value) => [value, providerRegistryDisplayName(currentPayload()?.settings, value)])]),
           control("sort", "排序", [["recent", "最后活动最近"], ["oldest", "最后活动最早"], ["largest", "占用最大"]]),
         ].join("");
         const workdirControl = `<div class="codex-usage-hud-session-filter-control codex-usage-hud-session-workdir-filter"><select data-session-cleanup-filter="workdirId" aria-label="工作目录">${sessionCleanupWorkdirOptionHtml(data)}</select></div>`;

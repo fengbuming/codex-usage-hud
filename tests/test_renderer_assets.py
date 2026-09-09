@@ -514,7 +514,8 @@ def test_codex_cli_menu_shows_active_session_provider_label() -> None:
     assert "function codexCliQuickLaunchProviderLabelState()" in SETTINGS_SHELL
     assert "currentPayload()?.activeSessionProvider" in SETTINGS_SHELL
     assert "hudSettingsFromPayload().app_provider" in SETTINGS_SHELL
-    assert '供应商 ${active}' in SETTINGS_SHELL
+    # 供应商标签显示 config.toml 的 name 键（缺省回退 Provider ID）。
+    assert '供应商 ${activeName}' in SETTINGS_SHELL
     assert '（默认）' in SETTINGS_SHELL
     assert ".codex-usage-hud-cli-provider-label[data-mismatch=\"true\"] {" in SETTINGS_SHELL
     assert "syncCodexCliQuickLaunchProviderLabel(menubar, toggle);" in SETTINGS_SHELL

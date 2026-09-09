@@ -24,6 +24,7 @@ UNKNOWN_PROVIDER = "unknown"
 class ProviderRegistryEntry:
     provider: str
     profile_names: tuple[str, ...] = ()
+    name: str = ""
     base_url: str = ""
     env_key: str = ""
     official_account: bool = False
@@ -101,6 +102,7 @@ def discover_provider_registry(
             if definition is not None and normalized_provider in entries:
                 entries[normalized_provider].update(
                     {
+                        "name": definition.name,
                         "base_url": definition.base_url,
                         "env_key": definition.env_key,
                         "official_account": definition.official_account,
@@ -137,6 +139,7 @@ def discover_provider_registry(
         provider: ProviderRegistryEntry(
             provider=provider,
             profile_names=tuple(sorted(state.get("profiles", set()))),
+            name=str(state.get("name") or ""),
             base_url=str(state.get("base_url") or ""),
             env_key=str(state.get("env_key") or ""),
             official_account=bool(state.get("official_account")),

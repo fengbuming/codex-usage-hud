@@ -336,7 +336,7 @@ TEXT = r"""
             ${actionable ? '<button type="button" class="codex-usage-hud-settings-action" data-action="usage-insights-session" data-usage-session-id="' + escapeHtml(sessionId) + '" data-target-title="' + escapeHtml(title) + '" data-workdir="' + escapeHtml(workdir) + '">打开会话</button>' : '<span class="codex-usage-hud-background-status">仅统计</span>'}
           </div>
           <div class="codex-usage-hud-background-detail-grid">
-            <div><span>Provider</span><strong>${escapeHtml(String(session?.provider || "未知"))}</strong></div>
+            <div><span>Provider</span><strong>${escapeHtml(session?.provider ? providerRegistryDisplayName(currentPayload()?.settings, session.provider) : "未知")}</strong></div>
             <div><span>Tokens</span><strong>${escapeHtml(usageInsightsFormatTokens(session?.tokens ?? session?.totalTokens))}</strong></div>
             <div><span>输入</span><strong>${escapeHtml(usageInsightsFormatTokens(session?.inputTokens))}</strong></div>
             <div><span>缓存命中</span><strong>${escapeHtml(usageInsightsFormatRatio(session?.cacheRatio))}</strong></div>

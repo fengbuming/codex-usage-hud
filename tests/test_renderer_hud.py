@@ -829,6 +829,18 @@ class RendererHudPayloadTests(unittest.TestCase):
         self.assertIn("function suggestedProviderIdFromBaseUrl", script)
         self.assertIn("new URL(candidate).hostname", script)
         self.assertIn("suggestedProviderIdFromBaseUrl(baseUrlNode.value)", script)
+        # 自动补 /v1 开关：Base URL 标题行右侧 checkbox，关闭后失焦不再追加；
+        # 编辑时现有 Base URL 未以 /v1 结尾则默认关闭，避免改写既有配置。
+        self.assertIn("function normalizeProviderBaseUrlInput", script)
+        self.assertIn('data-provider-config-field="base_url_v1"', script)
+        self.assertIn("自动补 /v1", script)
+        self.assertIn("const initialV1Enabled = isNew", script)
+        self.assertIn("if (v1Node?.checked) {", script)
+        self.assertIn('data-provider-config-field="name"', script)
+        self.assertIn("const initialProviderName = isNew", script)
+        self.assertIn("自动补 /v1 开关：新增时默认开启", script)
+        self.assertIn("function providerDisplayName", script)
+        self.assertIn("const displayName = providerDisplayName(settings, provider);", script)
         self.assertIn("const initialFocusNode = isNew ? baseUrlNode : apiKeyNode;", script)
         self.assertIn("编辑时自动选中 API key 输入框", script)
         self.assertIn("仅气泡通知不统计", script)
