@@ -49,7 +49,12 @@ TEXT = r"""
             --codex-usage-hud-progress-overflow-badge-text: #ffd7ca;
             position: fixed;
             inset: 0;
-            z-index: 2147482600;
+            /* Measured on Codex Desktop 26.903.8094.0 (tools/probe_zindex_landscape.py):
+             * native content layers peak at z-40 (thread floating content),
+             * native floating chrome sits at z-[55] (find-in-thread bar) and
+             * z-[60]. Stay above all content but below native floating UI so
+             * the search bar and other overlays paint above the HUD. */
+            z-index: 45;
             pointer-events: none;
             user-select: none;
             color-scheme: dark;
