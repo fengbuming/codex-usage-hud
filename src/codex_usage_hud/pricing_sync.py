@@ -13,7 +13,7 @@ from urllib.request import Request, urlopen
 
 
 OPENAI_MODELS_URL = "https://developers.openai.com/api/docs/models"
-OPENAI_PRICING_SNAPSHOT_URL = "https://raw.githubusercontent.com/fengbuming/codex-usage-hud/main/docs/openai-pricing-snapshot.json"
+OPENAI_PRICING_SNAPSHOT_URL = "https://raw.githubusercontent.com/fengbuming/codex-usage-hud/pricing-snapshot/docs/openai-pricing-snapshot.json"
 SNAPSHOT_MIRROR_URL_TEMPLATES = ("https://ghproxy.net/{url}", "https://gh-proxy.com/{url}")
 
 
