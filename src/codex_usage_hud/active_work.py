@@ -997,8 +997,19 @@ def _refresh_visible_current_work_item(
         _work_overlay_terminal_item_tasks(context).pop(session_id, None)
         _terminal_completion_prompts(context).pop(session_id, None)
     refreshed = _merge_stable_item_metadata(items[existing_index], refreshed)
-    updated = list(items)
-    updated[existing_index] = refreshed
+    # Drop any leftover renderer provisional bubble now that the canonical
+    # session item exists, so the same conversation is not shown twice.
+    updated = [
+        item
+        for index, item in enumerate(items)
+        if index == existing_index
+        or str(item.session_id or "").strip()
+        or not str(item.source or "").lower().startswith("renderer-")
+    ]
+    for index, item in enumerate(updated):
+        if str(item.session_id or item.id).strip() == session_id:
+            updated[index] = refreshed
+            break
     return updated
 
 

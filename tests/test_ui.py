@@ -4130,6 +4130,45 @@ class BudgetHelperTests(unittest.TestCase):
         self.assertEqual(items[0].session_id, "thread-1")
         self.assertEqual(items[0].title, "Mapped task")
 
+    def test_current_work_removes_stale_provisional_when_canonical_exists(self) -> None:
+        """Regression: a renderer provisional bubble must disappear once the
+        canonical session item is already present, instead of showing both."""
+        context = SimpleNamespace()
+        now = datetime.now().astimezone()
+        provisional = ParsedSession(
+            status="waiting",
+            selection_source="renderer-new-session",
+        )
+        provisional_item = active_work._work_item_from_snapshot(
+            provisional,
+            current=True,
+            source=provisional.selection_source,
+            context=context,
+        )
+        canonical = ParsedSession(
+            session_id="thread-1",
+            session_title="Real work",
+            selection_source="renderer:Real work",
+            request=RequestTokens(status="running", updated_at=now, started_at=now),
+            activity=Activity(kind="agent", detail="streaming", timestamp=now),
+        )
+        canonical_item = active_work._work_item_from_snapshot(
+            canonical,
+            current=True,
+            source=canonical.selection_source,
+            context=context,
+        )
+
+        items = active_work._refresh_visible_current_work_item(
+            context,
+            [provisional_item, canonical_item],
+            canonical,
+        )
+
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0].session_id, "thread-1")
+        self.assertEqual(items[0].title, "Real work")
+
     def test_rest_reminder_card_copy_covers_prompt_postpone_and_resting_actions(self) -> None:
         base = {
             "bubbleVisible": True,
