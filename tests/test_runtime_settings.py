@@ -80,3 +80,15 @@ def test_session_cleanup_workdir_uses_settings_partial_domain() -> None:
         previous_config=current,
         current_config=current,
     ) == {"settings"}
+
+
+def test_pricing_sync_status_change_only_refreshes_settings_domain() -> None:
+    previous = UserConfig.defaults()
+    payload = previous.to_dict()
+    payload["pricing_sync"] = {**payload["pricing_sync"], "last_result": "success"}
+    current = UserConfig.from_dict(payload)
+
+    assert changed_config_keys(previous, current) == {"pricing_sync"}
+    assert partial_domains_for_command(
+        {"action": "save"}, previous_config=previous, current_config=current
+    ) == {"settings"}

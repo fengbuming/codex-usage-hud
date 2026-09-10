@@ -269,11 +269,9 @@ class UserConfig:
     pricing_versions: tuple[PriceVersion, ...] = ()
     pricing_audit: tuple[PriceAuditRecord, ...] = ()
     pricing_url: str = ""
-    pricing_sync: dict[str, Any] = field(default_factory=lambda: {
-        "enabled": True, "interval_hours": 4, "last_checked_at": "",
-        "last_success_at": "", "last_result": "idle", "unread_change_count": 0,
-        "source_url": OPENAI_MODELS_URL,
-    })
+    pricing_sync: dict[str, Any] = field(
+        default_factory=lambda: _normalize_pricing_sync(None)
+    )
     budget_thresholds: list[float] = field(
         default_factory=lambda: list(DEFAULT_BUDGET_THRESHOLDS)
     )

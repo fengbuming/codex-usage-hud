@@ -93,7 +93,7 @@ def refresh_latest_snapshot_for_partial_settings_command(
     if action in {"fetchPrices", "savePricing", "pricingImportCommit"} or (
         action == "save"
         and changed_keys
-        and changed_keys.issubset(runtime_settings.PRICING_KEYS)
+        and changed_keys.issubset(runtime_settings.PRICE_CALC_KEYS)
     ):
         snapshot.estimate_base = _apply_pre_send_pricing(
             context, snapshot, snapshot.estimate_base

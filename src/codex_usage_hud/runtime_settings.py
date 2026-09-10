@@ -42,9 +42,10 @@ _REST_KEYS = frozenset(
         "rest_reminder_lunch_end_time",
     }
 )
-PRICING_KEYS = frozenset(
-    {"pricing_url", "model_prices", "pricing_versions", "pricing_audit", "pricing_sync"}
+PRICE_CALC_KEYS = frozenset(
+    {"pricing_url", "model_prices", "pricing_versions", "pricing_audit"}
 )
+PRICING_KEYS = PRICE_CALC_KEYS | frozenset({"pricing_sync"})
 BUDGET_KEYS = frozenset(
     {
         "daily_budget_usd",
@@ -87,7 +88,7 @@ def partial_domains_for_changed_config(changed_keys: set[str]) -> set[str] | Non
     domains = {"settings"}
     if changed_keys & _OVERLAY_KEYS:
         domains.add("overlay")
-    if changed_keys & PRICING_KEYS:
+    if changed_keys & PRICE_CALC_KEYS:
         domains.add("currentSession")
     if changed_keys & BUDGET_KEYS:
         domains.update({"currentSession", "budget"})
