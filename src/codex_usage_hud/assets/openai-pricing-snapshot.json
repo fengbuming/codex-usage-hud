@@ -1,5 +1,5 @@
 {
-  "checked_at": "2026-09-10T06:47:53.176775Z",
+  "checked_at": "2026-09-10T06:52:03.648314Z",
   "currency": "USD",
   "prices": [
     {
@@ -44,7 +44,7 @@
     }
   ],
   "provider": "openai",
-  "schema_version": 1,
+  "schema_version": 2,
   "sources": [
     {
       "sha256": "aa0124e991c65fefcaeefcf7bef90f28ba9665c56fcac95ffa753e8e4d03fd63",

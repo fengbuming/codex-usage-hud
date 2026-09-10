@@ -52,7 +52,7 @@ def main() -> int:
     prices = parse_openai_models_html(pricing_body)
     validate_sources(models, prices)
     payload = {
-        "schema_version": 1,
+        "schema_version": 2,
         "provider": "openai",
         "currency": "USD",
         "unit": "USD_per_1M_tokens",

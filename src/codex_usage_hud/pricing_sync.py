@@ -8,6 +8,7 @@ import hashlib
 from pathlib import Path
 import json
 import re
+import time
 from typing import Iterable
 from urllib.request import Request, urlopen
 
@@ -143,13 +144,15 @@ def fetch_pricing_snapshot(*, timeout_seconds: float = 15.0) -> tuple[dict[str, 
     errors: list[str] = []
     for url in pricing_snapshot_urls():
         try:
-            request = Request(url, headers={"Accept": "application/json", "User-Agent": "codex-usage-hud"})
+            separator = "&" if "?" in url else "?"
+            request_url = f"{url}{separator}v={int(time.time() // 300)}"
+            request = Request(request_url, headers={"Accept": "application/json", "User-Agent": "codex-usage-hud"})
             with urlopen(request, timeout=timeout_seconds) as response:
                 body = response.read(2 * 1024 * 1024 + 1)
             if len(body) > 2 * 1024 * 1024:
                 raise ValueError("pricing snapshot is too large")
             payload = json.loads(body.decode("utf-8"))
-            if payload.get("schema_version") != 1 or payload.get("provider") != "openai":
+            if payload.get("schema_version") != 2 or payload.get("provider") != "openai":
                 raise ValueError("unsupported pricing snapshot")
             prices: dict[str, OfficialPrice] = {}
             for row in payload.get("prices", []):
@@ -162,7 +165,7 @@ def fetch_pricing_snapshot(*, timeout_seconds: float = 15.0) -> tuple[dict[str, 
                     output=Decimal(str(row["output"])), reasoning=Decimal(str(row.get("reasoning", row["output"]))))
             if not prices:
                 raise ValueError("pricing snapshot contains no supported prices")
-            return prices, {"snapshot_url": url, "checked_at": str(payload.get("checked_at") or ""),
+            return prices, {"snapshot_url": request_url, "checked_at": str(payload.get("checked_at") or ""),
                             "sources": list(payload.get("sources") or []), "source_hash": source_hash(body)}
         except Exception as exc:
             errors.append(f"{url}: {exc}")
@@ -170,6 +173,8 @@ def fetch_pricing_snapshot(*, timeout_seconds: float = 15.0) -> tuple[dict[str, 
     try:
         body = bundled.read_bytes()
         payload = json.loads(body.decode("utf-8"))
+        if payload.get("schema_version") != 2:
+            raise ValueError("unsupported bundled pricing snapshot")
         prices = {
             str(row["model"]): OfficialPrice(model=str(row["model"]), input=Decimal(str(row["input"])),
                 cached_input=Decimal(str(row.get("cached_input", row["input"]))), output=Decimal(str(row["output"])),
