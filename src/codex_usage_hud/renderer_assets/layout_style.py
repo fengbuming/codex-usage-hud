@@ -3241,6 +3241,15 @@ TEXT = r"""
           #${rootId} .codex-usage-hud-settings-confirm-card.codex-usage-hud-pricing-dialog {
             width: min(760px, calc(100% - 36px));
           }
+          #${rootId} .codex-usage-hud-pricing-dialog > .codex-usage-hud-pricing-preview-meta,
+          #${rootId} .codex-usage-hud-pricing-dialog > .codex-usage-hud-pricing-table-scroll,
+          #${rootId} .codex-usage-hud-pricing-dialog > .codex-usage-hud-pricing-preview-notice,
+          #${rootId} .codex-usage-hud-pricing-dialog > .codex-usage-hud-pricing-impact {
+            margin-inline: 18px;
+          }
+          #${rootId} .codex-usage-hud-pricing-dialog > .codex-usage-hud-settings-confirm-actions {
+            margin-top: 0;
+          }
           #${rootId} .codex-usage-hud-pricing-preview-meta {
             display: flex;
             align-items: center;
@@ -4979,8 +4988,12 @@ TEXT = r"""
             padding: 10px 18px 12px;
             border-top: 1px solid var(--codex-usage-hud-divider, #393b40);
           }
+          #${rootId} .codex-usage-hud-session-transfer-card > .codex-usage-hud-settings-confirm-actions {
+            margin-inline: 0;
+          }
           #${rootId} .codex-usage-hud-settings-confirm-main {
-            padding: 18px 19px 16px;
+            padding: 18px;
+            padding-bottom: 16px;
           }
           #${rootId} .codex-usage-hud-settings-confirm-card > .codex-usage-hud-settings-confirm-kicker,
           #${rootId} .codex-usage-hud-settings-confirm-card > .codex-usage-hud-settings-confirm-title,
@@ -5422,7 +5435,7 @@ TEXT = r"""
             align-items: center;
             justify-content: flex-end;
             gap: 8px;
-            padding: 9px 12px;
+            padding: 9px 18px;
             border-top: 1px solid var(--codex-usage-hud-divider, #393b40);
             background: #292a2d;
           }

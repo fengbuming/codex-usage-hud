@@ -16,6 +16,7 @@ _TEXT_PREFIX = r"""
         providerDeleteProvider: "",
         providerDeleteHasSessionHistory: false,
         providerModelsFetching: false,
+        pricingPreviewRequestId: "",
       };
       const codexProviderDrafts = new Map();
       const codexProviderDirty = new Set();
@@ -3856,9 +3857,28 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
         return false;
       }
 
+      function pricingPreviewLoadingMatches(status) {
+        const layer = document.querySelector(`#${settingsModalId} [data-settings-confirm="true"][data-loading-mode="pricing-fetch"]`);
+        if (!layer) return false;
+        const expectedRequestId = String(pricingWorkflowState.pricingPreviewRequestId || "");
+        const receivedRequestId = String(status?.requestId || "");
+        return !expectedRequestId || !receivedRequestId || expectedRequestId === receivedRequestId;
+      }
+
+      function closePricingPreviewLoading(status) {
+        if (pricingPreviewLoadingMatches(status)) {
+          closeSettingsConfirm();
+          pricingWorkflowState.pricingPreviewRequestId = "";
+        }
+      }
+
       function applyPricingCommandStatus(status) {
         if (!status || typeof status !== "object") return;
         const action = String(status.action || "");
+        const isPricingPreview = ["pricingImportPreview", "fetchPricesPreview"].includes(action);
+        if (isPricingPreview && pricingPreviewLoadingMatches(status)) {
+          closePricingPreviewLoading(status);
+        }
         if (status.pricingSource && settingsProviderDraft) {
           const source = status.pricingSource;
           const provider = String(settingsProviderDraft.activeProvider || "").trim().toLowerCase();
@@ -3875,7 +3895,7 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
         if (String(status.kind || "") === "error") return;
         if (
           status.pricingPreview
-          && ["pricingImportPreview", "fetchPricesPreview"].includes(action)
+          && isPricingPreview
           && !pricingArtifactSeen(status, "preview")
         ) {
           openPricingImportPreview(status.pricingPreview, status.pricingPayload);
@@ -5108,6 +5128,9 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
       }
 
       function handleSettingsCommandSubmissionError(error, command = {}) {
+        if (String(command?.action || "") === "fetchPricesPreview") {
+          closePricingPreviewLoading({ requestId: command?.requestId || command?.id || "" });
+        }
         setSettingsStatus(`设置命令提交失败：${error?.message || error}`, "error");
         if (String(command?.action || "") !== "deleteProvider") return;
         const requestId = String(command?.requestId || command?.id || "");
@@ -5684,12 +5707,25 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
       function confirmPricingEffectiveAt() {
         const mode = String(pricingWorkflowState.pendingMode || "save");
         if (mode === "fetch") {
-          submitSettingsCommand({
+          const requestId = typedSettingsRequestId("pricing-preview");
+          pricingWorkflowState.pricingPreviewRequestId = requestId;
+          openSettingsLoading({
+            kicker: "官方价格更新",
+            title: "正在拉取并生成预览",
+            body: "正在获取官方价格并校验模型差异。预览生成后会自动显示，期间不会写入当前配置。",
+            mode: "pricing-fetch",
+          });
+          const submitted = submitSettingsCommand({
             action: "fetchPricesPreview",
+            requestId,
             provider: pricingWorkflowState.pendingProvider,
             url: pricingWorkflowState.pendingUrl,
             reason: "official-sync",
-          }, "正在拉取并校验价格 JSON...");
+          }, "正在拉取并校验价格 JSON...", { preserveOverlay: true });
+          if (!submitted) {
+            pricingWorkflowState.pricingPreviewRequestId = "";
+            closeSettingsConfirm();
+          }
           return;
         }
         const applyAllNode = document.querySelector(`#${settingsModalId} [data-pricing-apply-all="true"]`);
@@ -5949,6 +5985,9 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
         const settings = collectSettingsForm();
         const provider = String(settingsProviderDraft?.activeProvider || "").trim().toLowerCase();
         const url = String(settings?.provider_settings?.[provider]?.pricing_url || settings.pricing_url || "").trim();
+        if (document.querySelector(`#${settingsModalId} [data-settings-confirm="true"][data-loading-mode="pricing-fetch"]`)) {
+          return;
+        }
         openPricingEffectiveDialog({ mode: "fetch", provider, url });
       }
 
