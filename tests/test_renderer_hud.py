@@ -286,6 +286,8 @@ class RendererHudPayloadTests(unittest.TestCase):
         )
         self.assertIn("请作者喝咖啡", renderer_hud.RENDERER_HUD_SCRIPT)
         self.assertIn("settings-fetch-prices", renderer_hud.RENDERER_HUD_SCRIPT)
+        self.assertIn("检查价格更新", renderer_hud.RENDERER_HUD_SCRIPT)
+        self.assertIn('data-action="pricing-sync-open"', renderer_hud.RENDERER_HUD_SCRIPT)
         self.assertIn("codex-usage-hud-price-advanced", renderer_hud.RENDERER_HUD_SCRIPT)
         self.assertIn('data-pricing-apply-all="true"', renderer_hud.RENDERER_HUD_SCRIPT)
         self.assertIn("应用于所有 providers", renderer_hud.RENDERER_HUD_SCRIPT)

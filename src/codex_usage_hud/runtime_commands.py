@@ -38,6 +38,7 @@ from .config import (
     dismiss_warning_for_today,
     extract_model_prices,
     fetch_model_prices,
+    fetch_openai_models_prices,
     write_json_object,
 )
 from .core.background_usage import valid_background_event_id
@@ -47,6 +48,7 @@ from .process_environment import (
     external_process_environment,
 )
 from .desktop_overlay import DesktopWorkOverlay
+from .pricing_sync import fetch_pricing_snapshot
 from .desktop_overlay_setup import (
     _desktop_overlay_dependency_status,
     _pyside6_version,
@@ -1524,7 +1526,20 @@ def handle_general_command(
                 else config.pricing_url
             )
             url = str(command.get("url") or provider_url or "").strip()
-            fetched = ports.fetch_prices(url)
+            official = str(command.get("reason") or "") == "official-sync"
+            metadata: dict[str, object] = {}
+            if official:
+                official_prices, metadata = fetch_pricing_snapshot()
+                fetched = {
+                    model: ModelPrice(
+                        input=float(price.input), cached_input=float(price.cached_input),
+                        cache_write=float(price.cache_write), output=float(price.output),
+                        reasoning=float(price.reasoning), model=model, provider=provider,
+                    )
+                    for model, price in official_prices.items()
+                }
+            else:
+                fetched = ports.fetch_prices(url)
             legacy_payload = {
                 "model_prices": {
                     key: (
@@ -1560,7 +1575,50 @@ def handle_general_command(
             status["pricingPreview"] = preview_payload
             status["pricingPayload"] = payload
             status["pricingUrl"] = url
+            if metadata:
+                status["pricingSource"] = metadata
             return status
+        if action == "getPricingSyncStatus":
+            status = _status("价格同步状态已刷新。")
+            status["pricingSync"] = dict(ports.load_config().pricing_sync)
+            return status
+        if action == "dismissPricingChanges":
+            config = ports.load_config()
+            sync = dict(config.pricing_sync)
+            sync["unread_change_count"] = 0
+            sync["pending_changes"] = []
+            ports.save_config(replace(config, pricing_sync=sync))
+            status = _status("已忽略本次官方价格更新。")
+            status["pricingSync"] = sync
+            return status
+        if action == "applyPricingSync":
+            config = ports.load_config()
+            sync = dict(config.pricing_sync)
+            rows = sync.get("pending_prices") if isinstance(sync.get("pending_prices"), list) else []
+            if not rows:
+                return _status("没有可应用的官方价格更新。", kind="error")
+            payload = _pricing_payload_with_default_effective_at({"prices": rows}, _current_pricing_effective_at())
+            preview = config.preview_pricing_import(payload)
+            updated, result = config.apply_pricing_import(preview, conflict_policy="overwrite")
+            updated = _sync_imported_current_prices(updated, preview)
+            target_provider = str(rows[0].get("provider") or "").strip().lower() if rows and isinstance(rows[0], Mapping) else ""
+            if target_provider:
+                current_settings = updated.provider_settings.get(target_provider, ProviderSettings())
+                latest_prices = {
+                    str(row.get("model") or "").strip(): price
+                    for row in rows
+                    if isinstance(row, Mapping)
+                    and str(row.get("model") or "").strip()
+                    and (price := ModelPrice.from_mapping(row, str(row.get("model") or "").strip())) is not None
+                }
+                next_settings = dict(updated.provider_settings)
+                next_settings[target_provider] = replace(current_settings, model_prices=latest_prices)
+                updated = replace(updated, provider_settings=next_settings)
+            sync["unread_change_count"] = 0
+            sync["pending_changes"] = []
+            sync["pending_prices"] = []
+            ports.save_config(replace(updated, pricing_sync=sync))
+            return {**_status(f"已应用官方价格更新：新增 {result.added_count}，更新 {result.updated_count}。"), "pricingSync": sync}
         if action in {"pricingExport", "pricingTemplate"}:
             try:
                 output_path, used_template = _export_pricing_to_program_root(

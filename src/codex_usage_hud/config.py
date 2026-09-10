@@ -31,6 +31,8 @@ from .pricing import (
     pricing_export_payload,
     utc_now,
 )
+from .pricing_sync import OPENAI_MODELS_URL
+from .pricing_sync import parse_openai_models_html, source_hash
 
 HUD_SETTINGS_FILENAME = "hud_settings.json"
 USER_CONFIG_KEY = "user"
@@ -72,6 +74,37 @@ REST_REMINDER_IDLE_RESET_MAX = 60
 JSON_WRITE_REPLACE_RETRIES = 8
 JSON_WRITE_REPLACE_DELAY_SECONDS = 0.01
 MAX_PRICING_RESPONSE_BYTES = 2 * 1024 * 1024
+
+
+def _normalize_pricing_sync(value: Any) -> dict[str, Any]:
+    defaults = {
+        "enabled": True, "interval_hours": 4, "last_checked_at": "",
+        "last_success_at": "", "last_result": "idle", "unread_change_count": 0,
+        "source_url": OPENAI_MODELS_URL,
+    }
+    if not isinstance(value, Mapping):
+        return defaults
+    result = dict(defaults)
+    result["enabled"] = bool(value.get("enabled", True))
+    try:
+        result["interval_hours"] = max(1, min(168, int(value.get("interval_hours", 24))))
+    except (TypeError, ValueError):
+        pass
+    for key in ("last_checked_at", "last_success_at", "last_result", "snapshot_checked_at"):
+        result[key] = str(value.get(key) or "")
+    result["source_hash"] = str(value.get("source_hash") or "")
+    result["last_error"] = str(value.get("last_error") or "")[:500]
+    changes = value.get("pending_changes")
+    result["pending_changes"] = list(changes[:500]) if isinstance(changes, list) else []
+    pending_prices = value.get("pending_prices")
+    result["pending_prices"] = list(pending_prices[:500]) if isinstance(pending_prices, list) else []
+    try:
+        result["unread_change_count"] = max(0, int(value.get("unread_change_count", 0)))
+    except (TypeError, ValueError):
+        pass
+    source = str(value.get("source_url") or "").strip()
+    result["source_url"] = source or OPENAI_MODELS_URL
+    return result
 
 _PRICE_ALIASES = {
     "input": ("input", "prompt", "input_price", "input_per_million"),
@@ -201,9 +234,12 @@ class ProviderSettings:
         prices = default_model_prices()
         parsed_prices = normalize_model_prices(value.get("model_prices"))
         prices.update(_normalize_provider_model_prices(parsed_prices, provider))
+        provider_pricing_url = _optional_str(value.get("pricing_url"))
+        if not provider_pricing_url and provider == "openai":
+            provider_pricing_url = OPENAI_MODELS_URL
         return cls(
             model_prices=prices,
-            pricing_url=_optional_str(value.get("pricing_url")) or "",
+            pricing_url=provider_pricing_url or "",
             weekly_adjustment_usd=max(0.0, _optional_float(value.get("weekly_adjustment_usd")) or 0.0),
         )
 
@@ -233,6 +269,11 @@ class UserConfig:
     pricing_versions: tuple[PriceVersion, ...] = ()
     pricing_audit: tuple[PriceAuditRecord, ...] = ()
     pricing_url: str = ""
+    pricing_sync: dict[str, Any] = field(default_factory=lambda: {
+        "enabled": True, "interval_hours": 4, "last_checked_at": "",
+        "last_success_at": "", "last_result": "idle", "unread_change_count": 0,
+        "source_url": OPENAI_MODELS_URL,
+    })
     budget_thresholds: list[float] = field(
         default_factory=lambda: list(DEFAULT_BUDGET_THRESHOLDS)
     )
@@ -315,6 +356,7 @@ class UserConfig:
                 for provider in notification_only_providers
                 if provider not in selected_provider_set
             ]
+        provider_pricing_url = _optional_str(value.get("pricing_url")) or ""
         return cls(
             daily_budget_usd=max(
                 0.0,
@@ -343,7 +385,8 @@ class UserConfig:
             model_prices=prices,
             pricing_versions=pricing_versions,
             pricing_audit=pricing_audit,
-            pricing_url=_optional_str(value.get("pricing_url")) or "",
+            pricing_url=provider_pricing_url or "",
+            pricing_sync=_normalize_pricing_sync(value.get("pricing_sync")),
             budget_thresholds=parse_thresholds(
                 value.get("budget_thresholds"), defaults.budget_thresholds
             ),
@@ -426,6 +469,7 @@ class UserConfig:
             "work_overlay_max_items": int(self.work_overlay_max_items),
             "work_overlay_side": self.work_overlay_side,
             "pricing_url": self.pricing_url,
+            "pricing_sync": dict(self.pricing_sync),
             "budget_thresholds": list(self.budget_thresholds),
             "weekly_adjustment_usd": float(self.weekly_adjustment_usd),
             "provider_settings": {
@@ -1200,6 +1244,30 @@ def fetch_model_prices(url: str, timeout_seconds: float = 8.0) -> dict[str, Mode
     return prices
 
 
+def fetch_openai_models_prices(url: str = OPENAI_MODELS_URL, timeout_seconds: float = 15.0) -> tuple[dict[str, ModelPrice], dict[str, object]]:
+    """Fetch the official HTML page with bounded, read-only failure protection."""
+    target = str(url or OPENAI_MODELS_URL).strip()
+    parsed_target = urlsplit(target)
+    if parsed_target.scheme.lower() != "https" or not parsed_target.netloc:
+        raise ValueError("official pricing URL must use HTTPS")
+    request = Request(target, headers={"Accept": "text/html", "User-Agent": "codex-usage-hud"})
+    try:
+        with urlopen(request, timeout=max(1.0, timeout_seconds)) as response:
+            body = response.read(MAX_PRICING_RESPONSE_BYTES + 1)
+            if len(body) > MAX_PRICING_RESPONSE_BYTES:
+                raise ValueError("pricing response is too large")
+            prices = parse_openai_models_html(body)
+    except (OSError, URLError, UnicodeDecodeError) as exc:
+        raise ValueError(f"unable to fetch official pricing: {exc}") from exc
+    metadata = {"source_url": target, "source_hash": source_hash(body), "checked_at": utc_now().isoformat().replace("+00:00", "Z")}
+    return {
+        model: ModelPrice(input=float(price.input), cached_input=float(price.cached_input),
+                          cache_write=float(price.cache_write), output=float(price.output),
+                          reasoning=float(price.reasoning), model=model, provider="openai")
+        for model, price in prices.items()
+    }, metadata
+
+
 def extract_model_prices(payload: Any) -> dict[str, ModelPrice]:
     """Extract model prices from common top-level JSON shapes."""
     if not isinstance(payload, Mapping):
@@ -1404,6 +1472,7 @@ __all__ = [
     "UserConfigStore",
     "WARNING_DISMISSED_DATE_KEY",
     "default_model_prices",
+    "fetch_openai_models_prices",
     "default_settings_path",
     "dismiss_warning_for_today",
     "effective_display_mode",

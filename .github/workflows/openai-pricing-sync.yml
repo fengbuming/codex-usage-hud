@@ -1,0 +1,26 @@
+name: OpenAI pricing snapshot
+
+on:
+  schedule:
+    - cron: "17 */4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python tools/sync_openai_pricing.py
+      - name: Commit changed snapshot
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/openai-pricing-snapshot.json src/codex_usage_hud/assets/openai-pricing-snapshot.json
+          git diff --cached --quiet || git commit -m "chore: refresh OpenAI pricing snapshot"
+          git push

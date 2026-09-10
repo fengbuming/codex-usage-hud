@@ -64,6 +64,7 @@ packages = ["src/codex_usage_hud"]
 "src/codex_usage_hud/assets/sponsor_alipay.png" = "codex_usage_hud/assets/sponsor_alipay.png"
 "src/codex_usage_hud/assets/sponsor_wechat.png" = "codex_usage_hud/assets/sponsor_wechat.png"
 "icon/hud-app-icon.ico" = "codex_usage_hud/assets/hud-app-icon.ico"
+"src/codex_usage_hud/assets/openai-pricing-snapshot.json" = "codex_usage_hud/assets/openai-pricing-snapshot.json"
 
 [tool.pytest.ini_options]
 addopts = "-m 'not ui' --tb=short -q"

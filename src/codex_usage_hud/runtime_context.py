@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass, field
-from datetime import datetime
+from dataclasses import dataclass, field, replace
+from datetime import datetime, timezone
 import logging
 from pathlib import Path
 import argparse
@@ -49,6 +49,8 @@ from .usage_insights import (
     _refresh_usage_insights_payload,
     _run_usage_insights_refresh,
 )
+from .pricing_sync_scheduler import PricingSyncScheduler
+from .pricing_sync import classify_price_changes, fetch_pricing_snapshot
 
 
 DEFAULT_SQLITE_LOG = "logs_2.sqlite"
@@ -117,6 +119,7 @@ class RuntimeContext:
     session_management_current_session_id: str = ""
     session_management_active_session_ids: set[str] = field(default_factory=set)
     rest_reminder: object | None = None
+    pricing_sync_scheduler: object | None = None
     session_lock_monitor: object | None = None
     config_overrides: dict[str, object] = field(default_factory=dict)
     work_overlay_started_at: datetime = field(
@@ -169,6 +172,7 @@ class RuntimeContext:
             "session_snapshot_cache",
             "pre_send_estimator",
             "rest_reminder",
+            "pricing_sync_scheduler",
         ):
             resource = getattr(self, field_name, None)
             if resource is None:
@@ -205,6 +209,29 @@ def _initialize_runtime_context_resources(context: RuntimeContext) -> None:
             force_reset=True,
             restore_persisted=True,
         )
+    if context.renderer_mode and context.pricing_sync_scheduler is None:
+        def _pricing_check() -> dict[str, object]:
+            prices, metadata = fetch_pricing_snapshot()
+            local = context.user_config.price_table()
+            changes = classify_price_changes(local, prices.values())
+            return {"ok": True, "count": len(prices), "changes": changes, "prices": [{**price.to_dict(), "provider": context.app_provider} for price in prices.values()], "metadata": metadata}
+        def _pricing_publish(result: object) -> None:
+            payload = dict(result) if isinstance(result, dict) else {}
+            try:
+                current = context.settings_store.load(); sync = dict(current.pricing_sync)
+                metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+                checked_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+                sync.update({"last_checked_at": checked_at, "snapshot_checked_at": str(metadata.get("checked_at") or ""), "last_result": "success" if payload.get("ok") else "error", "last_error": str(payload.get("error") or "")[:500]})
+                if payload.get("ok"):
+                    sync.update({"last_success_at": sync["last_checked_at"], "source_hash": str(metadata.get("source_hash") or ""), "pending_changes": list(payload.get("changes") or []), "pending_prices": list(payload.get("prices") or []), "unread_change_count": len(payload.get("changes") or [])})
+                context.settings_store.save(replace(current, pricing_sync=sync)); context.user_config = replace(current, pricing_sync=sync)
+            except Exception:
+                _LOGGER.exception("pricing_sync_status_persist_failed")
+            context.runtime_events.publish("pricing_sync", source="pricing_sync_scheduler", context=payload)
+        context.pricing_sync_scheduler = PricingSyncScheduler(
+            lambda: context.settings_store.load(), _pricing_check, _pricing_publish,
+        )
+        context.pricing_sync_scheduler.start()
     ensure_runtime_error_diagnostics(context)
     if context.session_snapshot_cache is None:
         context.session_snapshot_cache = SessionSnapshotCache(

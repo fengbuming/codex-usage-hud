@@ -2286,7 +2286,7 @@ _TEXT_PREFIX = r"""
         const activeProvider = draft.activeProvider;
         const head = `
           <div class="codex-usage-hud-provider-editor-head">
-            <div class="codex-usage-hud-price-title">模型单价</div>
+            <div class="codex-usage-hud-price-title">模型单价${Number(settings?.pricing_sync?.unread_change_count || 0) > 0 ? ` <button type="button" class="codex-usage-hud-provider-dirty-dot" data-action="pricing-sync-open" aria-label="有 ${Number(settings.pricing_sync.unread_change_count)} 项价格更新" title="查看价格更新"></button>` : ""}</div>
             ${settingsProviderTabsHtml(settings)}
             <div class="codex-usage-hud-price-unit-wrap">
               <div class="codex-usage-hud-price-unit">USD / 1M tokens</div>
@@ -2358,7 +2358,7 @@ _TEXT_PREFIX = r"""
             <div class="codex-usage-hud-price-actions">
               <button type="button" class="codex-usage-hud-settings-action" data-action="settings-add-model">添加模型</button>
               <input data-setting-key="pricing_url" value="${escapeHtml(providerSettings.pricing_url)}" placeholder="${escapeHtml(pricingUrlPlaceholder)}" aria-label="计费单价获取地址" title="${escapeHtml(pricingUrlPlaceholder)}">
-              <button type="button" class="codex-usage-hud-settings-action" data-action="settings-fetch-prices">拉取并预览</button>
+              <button type="button" class="codex-usage-hud-settings-action" data-action="settings-fetch-prices">检查价格更新</button>
               <button type="button" class="codex-usage-hud-settings-action codex-usage-hud-pricing-icon-action" data-action="settings-sync-provider-prices" aria-label="同步当前 Provider 单价到其它 Provider" title="同步当前 Provider 的模型单价到其它 Provider"><span aria-hidden="true">⇄</span></button>
               <button type="button" class="codex-usage-hud-settings-action codex-usage-hud-pricing-icon-action" data-action="pricing-export" aria-label="导出价格 JSON" title="导出价格 JSON"><span aria-hidden="true">⇩</span></button>
               <button type="button" class="codex-usage-hud-settings-action codex-usage-hud-pricing-icon-action" data-action="pricing-import-open" aria-label="导入价格 JSON" title="导入价格 JSON"><span aria-hidden="true">⇧</span></button>
@@ -3849,6 +3849,19 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
       function applyPricingCommandStatus(status) {
         if (!status || typeof status !== "object") return;
         const action = String(status.action || "");
+        if (status.pricingSource && settingsProviderDraft) {
+          const source = status.pricingSource;
+          const provider = String(settingsProviderDraft.activeProvider || "").trim().toLowerCase();
+          const sync = { ...(hudSettingsFromPayload().pricing_sync || {}) };
+          sync.last_checked_at = String(source.checked_at || "");
+          sync.last_success_at = sync.last_checked_at;
+          sync.last_result = "success";
+          sync.source_url = String(source.source_url || sync.source_url || "");
+          sync.unread_change_count = Number(status.pricingPreview?.updatedCount || status.pricingPreview?.addedCount || 0);
+          const settings = hudSettingsFromPayload();
+          settings.pricing_sync = sync;
+          if (!provider) settings.pricing_sync = sync;
+        }
         if (String(status.kind || "") === "error") return;
         if (
           status.pricingPreview
@@ -5665,6 +5678,7 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
             action: "fetchPricesPreview",
             provider: pricingWorkflowState.pendingProvider,
             url: pricingWorkflowState.pendingUrl,
+            reason: "official-sync",
           }, "正在拉取并校验价格 JSON...");
           return;
         }

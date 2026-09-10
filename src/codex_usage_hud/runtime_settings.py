@@ -43,7 +43,7 @@ _REST_KEYS = frozenset(
     }
 )
 PRICING_KEYS = frozenset(
-    {"pricing_url", "model_prices", "pricing_versions", "pricing_audit"}
+    {"pricing_url", "model_prices", "pricing_versions", "pricing_audit", "pricing_sync"}
 )
 BUDGET_KEYS = frozenset(
     {

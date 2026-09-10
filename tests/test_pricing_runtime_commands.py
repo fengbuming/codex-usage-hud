@@ -200,6 +200,42 @@ def test_historical_repricing_commands_are_removed() -> None:
     assert impact["kind"] == "error"
 
 
+def test_apply_pricing_sync_replaces_provider_prices_and_clears_unread_state() -> None:
+    config = UserConfig.from_dict(
+        {
+            "provider_settings": {
+                "custom": {"model_prices": {"obsolete": {"input": 1, "output": 2}}}
+            },
+            "pricing_sync": {
+                "unread_change_count": 2,
+                "pending_changes": [{"model": "official", "kind": "added"}],
+                "pending_prices": [
+                    {
+                        "model": "official",
+                        "provider": "custom",
+                        "input": 3,
+                        "cached_input": 0.3,
+                        "cache_write": 4,
+                        "output": 12,
+                        "reasoning": 12,
+                    }
+                ],
+            },
+        }
+    )
+    state = {"config": config}
+
+    result = handle_general_command({"action": "applyPricingSync"}, _ports(state))
+
+    assert not result["kind"]
+    prices = state["config"].provider_settings["custom"].model_prices
+    assert set(prices) == {"official"}
+    assert prices["official"].cache_write == 4
+    assert state["config"].pricing_sync["unread_change_count"] == 0
+    assert state["config"].pricing_sync["pending_prices"] == []
+    assert state["config"].pricing_versions
+
+
 def test_export_price_file_uses_current_prices_or_builtin_template(tmp_path: Path) -> None:
     state = {"config": UserConfig.defaults()}
     opened: list[Path] = []

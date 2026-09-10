@@ -1551,6 +1551,36 @@ TEXT = r"""
         void fetchPricesFromModal();
         return;
       }
+      if (action.dataset.action === "pricing-sync-open") {
+        event.preventDefault();
+        event.stopPropagation();
+        const sync = hudSettingsFromPayload()?.pricing_sync || {};
+        const changes = Array.isArray(sync.pending_changes) ? sync.pending_changes : [];
+        const rows = changes.slice(0, 100).map((item) => {
+          const official = item.official && typeof item.official === "object"
+            ? `${item.official.input ?? "—"} / ${item.official.cached_input ?? "—"} / ${item.official.output ?? "—"}`
+            : String(item.official ?? (item.kind || "变化"));
+          return `<div>${escapeHtml(String(item.model || "模型"))} · ${escapeHtml(String(item.field || item.kind || "模型"))} · ${escapeHtml(String(item.local ?? "—"))} → ${escapeHtml(official)}</div>`;
+        }).join("") || "暂无差异明细。";
+        openSettingsLoading({kicker: "官方价格更新", title: `发现 ${Number(sync.unread_change_count || changes.length)} 项差异`, body: rows});
+        const layer = document.querySelector(`#${settingsModalId} [data-settings-confirm="true"]`);
+        if (layer) {
+          layer.querySelector('.codex-usage-hud-settings-loading-track')?.remove();
+          layer.querySelector('.codex-usage-hud-settings-confirm-body').innerHTML = rows;
+          layer.querySelector('.codex-usage-hud-settings-confirm-card')?.insertAdjacentHTML('beforeend', '<div class="codex-usage-hud-settings-confirm-actions"><button type="button" class="codex-usage-hud-settings-action" data-action="pricing-sync-dismiss">忽略本次</button><button type="button" class="codex-usage-hud-settings-action" data-action="pricing-sync-apply" data-primary="true">确认更新</button></div>');
+        }
+        return;
+      }
+      if (action.dataset.action === "pricing-sync-apply") {
+        event.preventDefault(); event.stopPropagation();
+        submitSettingsCommand({action: "applyPricingSync"}, "正在应用官方价格更新...");
+        return;
+      }
+      if (action.dataset.action === "pricing-sync-dismiss") {
+        event.preventDefault(); event.stopPropagation();
+        submitSettingsCommand({action: "dismissPricingChanges"}, "正在忽略本次价格更新...");
+        return;
+      }
       if (action.dataset.action === "settings-sync-provider-prices") {
         event.preventDefault();
         event.stopPropagation();
