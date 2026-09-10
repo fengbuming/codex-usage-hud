@@ -1,6 +1,6 @@
 from types import SimpleNamespace
 
-from codex_usage_hud.pricing_sync import classify_price_changes, fetch_pricing_snapshot, parse_openai_models_html
+from codex_usage_hud.pricing_sync import CODEX_MODEL_IDS, classify_price_changes, fetch_pricing_snapshot, parse_openai_models_html
 from codex_usage_hud.pricing_sync import pricing_snapshot_urls
 from codex_usage_hud.pricing_sync_scheduler import PricingSyncScheduler
 from tools.sync_openai_pricing import validate_sources
@@ -53,6 +53,7 @@ def test_pricing_table_uses_short_context_columns_from_first_tier():
 
 def test_bundled_snapshot_preserves_cache_write_and_compares_it():
     prices, _metadata = fetch_pricing_snapshot(timeout_seconds=0.01)
+    assert set(prices) == set(CODEX_MODEL_IDS)
     price = prices["gpt-6-astra"]
     assert price.cache_write == 12.5
     changes = classify_price_changes(

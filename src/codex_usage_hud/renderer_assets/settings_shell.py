@@ -2167,7 +2167,11 @@ _TEXT_PREFIX = r"""
           codexProviderDrafts.clear();
           codexProviderDirty.clear();
         }
-        if (settingsProviderDraft && !reset) return settingsProviderDraft;
+        if (settingsProviderDraft && !reset) {
+          const currentAppProvider = String(settings.app_provider || "").trim().toLowerCase();
+          if (currentAppProvider) settingsProviderDraft.appProvider = currentAppProvider;
+          return settingsProviderDraft;
+        }
         const order = settingsProviderNames(settings);
         const appProvider = String(settings.app_provider || "").trim().toLowerCase();
         const providerSettings = settings.provider_settings && typeof settings.provider_settings === "object"
@@ -2286,7 +2290,7 @@ _TEXT_PREFIX = r"""
         const activeProvider = draft.activeProvider;
         const head = `
           <div class="codex-usage-hud-provider-editor-head">
-            <div class="codex-usage-hud-price-title">模型单价${Number(settings?.pricing_sync?.unread_change_count || 0) > 0 ? ` <button type="button" class="codex-usage-hud-provider-dirty-dot" data-action="pricing-sync-open" aria-label="有 ${Number(settings.pricing_sync.unread_change_count)} 项价格更新" title="查看价格更新"></button>` : ""}</div>
+            <div class="codex-usage-hud-price-title">模型单价</div>
             ${settingsProviderTabsHtml(settings)}
             <div class="codex-usage-hud-price-unit-wrap">
               <div class="codex-usage-hud-price-unit">USD / 1M tokens</div>
@@ -2316,6 +2320,12 @@ _TEXT_PREFIX = r"""
           ? String(weeklyAdjustment)
           : "";
         const pricingUrlPlaceholder = "计费单价获取地址 · https://example.com/model-prices.json";
+        const pricingUnreadCount = Number(settings?.pricing_sync?.unread_change_count || 0);
+        const pricingUrlValue = String(
+          providerSettings.pricing_url
+          || (required ? settings?.pricing_sync?.source_url : "")
+          || "",
+        ).trim();
         return `
           ${head}
           <div class="codex-usage-hud-provider-context">
@@ -2357,8 +2367,8 @@ _TEXT_PREFIX = r"""
             ${detectedPriceModelsHtml(providerSettings)}
             <div class="codex-usage-hud-price-actions">
               <button type="button" class="codex-usage-hud-settings-action" data-action="settings-add-model">添加模型</button>
-              <input data-setting-key="pricing_url" value="${escapeHtml(providerSettings.pricing_url)}" placeholder="${escapeHtml(pricingUrlPlaceholder)}" aria-label="计费单价获取地址" title="${escapeHtml(pricingUrlPlaceholder)}">
-              <button type="button" class="codex-usage-hud-settings-action" data-action="settings-fetch-prices">检查价格更新</button>
+              <input data-setting-key="pricing_url" value="${escapeHtml(pricingUrlValue)}" placeholder="${escapeHtml(pricingUrlPlaceholder)}" aria-label="计费单价获取地址" title="${escapeHtml(pricingUrlPlaceholder)}">
+              <button type="button" class="codex-usage-hud-settings-action codex-usage-hud-pricing-check-action" data-action="settings-fetch-prices" aria-label="${pricingUnreadCount ? `检查价格更新，有 ${pricingUnreadCount} 项未读差异` : "检查价格更新"}">检查价格更新${pricingUnreadCount ? '<span class="codex-usage-hud-pricing-check-dot" data-pricing-sync-dot="true" aria-hidden="true"></span>' : ""}</button>
               <button type="button" class="codex-usage-hud-settings-action codex-usage-hud-pricing-icon-action" data-action="settings-sync-provider-prices" aria-label="同步当前 Provider 单价到其它 Provider" title="同步当前 Provider 的模型单价到其它 Provider"><span aria-hidden="true">⇄</span></button>
               <button type="button" class="codex-usage-hud-settings-action codex-usage-hud-pricing-icon-action" data-action="pricing-export" aria-label="导出价格 JSON" title="导出价格 JSON"><span aria-hidden="true">⇩</span></button>
               <button type="button" class="codex-usage-hud-settings-action codex-usage-hud-pricing-icon-action" data-action="pricing-import-open" aria-label="导入价格 JSON" title="导入价格 JSON"><span aria-hidden="true">⇧</span></button>
@@ -5797,22 +5807,40 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
         const added = Number(preview?.addedCount ?? preview?.added ?? 0);
         const updated = Number(preview?.updatedCount ?? preview?.updated ?? 0);
         const skipped = Number(preview?.skippedCount ?? preview?.skipped ?? 0);
+        const changeCount = Number(preview?.changeCount);
+        const hasPriceChangeCount = Number.isFinite(changeCount);
         const conflicts = Array.isArray(preview?.conflicts) ? preview.conflicts : [];
         const warnings = Array.isArray(preview?.warnings) ? preview.warnings : [];
+        const prices = Array.isArray(preview?.prices) ? preview.prices : [];
+        const displayPrice = (value) => {
+          const amount = Number(value);
+          if (!Number.isFinite(amount)) return "—";
+          return amount.toLocaleString("en-US", { maximumFractionDigits: 6 });
+        };
+        const priceList = prices.length ? `
+          <div class="codex-usage-hud-pricing-table-scroll" data-pricing-model-list="true" aria-label="拉取到的模型价格">
+            <div class="codex-usage-hud-pricing-model-table" role="table">
+              <div class="codex-usage-hud-pricing-model-row" role="row" data-header="true">
+                <span role="columnheader">模型</span><span role="columnheader">输入</span><span role="columnheader">缓存读取</span><span role="columnheader">缓存写入</span><span role="columnheader">输出</span><span role="columnheader">推理</span>
+              </div>
+              ${prices.map((item) => `<div class="codex-usage-hud-pricing-model-row" role="row"><strong role="cell" title="${escapeHtml(String(item.model || item.model_pattern || "模型"))}">${escapeHtml(String(item.model || item.model_pattern || "模型"))}</strong><span role="cell">${escapeHtml(displayPrice(item.input))}</span><span role="cell">${escapeHtml(displayPrice(item.cached_input))}</span><span role="cell">${escapeHtml(displayPrice(item.cache_write))}</span><span role="cell">${escapeHtml(displayPrice(item.output))}</span><span role="cell">${escapeHtml(displayPrice(item.reasoning ?? item.output))}</span></div>`).join("")}
+            </div>
+          </div>
+        ` : '<div class="codex-usage-hud-pricing-impact">未拉取到可显示的 Codex 模型价格。</div>';
         const layer = document.createElement("div");
         layer.className = "codex-usage-hud-settings-confirm-layer";
         layer.dataset.settingsConfirm = "true";
         layer.innerHTML = `
-          <div class="codex-usage-hud-settings-confirm-card codex-usage-hud-pricing-dialog" role="alertdialog" aria-modal="true" aria-label="确认价格导入">
-            <div class="codex-usage-hud-settings-confirm-kicker">导入预览</div>
-            <div class="codex-usage-hud-settings-confirm-title">新增 ${added} · 更新 ${updated} · 跳过 ${skipped}</div>
-            <div class="codex-usage-hud-pricing-preview-grid"><span>冲突<strong>${conflicts.length}</strong></span><span>兼容提示<strong>${warnings.length}</strong></span></div>
-            ${conflicts.length ? `<div class="codex-usage-hud-pricing-preview-list">${conflicts.slice(0, 8).map((item) => `<div>${escapeHtml(String(item.provider || "全局"))} · ${escapeHtml(String(item.model_pattern || item.model || "模型"))} · ${escapeHtml(String(item.effective_at || ""))}</div>`).join("")}</div>` : ""}
-            ${warnings.length ? `<div class="codex-usage-hud-pricing-impact">${warnings.map((item) => escapeHtml(String(item))).join("<br>")}</div>` : ""}
-            <div class="codex-usage-hud-pricing-impact">确认导入后，新增价格立即用于后续请求；已有记录不进行历史重算。</div>
+          <div class="codex-usage-hud-settings-confirm-card codex-usage-hud-pricing-dialog" role="alertdialog" aria-modal="true" aria-label="${hasPriceChangeCount ? "确认价格更新" : "确认价格导入"}">
+            <div class="codex-usage-hud-settings-confirm-kicker">${hasPriceChangeCount ? "价格检查" : "导入预览"}</div>
+            <div class="codex-usage-hud-settings-confirm-title">${hasPriceChangeCount ? "官方模型价格" : "模型价格预览"}</div>
+            <div class="codex-usage-hud-pricing-preview-meta"><span>USD / 1M tokens</span><span>${prices.length} 个模型</span><strong data-tone="${hasPriceChangeCount && changeCount ? "changed" : "stable"}">${hasPriceChangeCount ? `差异 ${changeCount}` : `新增 ${added} · 更新 ${updated} · 跳过 ${skipped}`}</strong></div>
+            ${priceList}
+            ${conflicts.length ? `<div class="codex-usage-hud-pricing-preview-notice" data-tone="warning">${conflicts.length} 项价格版本冲突</div>` : ""}
+            ${warnings.length ? `<div class="codex-usage-hud-pricing-preview-notice">${warnings.map((item) => escapeHtml(String(item))).join("<br>")}</div>` : ""}
             <div class="codex-usage-hud-settings-confirm-actions">
               <button type="button" class="codex-usage-hud-settings-action" data-action="pricing-import-cancel" data-variant="ghost">取消</button>
-              <button type="button" class="codex-usage-hud-settings-action" data-action="pricing-import-commit" data-primary="true" disabled>${conflicts.length ? "覆盖冲突并导入" : "确认导入"}</button>
+              <button type="button" class="codex-usage-hud-settings-action" data-action="pricing-import-commit" data-primary="true" disabled>${hasPriceChangeCount ? "确认更新" : conflicts.length ? "覆盖冲突并导入" : "确认导入"}</button>
             </div>
           </div>
         `;

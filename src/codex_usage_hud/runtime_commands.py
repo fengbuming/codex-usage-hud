@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
+from decimal import Decimal
 import logging
 import os
 from pathlib import Path
@@ -48,7 +49,7 @@ from .process_environment import (
     external_process_environment,
 )
 from .desktop_overlay import DesktopWorkOverlay
-from .pricing_sync import fetch_pricing_snapshot
+from .pricing_sync import OfficialPrice, classify_price_changes, fetch_pricing_snapshot
 from .desktop_overlay_setup import (
     _desktop_overlay_dependency_status,
     _pyside6_version,
@@ -1561,6 +1562,26 @@ def handle_general_command(
                     if isinstance(row, Mapping)
                 ]
             preview = config.preview_pricing_import(payload)
+            local_prices = (
+                config.provider_settings[provider].model_prices
+                if provider and provider in config.provider_settings
+                else config.model_prices
+            )
+            price_changes = classify_price_changes(
+                local_prices,
+                (
+                    OfficialPrice(
+                        model=key,
+                        input=Decimal(str(value.input)),
+                        cached_input=Decimal(str(value.cached_input)),
+                        cache_write=Decimal(str(value.cache_write)),
+                        output=Decimal(str(value.output)),
+                        reasoning=Decimal(str(value.reasoning)),
+                    )
+                    for key, value in fetched.items()
+                    if isinstance(value, ModelPrice)
+                ),
+            )
             status = _status(
                 f"已拉取 {len(fetched)} 个模型价格；确认后才会保存。"
             )
@@ -1570,6 +1591,9 @@ def handle_general_command(
                     "addedCount": preview.added_count,
                     "updatedCount": preview.updated_count,
                     "skippedCount": preview.skipped_count,
+                    "changeCount": len(price_changes),
+                    "modelCount": len(fetched),
+                    "priceChanges": price_changes,
                 }
             )
             status["pricingPreview"] = preview_payload

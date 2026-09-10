@@ -2639,6 +2639,19 @@ TEXT = r"""
           #${rootId} .codex-usage-hud-pricing-apply-action {
             position: relative;
           }
+          #${rootId} .codex-usage-hud-pricing-check-action {
+            position: relative;
+          }
+          #${rootId} .codex-usage-hud-pricing-check-dot {
+            position: absolute;
+            top: -3px;
+            right: -3px;
+            width: 7px;
+            height: 7px;
+            border: 1px solid var(--codex-usage-hud-panel-surface, #18202b);
+            border-radius: 50%;
+            background: #3b82f6;
+          }
           #${rootId} .codex-usage-hud-pricing-apply-dirty-dot {
             position: absolute;
             top: -3px;
@@ -3225,8 +3238,86 @@ TEXT = r"""
           #${rootId} .codex-usage-hud-pricing-field input[aria-invalid="true"] {
             border-color: var(--codex-usage-hud-warning, #ffb86b);
           }
-          #${rootId} .codex-usage-hud-pricing-dialog {
-            width: min(700px, calc(100% - 24px));
+          #${rootId} .codex-usage-hud-settings-confirm-card.codex-usage-hud-pricing-dialog {
+            width: min(760px, calc(100% - 36px));
+          }
+          #${rootId} .codex-usage-hud-pricing-preview-meta {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            min-height: 24px;
+            color: var(--codex-usage-hud-muted, #8492a6);
+            font-size: 10px;
+          }
+          #${rootId} .codex-usage-hud-pricing-preview-meta strong {
+            margin-left: auto;
+            color: var(--codex-usage-hud-text, #e8eef7);
+            font-size: 10px;
+            font-weight: 700;
+          }
+          #${rootId} .codex-usage-hud-pricing-preview-meta strong[data-tone="changed"] {
+            color: var(--codex-usage-hud-warning, #ffb86b);
+          }
+          #${rootId} .codex-usage-hud-pricing-preview-meta strong[data-tone="stable"] {
+            color: #70c59a;
+          }
+          #${rootId} .codex-usage-hud-pricing-table-scroll {
+            max-height: 280px;
+            overflow: auto;
+            border: 1px solid var(--codex-usage-hud-divider, #273241);
+            border-radius: 5px;
+            background: var(--codex-usage-hud-panel-surface, #141b24);
+          }
+          #${rootId} .codex-usage-hud-pricing-model-table {
+            min-width: 650px;
+          }
+          #${rootId} .codex-usage-hud-pricing-model-row {
+            display: grid;
+            grid-template-columns: minmax(156px, 1.6fr) repeat(5, minmax(72px, 0.7fr));
+            min-height: 36px;
+            border-top: 1px solid color-mix(in srgb, var(--codex-usage-hud-divider, #273241) 70%, transparent);
+          }
+          #${rootId} .codex-usage-hud-pricing-model-row:first-child {
+            border-top: 0;
+          }
+          #${rootId} .codex-usage-hud-pricing-model-row[data-header="true"] {
+            position: sticky;
+            top: 0;
+            z-index: 1;
+            min-height: 30px;
+            background: color-mix(in srgb, var(--codex-usage-hud-panel-surface, #141b24) 92%, var(--codex-usage-hud-divider, #273241));
+          }
+          #${rootId} .codex-usage-hud-pricing-model-row > * {
+            min-width: 0;
+            display: flex;
+            align-items: center;
+            justify-content: flex-end;
+            padding: 7px 9px;
+            border-left: 1px solid color-mix(in srgb, var(--codex-usage-hud-divider, #273241) 55%, transparent);
+            color: var(--codex-usage-hud-text, #e8eef7);
+            font: 10px Consolas, "Cascadia Mono", ui-monospace, monospace;
+          }
+          #${rootId} .codex-usage-hud-pricing-model-row > :first-child {
+            justify-content: flex-start;
+            border-left: 0;
+          }
+          #${rootId} .codex-usage-hud-pricing-model-row[data-header="true"] > * {
+            color: var(--codex-usage-hud-muted, #8492a6);
+            font-family: inherit;
+            font-weight: 650;
+          }
+          #${rootId} .codex-usage-hud-pricing-model-row strong {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+          }
+          #${rootId} .codex-usage-hud-pricing-preview-notice {
+            color: var(--codex-usage-hud-muted, #8492a6);
+            font-size: 10px;
+            line-height: 1.45;
+          }
+          #${rootId} .codex-usage-hud-pricing-preview-notice[data-tone="warning"] {
+            color: var(--codex-usage-hud-warning, #ffb86b);
           }
           #${rootId} .codex-usage-hud-pricing-impact {
             color: var(--codex-usage-hud-muted, #8492a6);

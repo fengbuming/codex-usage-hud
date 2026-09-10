@@ -16,6 +16,9 @@ from urllib.request import Request, urlopen
 OPENAI_MODELS_URL = "https://developers.openai.com/api/docs/models"
 OPENAI_PRICING_SNAPSHOT_URL = "https://raw.githubusercontent.com/fengbuming/codex-usage-hud/pricing-snapshot/docs/openai-pricing-snapshot.json"
 SNAPSHOT_MIRROR_URL_TEMPLATES = ("https://ghproxy.net/{url}", "https://gh-proxy.com/{url}")
+CODEX_MODEL_IDS = frozenset(
+    {"gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"}
+)
 
 
 @dataclass(frozen=True)
@@ -157,7 +160,7 @@ def fetch_pricing_snapshot(*, timeout_seconds: float = 15.0) -> tuple[dict[str, 
             prices: dict[str, OfficialPrice] = {}
             for row in payload.get("prices", []):
                 model = str(row.get("model") or "").strip()
-                if not model or not _MODEL.fullmatch(model):
+                if model not in CODEX_MODEL_IDS:
                     continue
                 prices[model] = OfficialPrice(model=model, input=Decimal(str(row["input"])),
                     cached_input=Decimal(str(row.get("cached_input", row["input"]))),
@@ -180,7 +183,9 @@ def fetch_pricing_snapshot(*, timeout_seconds: float = 15.0) -> tuple[dict[str, 
                 cached_input=Decimal(str(row.get("cached_input", row["input"]))), output=Decimal(str(row["output"])),
                 reasoning=Decimal(str(row.get("reasoning", row["output"]))),
                 cache_write=Decimal(str(row.get("cache_write", 0))))
-            for row in payload.get("prices", []) if isinstance(row, dict) and _MODEL.fullmatch(str(row.get("model") or ""))
+            for row in payload.get("prices", [])
+            if isinstance(row, dict)
+            and str(row.get("model") or "") in CODEX_MODEL_IDS
         }
         if prices:
             return prices, {"snapshot_url": str(bundled), "checked_at": str(payload.get("checked_at") or ""),

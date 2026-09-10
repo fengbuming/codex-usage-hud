@@ -11,6 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from codex_usage_hud.pricing_sync import (  # noqa: E402
+    CODEX_MODEL_IDS,
     OPENAI_MODELS_URL,
     parse_openai_models_html,
     source_hash,
@@ -51,6 +52,10 @@ def main() -> int:
     models = parse_openai_models_html(models_body)
     prices = parse_openai_models_html(pricing_body)
     validate_sources(models, prices)
+    prices = {model: price for model, price in prices.items() if model in CODEX_MODEL_IDS}
+    if set(prices) != set(CODEX_MODEL_IDS):
+        missing = sorted(set(CODEX_MODEL_IDS) - set(prices))
+        raise ValueError("official pricing page is missing Codex models: " + ", ".join(missing))
     payload = {
         "schema_version": 2,
         "provider": "openai",

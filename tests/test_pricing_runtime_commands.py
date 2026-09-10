@@ -2,13 +2,15 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 import json
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from codex_usage_hud.config import UserConfig
+from codex_usage_hud.config import ModelPrice, ProviderSettings, UserConfig
 from codex_usage_hud.runtime_commands import GeneralCommandPorts, handle_general_command
+from codex_usage_hud.pricing_sync import OfficialPrice
 
 
 def _ports(state: dict[str, UserConfig], **overrides: object) -> GeneralCommandPorts:
@@ -234,6 +236,51 @@ def test_apply_pricing_sync_replaces_provider_prices_and_clears_unread_state() -
     assert state["config"].pricing_sync["unread_change_count"] == 0
     assert state["config"].pricing_sync["pending_prices"] == []
     assert state["config"].pricing_versions
+
+
+def test_manual_official_preview_lists_prices_when_there_are_no_differences() -> None:
+    row = {
+        "input": 10,
+        "cached_input": 1,
+        "cache_write": 12.5,
+        "output": 50,
+        "reasoning": 50,
+    }
+    config = replace(
+        UserConfig.defaults(),
+        provider_settings={
+            "custom": ProviderSettings(
+                model_prices={"gpt-6-astra": ModelPrice.from_mapping(row, "gpt-6-astra")}
+            )
+        },
+    )
+    state = {"config": config}
+    official = OfficialPrice(
+        model="gpt-6-astra",
+        input=Decimal("10"),
+        cached_input=Decimal("1"),
+        cache_write=Decimal("12.5"),
+        output=Decimal("50"),
+        reasoning=Decimal("50"),
+    )
+
+    with patch(
+        "codex_usage_hud.runtime_commands.fetch_pricing_snapshot",
+        return_value=({"gpt-6-astra": official}, {"checked_at": "2026-01-01T00:00:00Z"}),
+    ):
+        result = handle_general_command(
+            {
+                "action": "fetchPricesPreview",
+                "provider": "custom",
+                "reason": "official-sync",
+            },
+            _ports(state),
+        )
+
+    assert result["pricingPreview"]["changeCount"] == 0
+    assert result["pricingPreview"]["modelCount"] == 1
+    assert result["pricingPreview"]["prices"][0]["model"] == "gpt-6-astra"
+    assert state["config"] == config
 
 
 def test_export_price_file_uses_current_prices_or_builtin_template(tmp_path: Path) -> None:
