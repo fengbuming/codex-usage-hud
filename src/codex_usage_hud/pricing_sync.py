@@ -38,13 +38,17 @@ class _TableParser(HTMLParser):
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
         self.rows: list[list[str]] = []
+        self.tables: list[list[list[str]]] = []
+        self._table: list[list[str]] | None = None
         self._row: list[str] | None = None
         self._cell: list[str] | None = None
         self.text: list[str] = []
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        if tag.lower() == "tr": self._row = []
-        elif tag.lower() in {"td", "th"} and self._row is not None: self._cell = []
+        tag = tag.lower()
+        if tag == "table": self._table = []
+        elif tag == "tr": self._row = []
+        elif tag in {"td", "th"} and self._row is not None: self._cell = []
 
     def handle_data(self, data: str) -> None:
         normalized = " ".join(data.split())
@@ -57,8 +61,15 @@ class _TableParser(HTMLParser):
         if tag in {"td", "th"} and self._cell is not None and self._row is not None:
             self._row.append(" ".join(self._cell).strip()); self._cell = None
         elif tag == "tr" and self._row is not None:
-            if self._row: self.rows.append(self._row)
+            if self._row:
+                self.rows.append(self._row)
+                if self._table is not None:
+                    self._table.append(self._row)
             self._row = None
+        elif tag == "table" and self._table is not None:
+            if self._table:
+                self.tables.append(self._table)
+            self._table = None
 
 
 _MONEY = re.compile(r"(?:\$\s*)?([0-9]+(?:\.[0-9]+)?)\s*(?:USD)?", re.I)
@@ -76,7 +87,8 @@ def parse_openai_models_html(body: str | bytes) -> dict[str, OfficialPrice]:
     raw = body.decode("utf-8", "replace") if isinstance(body, bytes) else str(body)
     parser = _TableParser(); parser.feed(raw)
     records: dict[str, OfficialPrice] = {}
-    for row in parser.rows:
+    table_rows = parser.tables[0] if parser.tables else parser.rows
+    for row in table_rows:
         if len(row) < 3: continue
         joined = " ".join(row)
         model_match = _MODEL.search(row[0]) or _MODEL.search(joined)

@@ -1,5 +1,5 @@
 {
-  "checked_at": "2026-09-10T06:33:52.614256Z",
+  "checked_at": "2026-09-10T06:47:53.176775Z",
   "currency": "USD",
   "prices": [
     {
@@ -40,106 +40,6 @@
       "model": "gpt-5.6-luna",
       "output": 1.2,
       "reasoning": 1.2,
-      "unit": "USD_per_1M_tokens"
-    },
-    {
-      "cache_write": 15.625,
-      "cached_input": 1.25,
-      "currency": "USD",
-      "input": 12.5,
-      "model": "gpt-5.6-cyber",
-      "output": 75.0,
-      "reasoning": 75.0,
-      "unit": "USD_per_1M_tokens"
-    },
-    {
-      "cache_write": 0.0,
-      "cached_input": 0.4,
-      "currency": "USD",
-      "input": 32.0,
-      "model": "gpt-realtime-2.1",
-      "output": 64.0,
-      "reasoning": 64.0,
-      "unit": "USD_per_1M_tokens"
-    },
-    {
-      "cache_write": 0.0,
-      "cached_input": 0.3,
-      "currency": "USD",
-      "input": 10.0,
-      "model": "gpt-realtime-2.1-mini",
-      "output": 20.0,
-      "reasoning": 20.0,
-      "unit": "USD_per_1M_tokens"
-    },
-    {
-      "cache_write": 0.0,
-      "cached_input": 2.0,
-      "currency": "USD",
-      "input": 8.0,
-      "model": "gpt-image-2.5-sunburst",
-      "output": 30.0,
-      "reasoning": 30.0,
-      "unit": "USD_per_1M_tokens"
-    },
-    {
-      "cache_write": 0.0,
-      "cached_input": 2.0,
-      "currency": "USD",
-      "input": 8.0,
-      "model": "gpt-image-2.5-flare",
-      "output": 30.0,
-      "reasoning": 30.0,
-      "unit": "USD_per_1M_tokens"
-    },
-    {
-      "cache_write": 0.0,
-      "cached_input": 1.0,
-      "currency": "USD",
-      "input": 4.0,
-      "model": "gpt-image-2",
-      "output": 15.0,
-      "reasoning": 15.0,
-      "unit": "USD_per_1M_tokens"
-    },
-    {
-      "cache_write": 0.0,
-      "cached_input": 10.0,
-      "currency": "USD",
-      "input": 2.5,
-      "model": "gpt-4o-transcribe",
-      "output": 0.006,
-      "reasoning": 0.006,
-      "unit": "USD_per_1M_tokens"
-    },
-    {
-      "cache_write": 0.0,
-      "cached_input": 5.0,
-      "currency": "USD",
-      "input": 1.25,
-      "model": "gpt-4o-mini-transcribe",
-      "output": 0.003,
-      "reasoning": 0.003,
-      "unit": "USD_per_1M_tokens"
-    },
-    {
-      "cache_write": 0.175,
-      "cached_input": 1.75,
-      "currency": "USD",
-      "input": 5.3,
-      "model": "gpt-5.3-codex",
-      "output": 14.0,
-      "reasoning": 14.0,
-      "unit": "USD_per_1M_tokens"
-    },
-    {
-      "cache_write": 1.0,
-      "cached_input": 4.0,
-      "currency": "USD",
-      "input": 100.0,
-      "model": "o4-mini-2025-04-16",
-      "output": 16.0,
-      "reasoning": 16.0,
       "unit": "USD_per_1M_tokens"
     }
   ],
