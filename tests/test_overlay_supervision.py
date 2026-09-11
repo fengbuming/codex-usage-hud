@@ -1,3 +1,4 @@
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -193,3 +194,183 @@ def test_desktop_overlay_adapts_health_decision_from_pure_owner() -> None:
         desktop_overlay.WORK_OVERLAY_HELPER_HEARTBEAT_TIMEOUT_SECONDS
     )
     assert overlay._process is process
+
+
+class _FakeClock:
+    """Monotonic/wall clock the tests can advance without sleeping."""
+
+    def __init__(self, now: float = 1_000.0) -> None:
+        self.now = now
+
+    def monotonic(self) -> float:
+        return self.now
+
+    def time(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+
+class _FakeHelper:
+    """Stand-in for the overlay helper subprocess."""
+
+    def __init__(
+        self,
+        *,
+        exit_code: int | None,
+        command: list[str],
+        spawns: list[list[str]],
+    ) -> None:
+        spawns.append(command)
+        self._exit_code = exit_code
+        self.pid = 1_000 + len(spawns)
+        self._handle = None
+
+    @property
+    def returncode(self) -> int | None:
+        return self._exit_code
+
+    def poll(self) -> int | None:
+        return self._exit_code
+
+    def wait(self, timeout: float | None = None) -> int | None:
+        return self._exit_code
+
+    def terminate(self) -> None:
+        return None
+
+    def kill(self) -> None:
+        return None
+
+
+def _build_overlay(
+    tmp_path: Path,
+    clock: _FakeClock,
+    monkeypatch,
+    *,
+    exit_code: int | None,
+) -> tuple[DesktopWorkOverlay, list[list[str]]]:
+    spawns: list[list[str]] = []
+
+    def fake_popen(command: list[str], **kwargs: object) -> _FakeHelper:
+        return _FakeHelper(exit_code=exit_code, command=command, spawns=spawns)
+
+    monkeypatch.setattr(desktop_overlay.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(
+        desktop_overlay,
+        "_windows_user_object_count",
+        lambda process: None,
+    )
+    overlay = DesktopWorkOverlay(
+        enabled=True,
+        clock=clock,
+        runtime_dir=lambda: tmp_path,
+        runtime_available=lambda: True,
+        state_path=tmp_path / "work-overlay-1-1.json",
+    )
+    overlay._wait_for_helper_ready = lambda: True
+    return overlay, spawns
+
+
+_REST_PAYLOAD = {
+    "bubbleVisible": True,
+    "phase": "focus",
+    "title": "休息一下",
+    "message": "喝口水",
+}
+
+
+_TICKS = 12
+# The storm was measured at roughly one helper process per renderer tick, so a
+# correct supervisor must stay far below the tick count.
+_MAX_SPAWNS_PER_BURST = 3
+
+
+def test_rest_reminder_republish_does_not_respawn_helper_at_tick_speed(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """A helper that exits cleanly must not be respawned once per renderer tick.
+
+    Regression: the renderer republishes an unchanged rest-reminder payload on
+    every tick, and the overlay used to zero its restart backoff on each of
+    those calls. A clean helper exit carried no backoff either, so the
+    supervisor spawned a full Python/PySide6 process per tick (~150/minute),
+    which starved the Codex renderer into a blank window.
+    """
+    clock = _FakeClock()
+    overlay, spawns = _build_overlay(tmp_path, clock, monkeypatch, exit_code=0)
+
+    for _ in range(_TICKS):
+        overlay.update_rest_reminder(_REST_PAYLOAD)
+
+    assert len(spawns) == _MAX_SPAWNS_PER_BURST
+    assert overlay._helper_breaker_until > clock.monotonic()
+
+
+def test_rest_reminder_republish_keeps_single_helper_while_it_stays_up(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    clock = _FakeClock()
+    overlay, spawns = _build_overlay(tmp_path, clock, monkeypatch, exit_code=None)
+
+    for _ in range(_TICKS):
+        overlay.update_rest_reminder(_REST_PAYLOAD)
+
+    assert len(spawns) == 1
+
+
+def test_rest_reminder_retries_once_breaker_backoff_expires(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    clock = _FakeClock()
+    overlay, spawns = _build_overlay(tmp_path, clock, monkeypatch, exit_code=0)
+
+    for _ in range(_TICKS):
+        overlay.update_rest_reminder(_REST_PAYLOAD)
+    blocked = len(spawns)
+    assert blocked == _MAX_SPAWNS_PER_BURST
+
+    clock.advance(
+        desktop_overlay.WORK_OVERLAY_HELPER_BREAKER_BACKOFF_SECONDS + 1.0
+    )
+    overlay.update_rest_reminder(_REST_PAYLOAD)
+
+    assert len(spawns) == blocked + 1
+
+
+def test_system_notice_honours_helper_restart_backoff(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    clock = _FakeClock()
+    overlay, spawns = _build_overlay(tmp_path, clock, monkeypatch, exit_code=0)
+
+    results = [
+        overlay.show_system_notice(title="Codex HUD", message="正在恢复")
+        for _ in range(_TICKS)
+    ]
+
+    assert len(spawns) == _MAX_SPAWNS_PER_BURST
+    assert results[-1] is False
+
+
+def test_reset_runtime_availability_clears_helper_breaker(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    clock = _FakeClock()
+    overlay, spawns = _build_overlay(tmp_path, clock, monkeypatch, exit_code=0)
+
+    for _ in range(_TICKS):
+        overlay.update_rest_reminder(_REST_PAYLOAD)
+    blocked = len(spawns)
+
+    overlay.reset_runtime_availability()
+    overlay.update_rest_reminder(_REST_PAYLOAD)
+
+    assert overlay._helper_breaker_until == 0.0
+    assert len(spawns) == blocked + 1

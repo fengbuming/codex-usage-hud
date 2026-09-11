@@ -49,6 +49,15 @@ WORK_OVERLAY_SYSTEM_ACTION_READY = "systemActionReady"
 WORK_OVERLAY_RESTART_ACTION_ID = "restart-codex-for-renderer"
 WORK_OVERLAY_SYSTEM_NOTICE_ID = "renderer-recovery-notice"
 WORK_OVERLAY_SYSTEM_ACTION_READY_TIMEOUT_SECONDS = 2.0
+# A helper that dies faster than this never rendered a single frame. Overlay
+# entry points are driven by the renderer tick (and by the rest-reminder
+# payload, which is republished on every tick), so without a breaker a helper
+# that cannot stay up gets respawned at tick speed -- measured at ~150
+# processes/minute, which starves the Codex renderer into a blank window.
+WORK_OVERLAY_HELPER_RAPID_EXIT_SECONDS = 5.0
+WORK_OVERLAY_HELPER_RAPID_EXIT_LIMIT = 3
+WORK_OVERLAY_HELPER_RAPID_EXIT_WINDOW_SECONDS = 30.0
+WORK_OVERLAY_HELPER_BREAKER_BACKOFF_SECONDS = 120.0
 
 _LOGGER = logging.getLogger("codex_usage_hud.desktop_overlay")
 _SUBPROCESS_POPEN_TYPE = subprocess.Popen
@@ -164,6 +173,11 @@ class DesktopWorkOverlay:
         self._last_helper_exit_code: int | None = None
         self._helper_started_at = 0.0
         self._last_helper_heartbeat_at = 0.0
+        # Rapid-exit circuit breaker: monotonic start stamp, recent rapid exits,
+        # and the deadline before which no restart is attempted at all.
+        self._helper_started_monotonic = 0.0
+        self._helper_rapid_exits: deque[float] = deque()
+        self._helper_breaker_until = 0.0
         self._last_payload_items: list[dict[str, object]] | None = None
         self._last_theme_payload: dict[str, object] = {}
         self._system_action: dict[str, object] | None = None
@@ -253,12 +267,16 @@ class DesktopWorkOverlay:
             self._write_state(payload_items, theme=theme_payload, close=False)
         self._last_payload_items = [dict(item) for item in payload_items]
         self._last_theme_payload = dict(theme_payload)
-        if self._process is None and self._clock.monotonic() >= self._restart_blocked_until:
-            self._start()
+        self._maybe_start_helper(self._clock.monotonic())
         self._ensure_keepalive_worker_if_runtime_started()
 
     def update_rest_reminder(self, payload: Mapping[str, object] | None) -> bool:
-        """Publish one non-session rest bubble, independently of session limits."""
+        """Publish one non-session rest bubble, independently of session limits.
+
+        The renderer republishes the same payload on every tick, so the restart
+        gate (``_maybe_start_helper``) is the only thing standing between a
+        helper that cannot stay up and an unbounded respawn storm.
+        """
         if self._closed:
             return False
         next_payload = (
@@ -266,21 +284,20 @@ class DesktopWorkOverlay:
             if isinstance(payload, Mapping) and bool(payload.get("bubbleVisible"))
             else {}
         )
+        now = self._clock.monotonic()
         if next_payload == self._rest_reminder:
             if not next_payload:
                 return False
             if not self._runtime_available():
                 self._report_unavailable_once(self._unavailable_reason)
                 return False
-            self._ensure_helper_healthy(self._clock.monotonic())
-            if self._process is None:
-                self._restart_blocked_until = 0.0
+            self._ensure_helper_healthy(now)
             process = self._process
             if process is not None and process.poll() is not None:
                 self._last_helper_exit_code = int(process.returncode or 0)
+                self._note_helper_exit(self._last_helper_exit_code, now)
                 self._process = None
-            if self._process is None and self._clock.monotonic() >= self._restart_blocked_until:
-                self._start()
+            self._maybe_start_helper(now)
             self._ensure_keepalive_worker_if_runtime_started()
             return self._process is not None
         self._rest_reminder = next_payload
@@ -295,9 +312,7 @@ class DesktopWorkOverlay:
         if not self._runtime_available():
             self._report_unavailable_once(self._unavailable_reason)
             return False
-        self._ensure_helper_healthy(self._clock.monotonic())
-        if self._process is None:
-            self._restart_blocked_until = 0.0
+        self._ensure_helper_healthy(now)
         payload_items = list(self._last_payload_items or [])
         theme_payload = self._last_theme_payload or self._theme_payload()
         self._write_state(payload_items, theme=theme_payload, close=False)
@@ -306,9 +321,9 @@ class DesktopWorkOverlay:
         process = self._process
         if process is not None and process.poll() is not None:
             self._last_helper_exit_code = int(process.returncode or 0)
+            self._note_helper_exit(self._last_helper_exit_code, now)
             self._process = None
-        if self._process is None and self._clock.monotonic() >= self._restart_blocked_until:
-            self._start()
+        self._maybe_start_helper(now)
         self._ensure_keepalive_worker_if_runtime_started()
         return self._process is not None
 
@@ -327,7 +342,8 @@ class DesktopWorkOverlay:
         if not self._runtime_available():
             self._report_unavailable_once(self._unavailable_reason)
             return False
-        self._ensure_helper_healthy(self._clock.monotonic())
+        now = self._clock.monotonic()
+        self._ensure_helper_healthy(now)
         payload_items = list(self._last_payload_items or [])
         theme_payload = self._theme_payload()
         self._write_state(payload_items, theme=theme_payload, close=False)
@@ -336,10 +352,9 @@ class DesktopWorkOverlay:
         process = self._process
         if process is not None and process.poll() is not None:
             self._last_helper_exit_code = int(process.returncode or 0)
+            self._note_helper_exit(self._last_helper_exit_code, now)
             self._process = None
-        started_now = self._process is None
-        if self._process is None:
-            self._start()
+        started_now = self._process is None and self._maybe_start_helper(now)
         if self._process is None:
             return False
         if started_now and not self._wait_for_helper_ready():
@@ -372,8 +387,7 @@ class DesktopWorkOverlay:
         self._write_state(payload_items, theme=theme_payload, close=False)
         self._last_payload_items = [dict(item) for item in payload_items]
         self._last_theme_payload = dict(theme_payload)
-        if self._process is None and self._clock.monotonic() >= self._restart_blocked_until:
-            self._start()
+        self._maybe_start_helper(self._clock.monotonic())
         self._ensure_keepalive_worker_if_runtime_started()
         return self._process is not None
 
@@ -398,8 +412,7 @@ class DesktopWorkOverlay:
         self._write_state(payload_items, theme=theme_payload, close=False)
         self._last_payload_items = [dict(item) for item in payload_items]
         self._last_theme_payload = dict(theme_payload)
-        if self._process is None and self._clock.monotonic() >= self._restart_blocked_until:
-            self._start()
+        self._maybe_start_helper(self._clock.monotonic())
         self._ensure_keepalive_worker_if_runtime_started()
         return self._process is not None
 
@@ -423,7 +436,8 @@ class DesktopWorkOverlay:
             self._report_unavailable_once(self._unavailable_reason)
             self._system_action = None
             return False
-        self._ensure_helper_healthy(self._clock.monotonic())
+        now = self._clock.monotonic()
+        self._ensure_helper_healthy(now)
         payload_items = list(self._last_payload_items or [])
         theme_payload = self._theme_payload()
         self._write_state(payload_items, theme=theme_payload, close=False)
@@ -432,9 +446,9 @@ class DesktopWorkOverlay:
         process = self._process
         if process is not None and process.poll() is not None:
             self._last_helper_exit_code = int(process.returncode or 0)
+            self._note_helper_exit(self._last_helper_exit_code, now)
             self._process = None
-        if self._process is None:
-            self._start()
+        self._maybe_start_helper(now)
         if self._process is None:
             self._system_action_unavailable_reason = (
                 self._unavailable_reason or "unable to start PySide6 desktop overlay helper"
@@ -571,8 +585,7 @@ class DesktopWorkOverlay:
             theme=self._last_theme_payload,
             close=False,
         )
-        if self._process is None and now >= self._restart_blocked_until:
-            self._start()
+        self._maybe_start_helper(now)
 
     def _ensure_keepalive_worker(self) -> None:
         """Keep visible bubbles alive even if the renderer loop is blocked.
@@ -762,6 +775,13 @@ class DesktopWorkOverlay:
         self._stop_keepalive_worker()
         process = self._process
         self._process = None
+        if process is not None:
+            # A teardown of a just-started helper ("did not become ready") is a
+            # rapid failure too, and must feed the breaker.
+            self._note_helper_exit(
+                int(getattr(process, "returncode", 0) or 0),
+                self._clock.monotonic(),
+            )
         try:
             state_exists = self._state_path.exists()
         except OSError:
@@ -805,7 +825,54 @@ class DesktopWorkOverlay:
         self._switch_completed_command = None
         self._switch_completed_until = 0.0
         self._helper_started_at = 0.0
+        self._helper_started_monotonic = 0.0
         self._last_helper_heartbeat_at = 0.0
+
+    def _maybe_start_helper(self, now: float) -> bool:
+        """Start the helper only when backoff and the breaker allow it.
+
+        Every overlay entry point funnels through here. The renderer republishes
+        an unchanged rest-reminder payload on every tick, so a helper that keeps
+        exiting immediately must never be respawned at caller speed: that is the
+        respawn storm which starves the Codex renderer into a blank window.
+        """
+        if self._process is not None:
+            return True
+        if now < float(self._restart_blocked_until or 0.0):
+            return False
+        if now < float(self._helper_breaker_until or 0.0):
+            return False
+        self._start()
+        return self._process is not None
+
+    def _note_helper_exit(self, exit_code: int, now: float) -> None:
+        """Feed one observed helper exit into the rapid-exit circuit breaker."""
+        started_at = float(self._helper_started_monotonic or 0.0)
+        if started_at <= 0.0 or (
+            now - started_at
+        ) >= WORK_OVERLAY_HELPER_RAPID_EXIT_SECONDS:
+            # The helper lived long enough to count as a fresh lifecycle.
+            self._helper_rapid_exits.clear()
+            return
+        self._helper_rapid_exits.append(now)
+        window = WORK_OVERLAY_HELPER_RAPID_EXIT_WINDOW_SECONDS
+        while self._helper_rapid_exits and (
+            now - self._helper_rapid_exits[0]
+        ) > window:
+            self._helper_rapid_exits.popleft()
+        if len(self._helper_rapid_exits) < WORK_OVERLAY_HELPER_RAPID_EXIT_LIMIT:
+            return
+        self._helper_rapid_exits.clear()
+        self._helper_breaker_until = max(
+            self._helper_breaker_until,
+            now + WORK_OVERLAY_HELPER_BREAKER_BACKOFF_SECONDS,
+        )
+        _LOGGER.warning(
+            "work_overlay_helper_rapid_exit_breaker tripped exit_code=%s "
+            "backoff_seconds=%s",
+            exit_code,
+            WORK_OVERLAY_HELPER_BREAKER_BACKOFF_SECONDS,
+        )
 
     def _start(self) -> None:
         try:
@@ -821,8 +888,10 @@ class DesktopWorkOverlay:
             started_at = self._clock.time()
             self._helper_started_at = started_at
             self._last_helper_heartbeat_at = started_at
+            self._helper_started_monotonic = self._clock.monotonic()
         except Exception:
             self._process = None
+            self._helper_started_monotonic = 0.0
             self._restart_blocked_until = (
                 self._clock.monotonic() + WORK_OVERLAY_RESTART_BACKOFF_SECONDS
             )
@@ -875,8 +944,12 @@ class DesktopWorkOverlay:
         )
         if decision.action == overlay_supervision.EXITED:
             self._last_helper_exit_code = int(decision.exit_code or 0)
+            self._note_helper_exit(self._last_helper_exit_code, now)
             self._process = None
-            self._restart_blocked_until = decision.restart_blocked_until
+            self._restart_blocked_until = max(
+                float(decision.restart_blocked_until or 0.0),
+                float(self._helper_breaker_until or 0.0),
+            )
             if decision.reason:
                 self._report_unavailable_once(decision.reason)
             return
@@ -899,6 +972,10 @@ class DesktopWorkOverlay:
         reason: str,
     ) -> None:
         _LOGGER.warning("work_overlay_helper_restart reason=%s", reason)
+        self._note_helper_exit(
+            int(getattr(process, "returncode", 0) or 0),
+            now,
+        )
         try:
             process.terminate()
             process.wait(timeout=1.0)
@@ -909,9 +986,10 @@ class DesktopWorkOverlay:
                 pass
         self._process = None
         self._helper_started_at = 0.0
+        self._helper_started_monotonic = 0.0
         self._last_helper_heartbeat_at = 0.0
         self._restart_blocked_until = now
-        self._start()
+        self._maybe_start_helper(now)
 
     def _refresh_helper_heartbeat(self) -> None:
         try:
@@ -928,6 +1006,11 @@ class DesktopWorkOverlay:
         self._unavailable_reason = ""
         self._unavailable_reported = False
         self._restart_blocked_until = 0.0
+        # An explicit user action ("enable bubbles") is a legitimate retry and
+        # clears the rapid-exit breaker, otherwise a past storm would keep the
+        # overlay suppressed for its full backoff window.
+        self._helper_rapid_exits.clear()
+        self._helper_breaker_until = 0.0
         return self._runtime_available()
 
     def _runtime_available(self) -> bool:
