@@ -378,9 +378,22 @@ class RendererHudPayloadTests(unittest.TestCase):
         self.assertNotIn("Tk 独立窗口", renderer_hud.RENDERER_HUD_SCRIPT)
         self.assertIn("codex-usage-hud-settings-loading-track", renderer_hud.RENDERER_HUD_SCRIPT)
         self.assertIn("openSettingsLoading", renderer_hud.RENDERER_HUD_SCRIPT)
-        self.assertIn('mode: "pricing-fetch"', renderer_hud.RENDERER_HUD_SCRIPT)
         self.assertIn('preserveOverlay: true });', renderer_hud.RENDERER_HUD_SCRIPT)
         self.assertIn("pricingPreviewRequestId", renderer_hud.RENDERER_HUD_SCRIPT)
+        self.assertIn("requestLatestPricingPreview", renderer_hud.RENDERER_HUD_SCRIPT)
+        self.assertIn("pricingCachedPreview", renderer_hud.RENDERER_HUD_SCRIPT)
+        self.assertIn("最后获取：", renderer_hud.RENDERER_HUD_SCRIPT)
+        self.assertIn('data-action="pricing-preview-refresh"', renderer_hud.RENDERER_HUD_SCRIPT)
+        self.assertIn('data-price-changed="true"', renderer_hud.RENDERER_HUD_SCRIPT)
+        self.assertIn("<del>${escapeHtml(displayPrice(change.local))}</del>", renderer_hud.RENDERER_HUD_SCRIPT)
+        self.assertIn('const canCommit = !!pricingWorkflowState.importPayload', renderer_hud.RENDERER_HUD_SCRIPT)
+        self.assertIn('const commitLabel = officialPreview', renderer_hud.RENDERER_HUD_SCRIPT)
+        self.assertIn('data-official-missing="${officialMissing ? "true" : "false"}"', renderer_hud.RENDERER_HUD_SCRIPT)
+        self.assertIn('"官方未收录"', renderer_hud.RENDERER_HUD_SCRIPT)
+        self.assertIn('const committablePrices = cached.prices.filter((row) => !row.officialMissing)', renderer_hud.RENDERER_HUD_SCRIPT)
+        self.assertIn('"暂无价格"', renderer_hud.RENDERER_HUD_SCRIPT)
+        self.assertIn('setSettingsStatus("当前没有可应用的价格更新，请先重新获取。", "error")', renderer_hud.RENDERER_HUD_SCRIPT)
+        self.assertNotIn('data-primary="true" disabled>${hasPriceChangeCount', renderer_hud.RENDERER_HUD_SCRIPT)
         self.assertIn("closePricingPreviewLoading", renderer_hud.RENDERER_HUD_SCRIPT)
         self.assertIn("codex-usage-hud-pricing-dialog > .codex-usage-hud-pricing-preview-meta", renderer_hud.RENDERER_HUD_SCRIPT)
         self.assertIn("codex-usage-hud-pricing-dialog > .codex-usage-hud-pricing-table-scroll", renderer_hud.RENDERER_HUD_SCRIPT)
@@ -737,6 +750,95 @@ class RendererHudPayloadTests(unittest.TestCase):
         request_row_details = payload["requestRowDetails"]
         self.assertIsInstance(request_row_details, list)
         self.assertEqual(request_row, request_row_details[0]["text"])
+
+    def test_pricing_unread_differences_badge_settings_and_open_price_dialog(self) -> None:
+        script = renderer_hud.RENDERER_HUD_SCRIPT
+
+        # The top-bar settings button (collapsed and expanded) carries the dot.
+        self.assertEqual(script.count("function settingsButtonMarkup()"), 1)
+        self.assertEqual(script.count("${settingsButtonMarkup()}"), 1)
+        self.assertIn(
+            'class="codex-usage-hud-settings-alert-dot" data-pricing-settings-dot="true"',
+            script,
+        )
+        self.assertIn("codex-usage-hud-settings-button {\n            position: relative;", script)
+        self.assertIn("codex-usage-hud-settings-alert-dot[hidden]", script)
+        self.assertIn("codex-usage-hud-pricing-check-dot[hidden]", script)
+
+        # Both indicators are driven by the background sync's unread count.
+        self.assertIn("function pricingUnreadChangeCount(", script)
+        self.assertIn("function syncPricingUnreadIndicators(", script)
+        self.assertIn("settings?.pricing_sync?.unread_change_count", script)
+        self.assertIn("syncPricingUnreadIndicators(root);", script)
+
+        # The panel check button keeps one dot that is toggled, not re-rendered.
+        self.assertIn(
+            '检查价格更新<span class="codex-usage-hud-pricing-check-dot" '
+            'data-pricing-sync-dot="true" aria-hidden="true" '
+            '${pricingUnreadCount ? "" : "hidden"}></span>',
+            script,
+        )
+
+        # Opening settings must also surface the cached official price list.
+        self.assertIn("function openBackgroundPricingPreview(", script)
+        self.assertIn("openBackgroundPricingPreview,", script)
+        open_start = script.index('if (action.dataset.action === "settings-open")')
+        open_end = script.index('if (action.dataset.action === "settings-close")', open_start)
+        handler = script[open_start:open_end]
+        self.assertIn(
+            'renderSettingsModal("settings", "", { resetProviderDraft: true });',
+            handler,
+        )
+        self.assertIn("openBackgroundPricingPreview();", handler)
+        self.assertIn("refreshing: false,", script)
+
+    def test_pricing_scope_folds_to_one_row_per_model(self) -> None:
+        script = renderer_hud.RENDERER_HUD_SCRIPT
+
+        # Model ids may carry a "<provider>/" scope; both the matcher and the
+        # display path must ignore it so one model renders once.
+        self.assertIn("function pricingBareModelId(", script)
+        self.assertIn("function pricingCachedRows(", script)
+        self.assertIn(
+            'return raw.includes("/") ? raw.slice(raw.lastIndexOf("/") + 1) : raw;',
+            script,
+        )
+        self.assertIn(
+            'return raw.slice(raw.lastIndexOf("/") + 1).trim() || raw;',
+            script,
+        )
+
+        # Cached pending_* rows are folded by bare model id, and a "removed"
+        # entry contradicted by an official row in the same payload is dropped.
+        cached_start = script.index("function pricingCachedPreview(")
+        cached_end = script.index("function setPricingPreviewRefreshState(", cached_start)
+        cached = script[cached_start:cached_end]
+        self.assertIn("pricingCachedRows(sync.pending_prices", cached)
+        self.assertIn("pricingCachedRows(", cached)
+        self.assertIn("const officialModels = new Set(", cached)
+        self.assertIn('!== "removed"', cached)
+
+    def test_pricing_commit_refreshes_dialog_and_price_table(self) -> None:
+        script = renderer_hud.RENDERER_HUD_SCRIPT
+
+        status_start = script.index("function applyPricingCommandStatus(")
+        status_end = script.index("\n      function ", status_start + 1)
+        status = script[status_start:status_end]
+
+        # A successful 确认更新 must close the price dialog and repaint the price
+        # table, otherwise the UI keeps showing the pre-commit unit prices.
+        self.assertIn('if (action === "pricingImportCommit") {', status)
+        self.assertIn("closeSettingsConfirm();", status)
+        self.assertIn("renderSettingsProviderEditor();", status)
+        self.assertIn("syncPricingApplyDirtyState();", status)
+        self.assertIn("syncPricingUnreadIndicators();", status)
+        # Unsaved per-provider price drafts must survive the repaint.
+        self.assertIn("!settingsDirtyProviders.has(activeProvider)", status)
+        # Errors keep the dialog open so the user can retry.
+        self.assertLess(
+            status.index('if (String(status.kind || "") === "error") return;'),
+            status.index('if (action === "pricingImportCommit") {'),
+        )
 
     def test_settings_auto_save_keeps_model_price_drafts_pending_for_apply(self) -> None:
         script = renderer_hud.RENDERER_HUD_SCRIPT

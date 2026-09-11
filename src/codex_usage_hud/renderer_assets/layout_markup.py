@@ -34,11 +34,15 @@ TEXT = r"""
         `;
       }
 
+      function settingsButtonMarkup() {
+        // The pricing-alert dot mirrors background pricing-sync differences. It
+        // stays hidden until the settings domain reports unread changes.
+        return `<button class="codex-usage-hud-settings-button" data-action="settings-open" title="设置" aria-label="设置">⚙<span class="codex-usage-hud-settings-alert-dot" data-pricing-settings-dot="true" aria-hidden="true" hidden></span></button>`;
+      }
+
       function panelMarkup(name, glyph, ariaLabel) {
         const glyphMarkup = glyph ? `<span class="codex-usage-hud-glyph">${glyph}</span>` : "";
-        const settingsButtonMarkup = name === "top"
-          ? `<button class="codex-usage-hud-settings-button" data-action="settings-open" title="设置" aria-label="设置">⚙</button>`
-          : "";
+        const panelSettingsMarkup = name === "top" ? settingsButtonMarkup() : "";
         const tokenBadgeMarkup = name === "request"
           ? (composerBadgeEnabled
             ? `<span class="codex-usage-hud-token-badge" data-composer-badge="idle"><span class="codex-usage-hud-token-badge-text" data-field="requestComposerTokens">TikToken:0 Ts</span></span>`
@@ -65,7 +69,7 @@ TEXT = r"""
                 ${name === "top" ? `<span class="codex-usage-hud-progress-strip-viewport"><span class="codex-usage-hud-progress-strip" data-field="topCollapsedProgress"></span></span>` : ""}
                 <span class="codex-usage-hud-line" data-field="${name}Line"></span>
               </button>
-              ${settingsButtonMarkup}
+              ${panelSettingsMarkup}
               ${tokenBadgeMarkup}
               ${backgroundNotificationMarkup}
             </div>
@@ -85,7 +89,7 @@ TEXT = r"""
               <div class="codex-usage-hud-title" data-action="toggle" data-field="topTitle"></div>
               <div class="codex-usage-hud-session-meta" data-field="topSession"></div>
               <div class="codex-usage-hud-cache-pill" data-field="topCacheProgress"></div>
-              <button class="codex-usage-hud-settings-button" data-action="settings-open" title="设置" aria-label="设置">⚙</button>
+              ${settingsButtonMarkup()}
             </div>
             <div class="codex-usage-hud-top-body">
               <div class="codex-usage-hud-alert" data-field-panel="topWarnings" hidden>

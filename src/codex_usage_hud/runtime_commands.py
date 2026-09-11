@@ -49,7 +49,7 @@ from .process_environment import (
     external_process_environment,
 )
 from .desktop_overlay import DesktopWorkOverlay
-from .pricing_sync import OfficialPrice, classify_price_changes, fetch_pricing_snapshot
+from .pricing_sync import OfficialPrice, classify_price_changes, fetch_pricing_snapshot, merge_pricing_rows
 from .desktop_overlay_setup import (
     _desktop_overlay_dependency_status,
     _pyside6_version,
@@ -1503,6 +1503,16 @@ def handle_general_command(
                 conflict_policy=conflict_policy,
             )
             updated = _sync_imported_current_prices(updated, preview)
+            applied_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+            sync = dict(updated.pricing_sync)
+            sync.update(
+                {
+                    "pending_changes": [],
+                    "unread_change_count": 0,
+                    "last_applied_at": applied_at,
+                }
+            )
+            updated = replace(updated, pricing_sync=sync)
             ports.save_config(updated)
             status = _status(
                 "价格导入完成："
@@ -1513,10 +1523,9 @@ def handle_general_command(
                 "addedCount": result.added_count,
                 "updatedCount": result.updated_count,
                 "skippedCount": result.skipped_count,
-                "importedAt": datetime.now(timezone.utc).isoformat().replace(
-                    "+00:00", "Z"
-                ),
+                "importedAt": applied_at,
             }
+            status["pricingSync"] = sync
             return status
         if action == "fetchPricesPreview":
             config = ports.load_config()
@@ -1528,9 +1537,16 @@ def handle_general_command(
             )
             url = str(command.get("url") or provider_url or "").strip()
             official = str(command.get("reason") or "") == "official-sync"
+            local_prices = (
+                config.provider_settings[provider].model_prices
+                if provider and provider in config.provider_settings
+                else config.model_prices
+            )
             metadata: dict[str, object] = {}
             if official:
-                official_prices, metadata = fetch_pricing_snapshot()
+                official_prices, metadata = fetch_pricing_snapshot(
+                    extra_model_ids=[str(model) for model in local_prices]
+                )
                 fetched = {
                     model: ModelPrice(
                         input=float(price.input), cached_input=float(price.cached_input),
@@ -1562,11 +1578,6 @@ def handle_general_command(
                     if isinstance(row, Mapping)
                 ]
             preview = config.preview_pricing_import(payload)
-            local_prices = (
-                config.provider_settings[provider].model_prices
-                if provider and provider in config.provider_settings
-                else config.model_prices
-            )
             price_changes = classify_price_changes(
                 local_prices,
                 (
@@ -1582,23 +1593,55 @@ def handle_general_command(
                     if isinstance(value, ModelPrice)
                 ),
             )
+            checked_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+            preview_payload = preview.to_dict()
+            official_rows = [
+                {**row, "officialMissing": False}
+                for row in preview_payload.get("prices", [])
+                if isinstance(row, Mapping)
+            ]
+            merged_rows = merge_pricing_rows(official_rows, local_prices, provider)
+            preview_payload["prices"] = merged_rows
+            # A model missing from the snapshot is "not tracked", not a price change.
+            applied_changes = [
+                item
+                for item in price_changes
+                if str(item.get("kind") or "") != "removed"
+            ]
+            sync = dict(config.pricing_sync)
+            sync.update(
+                {
+                    "last_checked_at": checked_at,
+                    "last_success_at": checked_at,
+                    "last_result": "success",
+                    "last_error": "",
+                    "snapshot_checked_at": str(metadata.get("checked_at") or ""),
+                    "scope_provider": provider,
+                    "source_hash": str(metadata.get("source_hash") or ""),
+                    "pending_changes": list(price_changes),
+                    "pending_prices": merged_rows,
+                    "unread_change_count": len(applied_changes),
+                }
+            )
+            ports.save_config(replace(config, pricing_sync=sync))
             status = _status(
                 f"已拉取 {len(fetched)} 个模型价格；确认后才会保存。"
             )
-            preview_payload = preview.to_dict()
             preview_payload.update(
                 {
                     "addedCount": preview.added_count,
                     "updatedCount": preview.updated_count,
                     "skippedCount": preview.skipped_count,
-                    "changeCount": len(price_changes),
-                    "modelCount": len(fetched),
+                    "changeCount": len(applied_changes),
+                    "modelCount": len(merged_rows),
                     "priceChanges": price_changes,
                 }
             )
             status["pricingPreview"] = preview_payload
             status["pricingPayload"] = payload
             status["pricingUrl"] = url
+            status["pricingCheckedAt"] = checked_at
+            status["pricingSync"] = sync
             if metadata:
                 status["pricingSource"] = metadata
             return status

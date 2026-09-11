@@ -1703,7 +1703,34 @@ _TEXT_PREFIX = r"""
       }
 
       function normalizePriceModel(value) {
-        return String(value || "").trim().toLowerCase().replace(/-\\d{4}-\\d{2}-\\d{2}$/, "");
+        const raw = String(value || "").trim().toLowerCase().replace(/-\\d{4}-\\d{2}-\\d{2}$/, "");
+        // Model ids may carry a "<provider>/" scope (e.g. "custom/gpt-5.4"); the
+        // same model must not look like a different one per provider.
+        return raw.includes("/") ? raw.slice(raw.lastIndexOf("/") + 1) : raw;
+      }
+
+      function pricingBareModelId(value) {
+        // Display counterpart of normalizePriceModel: keep the original casing
+        // but drop the provider scope so a model renders once.
+        const raw = String(value || "").trim();
+        if (!raw.includes("/")) return raw;
+        return raw.slice(raw.lastIndexOf("/") + 1).trim() || raw;
+      }
+
+      function pricingCachedRows(rows, keyOf) {
+        // pending_* caches written before the provider scope was collapsed still
+        // carry one row per provider; fold them back to one row per model.
+        const seen = new Set();
+        const result = [];
+        for (const row of rows) {
+          if (!row || typeof row !== "object") continue;
+          const normalized = { ...row, model: pricingBareModelId(row.model || row.model_pattern || "") };
+          const key = keyOf(normalized);
+          if (!key || seen.has(key)) continue;
+          seen.add(key);
+          result.push(normalized);
+        }
+        return result;
       }
 
       function priceModelPatternMatches(pattern, model) {
@@ -2369,7 +2396,7 @@ _TEXT_PREFIX = r"""
             <div class="codex-usage-hud-price-actions">
               <button type="button" class="codex-usage-hud-settings-action" data-action="settings-add-model">添加模型</button>
               <input data-setting-key="pricing_url" value="${escapeHtml(pricingUrlValue)}" placeholder="${escapeHtml(pricingUrlPlaceholder)}" aria-label="计费单价获取地址" title="${escapeHtml(pricingUrlPlaceholder)}">
-              <button type="button" class="codex-usage-hud-settings-action codex-usage-hud-pricing-check-action" data-action="settings-fetch-prices" aria-label="${pricingUnreadCount ? `检查价格更新，有 ${pricingUnreadCount} 项未读差异` : "检查价格更新"}">检查价格更新${pricingUnreadCount ? '<span class="codex-usage-hud-pricing-check-dot" data-pricing-sync-dot="true" aria-hidden="true"></span>' : ""}</button>
+              <button type="button" class="codex-usage-hud-settings-action codex-usage-hud-pricing-check-action" data-action="settings-fetch-prices" aria-label="${pricingUnreadCount ? `检查价格更新，有 ${pricingUnreadCount} 项未读差异` : "检查价格更新"}">检查价格更新<span class="codex-usage-hud-pricing-check-dot" data-pricing-sync-dot="true" aria-hidden="true" ${pricingUnreadCount ? "" : "hidden"}></span></button>
               <button type="button" class="codex-usage-hud-settings-action codex-usage-hud-pricing-icon-action" data-action="settings-sync-provider-prices" aria-label="同步当前 Provider 单价到其它 Provider" title="同步当前 Provider 的模型单价到其它 Provider"><span aria-hidden="true">⇄</span></button>
               <button type="button" class="codex-usage-hud-settings-action codex-usage-hud-pricing-icon-action" data-action="pricing-export" aria-label="导出价格 JSON" title="导出价格 JSON"><span aria-hidden="true">⇩</span></button>
               <button type="button" class="codex-usage-hud-settings-action codex-usage-hud-pricing-icon-action" data-action="pricing-import-open" aria-label="导入价格 JSON" title="导入价格 JSON"><span aria-hidden="true">⇧</span></button>
@@ -3857,48 +3884,67 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
         return false;
       }
 
-      function pricingPreviewLoadingMatches(status) {
-        const layer = document.querySelector(`#${settingsModalId} [data-settings-confirm="true"][data-loading-mode="pricing-fetch"]`);
-        if (!layer) return false;
+      function pricingPreviewRequestMatches(status) {
+        if (String(status?.action || "") !== "fetchPricesPreview") return true;
         const expectedRequestId = String(pricingWorkflowState.pricingPreviewRequestId || "");
         const receivedRequestId = String(status?.requestId || "");
-        return !expectedRequestId || !receivedRequestId || expectedRequestId === receivedRequestId;
+        return !!expectedRequestId && (!receivedRequestId || expectedRequestId === receivedRequestId);
+      }
+
+      function pricingPreviewLoadingMatches(status) {
+        const layer = document.querySelector(`#${settingsModalId} [data-settings-confirm="true"][data-loading-mode="pricing-fetch"]`);
+        return !!layer && pricingPreviewRequestMatches(status);
       }
 
       function closePricingPreviewLoading(status) {
-        if (pricingPreviewLoadingMatches(status)) {
-          closeSettingsConfirm();
-          pricingWorkflowState.pricingPreviewRequestId = "";
-        }
+        if (!pricingPreviewRequestMatches(status)) return;
+        if (pricingPreviewLoadingMatches(status)) closeSettingsConfirm();
+        pricingWorkflowState.pricingPreviewRequestId = "";
+      }
+
+      function discardPricingPreviewRequest() {
+        pricingWorkflowState.pricingPreviewRequestId = "";
       }
 
       function applyPricingCommandStatus(status) {
         if (!status || typeof status !== "object") return;
         const action = String(status.action || "");
         const isPricingPreview = ["pricingImportPreview", "fetchPricesPreview"].includes(action);
-        if (isPricingPreview && pricingPreviewLoadingMatches(status)) {
+        const previewResponseMatches = !isPricingPreview || pricingPreviewRequestMatches(status);
+        if (!previewResponseMatches) return;
+        if (action === "fetchPricesPreview") {
           closePricingPreviewLoading(status);
         }
-        if (status.pricingSource && settingsProviderDraft) {
-          const source = status.pricingSource;
-          const provider = String(settingsProviderDraft.activeProvider || "").trim().toLowerCase();
-          const sync = { ...(hudSettingsFromPayload().pricing_sync || {}) };
-          sync.last_checked_at = String(source.checked_at || "");
-          sync.last_success_at = sync.last_checked_at;
-          sync.last_result = "success";
-          sync.source_url = String(source.source_url || sync.source_url || "");
-          sync.unread_change_count = Number(status.pricingPreview?.updatedCount || status.pricingPreview?.addedCount || 0);
-          const settings = hudSettingsFromPayload();
-          settings.pricing_sync = sync;
-          if (!provider) settings.pricing_sync = sync;
+        if (status.pricingSync && typeof status.pricingSync === "object") {
+          hudSettingsFromPayload().pricing_sync = { ...status.pricingSync };
+        }
+        if (isPricingPreview && String(status.kind || "") === "error") {
+          setPricingPreviewRefreshState(false, String(status.message || "价格获取失败。"));
+          return;
         }
         if (String(status.kind || "") === "error") return;
+        // 「确认更新」提交成功后必须立刻反映新价格：否则价格弹窗与单价表会停在
+        // 旧值上，看起来像没有生效。当前供应商若有未保存的单价草稿则保留表单，
+        // 不覆盖用户正在编辑的内容。
+        if (action === "pricingImportCommit") {
+          closeSettingsConfirm();
+          const activeProvider = String(settingsProviderDraft?.activeProvider || "").trim().toLowerCase();
+          if (!activeProvider || !settingsDirtyProviders.has(activeProvider)) {
+            renderSettingsProviderEditor();
+          }
+          syncPricingApplyDirtyState();
+          syncPricingUnreadIndicators();
+          return;
+        }
         if (
           status.pricingPreview
           && isPricingPreview
           && !pricingArtifactSeen(status, "preview")
         ) {
-          openPricingImportPreview(status.pricingPreview, status.pricingPayload);
+          openPricingImportPreview(status.pricingPreview, status.pricingPayload, {
+            official: action === "fetchPricesPreview",
+            checkedAt: status.pricingCheckedAt || status.pricingSync?.last_success_at || "",
+          });
         }
         if (
           status.pricingPath
@@ -5650,12 +5696,10 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
         pricingWorkflowState.pendingSettings = settings;
         pricingWorkflowState.pendingSettingsBase = settings;
         pricingWorkflowState.pendingApplyAll = false;
-        pricingWorkflowState.pendingMode = String(mode || "save");
+        pricingWorkflowState.pendingMode = "save";
         pricingWorkflowState.pendingProvider = String(provider || "").trim().toLowerCase();
         pricingWorkflowState.pendingUrl = String(url || "").trim();
-        const changeSummary = mode === "save"
-          ? pricingChangeSummaryHtml(hudSettingsFromPayload(), settings)
-          : "";
+        const changeSummary = pricingChangeSummaryHtml(hudSettingsFromPayload(), settings);
         const layer = document.createElement("div");
         layer.className = "codex-usage-hud-settings-confirm-layer";
         layer.dataset.settingsConfirm = "true";
@@ -5665,11 +5709,10 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
             <div class="codex-usage-hud-settings-confirm-title">保存新价格</div>
             <div class="codex-usage-hud-settings-confirm-body">新价格从确认保存时起对后续请求生效；已有记录保持原来的统计结果，不进行历史重算。</div>
             ${changeSummary}
-            ${mode === "fetch" ? '<div class="codex-usage-hud-pricing-impact">拉取结果会先进入导入预览，不会立即写入。</div>' : ""}
             <div class="codex-usage-hud-settings-confirm-actions">
-              ${mode === "save" ? '<label class="codex-usage-hud-pricing-apply-all"><input type="checkbox" data-pricing-apply-all="true"><span>应用于所有 providers</span></label>' : ""}
+              <label class="codex-usage-hud-pricing-apply-all"><input type="checkbox" data-pricing-apply-all="true"><span>应用于所有 providers</span></label>
               <button type="button" class="codex-usage-hud-settings-action" data-action="pricing-effective-cancel" data-variant="ghost">取消</button>
-              <button type="button" class="codex-usage-hud-settings-action" data-action="pricing-effective-confirm" data-primary="true">${mode === "save" ? "确认并保存" : "拉取并预览"}</button>
+              <button type="button" class="codex-usage-hud-settings-action" data-action="pricing-effective-confirm" data-primary="true">确认并保存</button>
             </div>
           </div>
         `;
@@ -5704,30 +5747,26 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
         }
       }
 
-      function confirmPricingEffectiveAt() {
-        const mode = String(pricingWorkflowState.pendingMode || "save");
-        if (mode === "fetch") {
-          const requestId = typedSettingsRequestId("pricing-preview");
-          pricingWorkflowState.pricingPreviewRequestId = requestId;
-          openSettingsLoading({
-            kicker: "官方价格更新",
-            title: "正在拉取并生成预览",
-            body: "正在获取官方价格并校验模型差异。预览生成后会自动显示，期间不会写入当前配置。",
-            mode: "pricing-fetch",
-          });
-          const submitted = submitSettingsCommand({
-            action: "fetchPricesPreview",
-            requestId,
-            provider: pricingWorkflowState.pendingProvider,
-            url: pricingWorkflowState.pendingUrl,
-            reason: "official-sync",
-          }, "正在拉取并校验价格 JSON...", { preserveOverlay: true });
-          if (!submitted) {
-            pricingWorkflowState.pricingPreviewRequestId = "";
-            closeSettingsConfirm();
-          }
-          return;
+      function requestLatestPricingPreview() {
+        if (pricingWorkflowState.pricingPreviewRequestId) return false;
+        const requestId = typedSettingsRequestId("pricing-preview");
+        pricingWorkflowState.pricingPreviewRequestId = requestId;
+        setPricingPreviewRefreshState(true);
+        const submitted = submitSettingsCommand({
+          action: "fetchPricesPreview",
+          requestId,
+          provider: pricingWorkflowState.pendingProvider,
+          url: pricingWorkflowState.pendingUrl,
+          reason: "official-sync",
+        }, "正在后台获取最新模型价格...", { preserveOverlay: true });
+        if (!submitted) {
+          pricingWorkflowState.pricingPreviewRequestId = "";
+          setPricingPreviewRefreshState(false, "价格获取请求未能提交，请稍后重试。");
         }
+        return submitted;
+      }
+
+      function confirmPricingEffectiveAt() {
         const applyAllNode = document.querySelector(`#${settingsModalId} [data-pricing-apply-all="true"]`);
         if (applyAllNode) updatePricingApplyAllPreview(!!applyAllNode.checked);
         submitSettingsCommand({
@@ -5832,61 +5871,233 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
         }
       }
 
-      function openPricingImportPreview(preview, payload) {
+      function formatPricingCheckedAt(value) {
+        const raw = String(value || "").trim();
+        if (!raw) return "尚未获取";
+        const date = new Date(raw);
+        if (!Number.isFinite(date.getTime())) return raw;
+        return date.toLocaleString("zh-CN", { hour12: false });
+      }
+
+      function pricingCachedPreview(settings, provider) {
+        const sync = settings?.pricing_sync && typeof settings.pricing_sync === "object"
+          ? settings.pricing_sync
+          : {};
+        const scope = String(sync.scope_provider || "").trim().toLowerCase();
+        const active = String(provider || "").trim().toLowerCase();
+        const scopeMatches = !scope || scope === active;
+        // Collapse provider-scoped duplicates so a model the user prices once per
+        // provider still renders as a single row with a single diff count.
+        const prices = scopeMatches && Array.isArray(sync.pending_prices)
+          ? pricingCachedRows(sync.pending_prices, (row) => normalizePriceModel(row.model))
+          : [];
+        const cachedChanges = scopeMatches && Array.isArray(sync.pending_changes)
+          ? pricingCachedRows(
+            sync.pending_changes,
+            (row) => `${normalizePriceModel(row.model)}|${String(row.field || "")}|${String(row.kind || "")}`,
+          )
+          : [];
+        // "removed" means the snapshot does not list the model. A cached payload
+        // that also carries an official row for it predates the provider-scope
+        // collapse, so that stale entry must not be reported.
+        const officialModels = new Set(
+          prices.filter((row) => !row.officialMissing).map((row) => normalizePriceModel(row.model)),
+        );
+        const priceChanges = cachedChanges.filter(
+          (row) => String(row.kind || "") !== "removed"
+            || !officialModels.has(normalizePriceModel(row.model)),
+        );
+        return {
+          prices,
+          priceChanges,
+          changeCount: priceChanges.filter((row) => String(row.kind || "") !== "removed").length,
+          checkedAt: scopeMatches ? String(sync.last_success_at || sync.last_checked_at || "") : "",
+          cached: true,
+        };
+      }
+
+      function setPricingPreviewRefreshState(refreshing, error = "") {
+        const layer = document.querySelector(`#${settingsModalId} [data-pricing-preview-layer="true"]`);
+        if (!layer) return;
+        const button = layer.querySelector('[data-action="pricing-preview-refresh"]');
+        const state = layer.querySelector('[data-pricing-refresh-state="true"]');
+        if (button) {
+          button.disabled = !!refreshing;
+          button.textContent = refreshing ? "正在获取…" : "重新获取";
+        }
+        if (state) {
+          state.dataset.tone = error ? "error" : (refreshing ? "loading" : "");
+          state.textContent = error || (refreshing ? "正在后台获取最新价格，当前先展示上一次结果。" : "");
+        }
+      }
+
+      function openPricingImportPreview(preview, payload, options = {}) {
         const dialog = settingsDialogRoot();
         if (!dialog) return;
         closeSettingsConfirm();
-        pricingWorkflowState.pendingMode = "import";
+        const officialPreview = options.official === true || Number.isFinite(Number(preview?.changeCount));
+        pricingWorkflowState.pendingMode = officialPreview ? "fetch" : "import";
         pricingWorkflowState.importPreview = preview;
-        pricingWorkflowState.importSourcePayload = pricingWorkflowState.importSourcePayload || payload || null;
-        pricingWorkflowState.importPayload = payload || pricingWorkflowState.importPayload;
+        if (payload) {
+          pricingWorkflowState.importSourcePayload = payload;
+          pricingWorkflowState.importPayload = payload;
+        }
         const added = Number(preview?.addedCount ?? preview?.added ?? 0);
         const updated = Number(preview?.updatedCount ?? preview?.updated ?? 0);
         const skipped = Number(preview?.skippedCount ?? preview?.skipped ?? 0);
-        const changeCount = Number(preview?.changeCount);
-        const hasPriceChangeCount = Number.isFinite(changeCount);
+        const changeCount = Number(preview?.changeCount || 0);
         const conflicts = Array.isArray(preview?.conflicts) ? preview.conflicts : [];
         const warnings = Array.isArray(preview?.warnings) ? preview.warnings : [];
         const prices = Array.isArray(preview?.prices) ? preview.prices : [];
+        const priceChanges = Array.isArray(preview?.priceChanges) ? preview.priceChanges : [];
+        const changesByModel = new Map();
+        priceChanges.forEach((change) => {
+          const model = String(change?.model || "");
+          if (!changesByModel.has(model)) changesByModel.set(model, []);
+          changesByModel.get(model).push(change);
+        });
         const displayPrice = (value) => {
           const amount = Number(value);
           if (!Number.isFinite(amount)) return "—";
           return amount.toLocaleString("en-US", { maximumFractionDigits: 6 });
         };
+        const fieldCell = (item, modelChanges, field) => {
+          const change = modelChanges.find((entry) => String(entry?.field || "") === field);
+          const value = displayPrice(item?.[field] ?? (field === "reasoning" ? item?.output : undefined));
+          if (!change) return `<span role="cell">${escapeHtml(value)}</span>`;
+          return `<span role="cell" data-price-changed="true"><del>${escapeHtml(displayPrice(change.local))}</del><strong>${escapeHtml(value)}</strong></span>`;
+        };
         const priceList = prices.length ? `
           <div class="codex-usage-hud-pricing-table-scroll" data-pricing-model-list="true" aria-label="拉取到的模型价格">
             <div class="codex-usage-hud-pricing-model-table" role="table">
               <div class="codex-usage-hud-pricing-model-row" role="row" data-header="true">
-                <span role="columnheader">模型</span><span role="columnheader">输入</span><span role="columnheader">缓存读取</span><span role="columnheader">缓存写入</span><span role="columnheader">输出</span><span role="columnheader">推理</span>
+                <span role="columnheader">模型 / 差异</span><span role="columnheader">输入</span><span role="columnheader">缓存读取</span><span role="columnheader">缓存写入</span><span role="columnheader">输出</span><span role="columnheader">推理</span>
               </div>
-              ${prices.map((item) => `<div class="codex-usage-hud-pricing-model-row" role="row"><strong role="cell" title="${escapeHtml(String(item.model || item.model_pattern || "模型"))}">${escapeHtml(String(item.model || item.model_pattern || "模型"))}</strong><span role="cell">${escapeHtml(displayPrice(item.input))}</span><span role="cell">${escapeHtml(displayPrice(item.cached_input))}</span><span role="cell">${escapeHtml(displayPrice(item.cache_write))}</span><span role="cell">${escapeHtml(displayPrice(item.output))}</span><span role="cell">${escapeHtml(displayPrice(item.reasoning ?? item.output))}</span></div>`).join("")}
+              ${prices.map((item) => {
+                const model = String(item.model || item.model_pattern || "模型");
+                const officialMissing = item.officialMissing === true;
+                const modelChanges = officialMissing ? [] : changesByModel.get(model) || [];
+                const addedChange = modelChanges.find((entry) => String(entry?.kind || "") === "added");
+                const changeLabel = officialMissing
+                  ? "官方未收录"
+                  : addedChange ? "新增" : modelChanges.length ? `${modelChanges.length} 项变更` : "";
+                const badgeTone = officialMissing ? "muted" : "changed";
+                return `<div class="codex-usage-hud-pricing-model-row" role="row" data-changed="${modelChanges.length ? "true" : "false"}" data-official-missing="${officialMissing ? "true" : "false"}"><strong role="cell" title="${escapeHtml(model)}"><span>${escapeHtml(model)}</span>${changeLabel ? `<em data-tone="${badgeTone}">${escapeHtml(changeLabel)}</em>` : ""}</strong>${fieldCell(item, modelChanges, "input")}${fieldCell(item, modelChanges, "cached_input")}${fieldCell(item, modelChanges, "cache_write")}${fieldCell(item, modelChanges, "output")}${fieldCell(item, modelChanges, "reasoning")}</div>`;
+              }).join("")}
             </div>
           </div>
-        ` : '<div class="codex-usage-hud-pricing-impact">未拉取到可显示的 Codex 模型价格。</div>';
+        ` : '<div class="codex-usage-hud-pricing-impact">还没有成功获取过模型价格。点击“重新获取”后，结果会保留在这里。</div>';
+        const removedChanges = priceChanges.filter((item) => String(item?.kind || "") === "removed");
+        const checkedAt = String(options.checkedAt || preview?.checkedAt || "");
+        const canCommit = !!pricingWorkflowState.importPayload && (!officialPreview || changeCount > 0);
+        const commitLabel = officialPreview
+          ? (!prices.length ? "暂无价格" : changeCount ? "确认更新" : "已是最新")
+          : conflicts.length ? "覆盖冲突并导入" : "确认导入";
         const layer = document.createElement("div");
         layer.className = "codex-usage-hud-settings-confirm-layer";
         layer.dataset.settingsConfirm = "true";
+        layer.dataset.pricingPreviewLayer = "true";
         layer.innerHTML = `
-          <div class="codex-usage-hud-settings-confirm-card codex-usage-hud-pricing-dialog" role="alertdialog" aria-modal="true" aria-label="${hasPriceChangeCount ? "确认价格更新" : "确认价格导入"}">
-            <div class="codex-usage-hud-settings-confirm-kicker">${hasPriceChangeCount ? "价格检查" : "导入预览"}</div>
-            <div class="codex-usage-hud-settings-confirm-title">${hasPriceChangeCount ? "官方模型价格" : "模型价格预览"}</div>
-            <div class="codex-usage-hud-pricing-preview-meta"><span>USD / 1M tokens</span><span>${prices.length} 个模型</span><strong data-tone="${hasPriceChangeCount && changeCount ? "changed" : "stable"}">${hasPriceChangeCount ? `差异 ${changeCount}` : `新增 ${added} · 更新 ${updated} · 跳过 ${skipped}`}</strong></div>
+          <div class="codex-usage-hud-settings-confirm-card codex-usage-hud-pricing-dialog" role="dialog" aria-modal="true" aria-label="${officialPreview ? "官方模型价格" : "模型价格预览"}">
+            <div class="codex-usage-hud-settings-confirm-kicker">${officialPreview ? "价格检查" : "导入预览"}</div>
+            <div class="codex-usage-hud-settings-confirm-title">${officialPreview ? "官方模型价格" : "模型价格预览"}</div>
+            <div class="codex-usage-hud-pricing-preview-meta"><span>USD / 1M tokens</span><span>${prices.length} 个模型</span><span>最后获取：${escapeHtml(formatPricingCheckedAt(checkedAt))}</span><strong data-tone="${changeCount ? "changed" : "stable"}">${officialPreview ? `差异 ${changeCount}` : `新增 ${added} · 更新 ${updated} · 跳过 ${skipped}`}</strong></div>
+            <div class="codex-usage-hud-pricing-refresh-state" data-pricing-refresh-state="true" aria-live="polite"></div>
             ${priceList}
-            ${conflicts.length ? `<div class="codex-usage-hud-pricing-preview-notice" data-tone="warning">${conflicts.length} 项价格版本冲突</div>` : ""}
+            ${removedChanges.length ? `<div class="codex-usage-hud-pricing-preview-notice">官方快照暂未收录 ${removedChanges.length} 个本地模型（${removedChanges.map((item) => escapeHtml(String(item.model || "模型"))).join("、")}），仍按本地价格统计，不受影响。</div>` : ""}
+            ${conflicts.length ? `<div class="codex-usage-hud-pricing-preview-notice" data-tone="warning">${conflicts.length} 项价格版本冲突，确认后将覆盖冲突版本。</div>` : ""}
             ${warnings.length ? `<div class="codex-usage-hud-pricing-preview-notice">${warnings.map((item) => escapeHtml(String(item))).join("<br>")}</div>` : ""}
             <div class="codex-usage-hud-settings-confirm-actions">
-              <button type="button" class="codex-usage-hud-settings-action" data-action="pricing-import-cancel" data-variant="ghost">取消</button>
-              <button type="button" class="codex-usage-hud-settings-action" data-action="pricing-import-commit" data-primary="true" disabled>${hasPriceChangeCount ? "确认更新" : conflicts.length ? "覆盖冲突并导入" : "确认导入"}</button>
+              <button type="button" class="codex-usage-hud-settings-action" data-action="pricing-import-cancel" data-variant="ghost">关闭</button>
+              ${officialPreview ? '<button type="button" class="codex-usage-hud-settings-action" data-action="pricing-preview-refresh">重新获取</button>' : ""}
+              <button type="button" class="codex-usage-hud-settings-action" data-action="pricing-import-commit" data-primary="true" ${canCommit ? "" : "disabled"}>${commitLabel}</button>
             </div>
           </div>
         `;
         dialog.appendChild(layer);
+        setPricingPreviewRefreshState(options.refreshing === true);
+      }
+
+      function pricingUnreadChangeCount(settings = hudSettingsFromPayload()) {
+        const count = Number(settings?.pricing_sync?.unread_change_count || 0);
+        return Number.isFinite(count) && count > 0 ? Math.floor(count) : 0;
+      }
+
+      function syncPricingUnreadIndicators(root = document.getElementById(rootId)) {
+        // Background pricing sync only records unread differences; this keeps the
+        // top-bar settings button and the in-panel check button in step with it.
+        // Every write is change-guarded: the HUD runs a body-wide MutationObserver.
+        if (!root) return false;
+        const count = pricingUnreadChangeCount();
+        const hasUnread = count > 0;
+        const detail = `有 ${count} 项官方价格差异待确认`;
+        const settingsLabel = hasUnread ? `设置，${detail}` : "设置";
+        const settingsTitle = hasUnread ? `设置 · ${detail}` : "设置";
+        root.querySelectorAll('[data-action="settings-open"]').forEach((button) => {
+          const dot = button.querySelector('[data-pricing-settings-dot="true"]');
+          if (dot && dot.hidden === hasUnread) dot.hidden = !hasUnread;
+          if (button.getAttribute("aria-label") !== settingsLabel) {
+            button.setAttribute("aria-label", settingsLabel);
+          }
+          if (button.getAttribute("title") !== settingsTitle) {
+            button.setAttribute("title", settingsTitle);
+          }
+        });
+        const checkLabel = hasUnread ? `检查价格更新，有 ${count} 项未读差异` : "检查价格更新";
+        root.querySelectorAll('[data-action="settings-fetch-prices"]').forEach((button) => {
+          let dot = button.querySelector('[data-pricing-sync-dot="true"]');
+          if (hasUnread && !dot) {
+            dot = document.createElement("span");
+            dot.className = "codex-usage-hud-pricing-check-dot";
+            dot.dataset.pricingSyncDot = "true";
+            dot.setAttribute("aria-hidden", "true");
+            button.appendChild(dot);
+          }
+          if (dot && dot.hidden === hasUnread) dot.hidden = !hasUnread;
+          if (button.getAttribute("aria-label") !== checkLabel) {
+            button.setAttribute("aria-label", checkLabel);
+          }
+        });
+        return hasUnread;
+      }
+
+      function openBackgroundPricingPreview({ provider = "" } = {}) {
+        // Surfaces the cached official snapshot the background sync already
+        // fetched. No network request is issued here: the pending rows are the
+        // very differences the unread indicator is reporting.
+        const settings = hudSettingsFromPayload();
+        if (!pricingUnreadChangeCount(settings)) return false;
+        const activeProvider = String(
+          provider || settingsProviderDraft?.activeProvider || settings.app_provider || "",
+        ).trim().toLowerCase();
+        const cached = pricingCachedPreview(settings, activeProvider);
+        const committablePrices = cached.prices.filter((row) => !row.officialMissing);
+        pricingWorkflowState.pendingMode = "fetch";
+        pricingWorkflowState.pendingProvider = activeProvider;
+        pricingWorkflowState.pendingUrl = String(
+          settings?.provider_settings?.[activeProvider]?.pricing_url || settings.pricing_url || "",
+        ).trim();
+        pricingWorkflowState.importSourcePayload = committablePrices.length
+          ? { schema_version: 1, unit: "USD_per_1M_tokens", prices: committablePrices }
+          : null;
+        pricingWorkflowState.importPayload = pricingWorkflowState.importSourcePayload;
+        openPricingImportPreview(cached, null, {
+          official: true,
+          checkedAt: cached.checkedAt,
+          refreshing: false,
+        });
+        return true;
       }
 
       function commitPricingImport() {
-        submitSettingsCommand({
+        const payload = pricingWorkflowState.importSourcePayload || pricingWorkflowState.importPayload;
+        if (!payload) {
+          setSettingsStatus("当前没有可应用的价格更新，请先重新获取。", "error");
+          return false;
+        }
+        return submitSettingsCommand({
           action: "pricingImportCommit",
-          payload: pricingWorkflowState.importSourcePayload || pricingWorkflowState.importPayload,
+          payload,
           conflictPolicy: "overwrite",
         }, "正在原子写入价格版本...");
       }
@@ -5985,10 +6196,27 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
         const settings = collectSettingsForm();
         const provider = String(settingsProviderDraft?.activeProvider || "").trim().toLowerCase();
         const url = String(settings?.provider_settings?.[provider]?.pricing_url || settings.pricing_url || "").trim();
-        if (document.querySelector(`#${settingsModalId} [data-settings-confirm="true"][data-loading-mode="pricing-fetch"]`)) {
-          return;
+        pricingWorkflowState.pendingMode = "fetch";
+        pricingWorkflowState.pendingProvider = provider;
+        pricingWorkflowState.pendingUrl = url;
+        pricingWorkflowState.importSourcePayload = null;
+        pricingWorkflowState.importPayload = null;
+        const cached = pricingCachedPreview(settings, provider);
+        const committablePrices = cached.prices.filter((row) => !row.officialMissing);
+        if (committablePrices.length) {
+          pricingWorkflowState.importSourcePayload = {
+            schema_version: 1,
+            unit: "USD_per_1M_tokens",
+            prices: committablePrices,
+          };
+          pricingWorkflowState.importPayload = pricingWorkflowState.importSourcePayload;
         }
-        openPricingEffectiveDialog({ mode: "fetch", provider, url });
+        openPricingImportPreview(cached, null, {
+          official: true,
+          checkedAt: cached.checkedAt,
+          refreshing: true,
+        });
+        requestLatestPricingPreview();
       }
 
       function restartHudFromModal() {
@@ -6240,6 +6468,7 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
         applySettingsCommandStatus(payload || {});
         restReminderDomain.apply(root, payload || {});
         refreshComposerBadgeState(root);
+        syncPricingUnreadIndicators(root);
         syncCodexCliQuickLaunchMenu();
       }
 
@@ -7040,6 +7269,7 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
       submitSettingsCommand,
       settingsDialogRoot,
       closeSettingsConfirm,
+      discardPricingPreviewRequest,
       openSettingsLoading,
       collectSettingsForm,
       collectCodexProviderUpdates,
@@ -7049,6 +7279,10 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
       applyModelPricesFromModal,
       saveSettingsFromModal,
       fetchPricesFromModal,
+      requestLatestPricingPreview,
+      pricingUnreadChangeCount,
+      syncPricingUnreadIndicators,
+      openBackgroundPricingPreview,
       confirmPricingEffectiveAt,
       updatePricingApplyAllPreview,
       openPricingImportDialog,
@@ -7185,6 +7419,7 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
     submitSettingsCommand,
     settingsDialogRoot,
     closeSettingsConfirm,
+    discardPricingPreviewRequest,
     openSettingsLoading,
     collectSettingsForm,
     collectCodexProviderUpdates,
@@ -7194,6 +7429,10 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
     applyModelPricesFromModal,
     saveSettingsFromModal,
     fetchPricesFromModal,
+    requestLatestPricingPreview,
+    pricingUnreadChangeCount,
+    syncPricingUnreadIndicators,
+    openBackgroundPricingPreview,
     confirmPricingEffectiveAt,
     updatePricingApplyAllPreview,
     openPricingImportDialog,

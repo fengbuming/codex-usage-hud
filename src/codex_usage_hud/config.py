@@ -90,7 +90,14 @@ def _normalize_pricing_sync(value: Any) -> dict[str, Any]:
         result["interval_hours"] = max(1, min(168, int(value.get("interval_hours", 24))))
     except (TypeError, ValueError):
         pass
-    for key in ("last_checked_at", "last_success_at", "last_result", "snapshot_checked_at"):
+    for key in (
+        "last_checked_at",
+        "last_success_at",
+        "last_result",
+        "snapshot_checked_at",
+        "scope_provider",
+        "last_applied_at",
+    ):
         result[key] = str(value.get(key) or "")
     result["source_hash"] = str(value.get("source_hash") or "")
     result["last_error"] = str(value.get("last_error") or "")[:500]

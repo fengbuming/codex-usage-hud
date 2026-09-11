@@ -835,6 +835,9 @@ TEXT = r"""
         event.preventDefault();
         event.stopPropagation();
         renderSettingsModal("settings", "", { resetProviderDraft: true });
+        // Background pricing sync differences surface together with the settings
+        // UI, mirroring the unread dot on the settings button.
+        openBackgroundPricingPreview();
         return;
       }
       if (action.dataset.action === "settings-close") {
@@ -1629,8 +1632,9 @@ TEXT = r"""
       if (action.dataset.action === "pricing-import-cancel") {
         event.preventDefault();
         event.stopPropagation();
+        discardPricingPreviewRequest();
         closeSettingsConfirm();
-        setSettingsStatus("已取消价格导入。");
+        setSettingsStatus("已关闭价格预览。");
         return;
       }
       if (action.dataset.action === "pricing-import-preview") {
@@ -1643,6 +1647,12 @@ TEXT = r"""
         event.preventDefault();
         event.stopPropagation();
         commitPricingImport();
+        return;
+      }
+      if (action.dataset.action === "pricing-preview-refresh") {
+        event.preventDefault();
+        event.stopPropagation();
+        requestLatestPricingPreview();
         return;
       }
       if (action.dataset.action === "pricing-effective-cancel") {

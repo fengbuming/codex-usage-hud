@@ -114,6 +114,52 @@ def test_import_preview_is_read_only_and_commit_is_atomic() -> None:
     assert state["config"].provider_settings["custom"].model_prices[
         "gpt-imported"
     ].cache_write == 1.25
+    assert committed["pricingSync"]["pending_changes"] == []
+
+
+def test_commit_clears_pending_official_price_changes() -> None:
+    state = {
+        "config": replace(
+            UserConfig.defaults(),
+            pricing_sync={
+                "pending_changes": [{"model": "gpt-imported", "kind": "added"}],
+                "unread_change_count": 1,
+            },
+        )
+    }
+    ports = _ports(state)
+    payload = {
+        "schema_version": 1,
+        "unit": "USD_per_1M_tokens",
+        "prices": [
+            {
+                "model": "gpt-imported",
+                "provider": "custom",
+                "input": 1,
+                "output": 2,
+                "cached_input": 0.1,
+                "cache_write": 1.25,
+                "reasoning": 2,
+            }
+        ],
+    }
+    preview = handle_general_command(
+        {"action": "pricingImportPreview", "payload": payload}, ports
+    )
+    committed = handle_general_command(
+        {
+            "action": "pricingImportCommit",
+            "payload": preview["pricingPayload"],
+            "conflictPolicy": "overwrite",
+        },
+        ports,
+    )
+
+    sync = committed["pricingSync"]
+    assert sync["pending_changes"] == []
+    assert sync["unread_change_count"] == 0
+    assert sync["last_applied_at"]
+    assert state["config"].pricing_sync["pending_changes"] == []
 
     before = state["config"].to_dict()
     invalid = handle_general_command(
@@ -280,7 +326,72 @@ def test_manual_official_preview_lists_prices_when_there_are_no_differences() ->
     assert result["pricingPreview"]["changeCount"] == 0
     assert result["pricingPreview"]["modelCount"] == 1
     assert result["pricingPreview"]["prices"][0]["model"] == "gpt-6-astra"
-    assert state["config"] == config
+    assert result["pricingCheckedAt"]
+    assert result["pricingSync"]["scope_provider"] == "custom"
+    assert result["pricingSync"]["pending_prices"][0]["model"] == "gpt-6-astra"
+    assert result["pricingSync"]["last_success_at"]
+    assert state["config"].pricing_sync == result["pricingSync"]
+    assert state["config"].pricing_versions == config.pricing_versions
+
+
+def test_official_preview_keeps_locally_configured_models_missing_from_snapshot() -> None:
+    local_row = {
+        "input": 2.5,
+        "cached_input": 0.25,
+        "cache_write": 0,
+        "output": 15,
+        "reasoning": 15,
+    }
+    config = replace(
+        UserConfig.defaults(),
+        provider_settings={
+            "custom": ProviderSettings(
+                model_prices={
+                    "gpt-6-astra": ModelPrice.from_mapping(
+                        {"input": 9, "cached_input": 1, "cache_write": 12.5, "output": 50, "reasoning": 50},
+                        "gpt-6-astra",
+                    ),
+                    "gpt-5.4": ModelPrice.from_mapping(local_row, "gpt-5.4"),
+                }
+            )
+        },
+    )
+    state = {"config": config}
+    official = OfficialPrice(
+        model="gpt-6-astra",
+        input=Decimal("10"),
+        cached_input=Decimal("1"),
+        cache_write=Decimal("12.5"),
+        output=Decimal("50"),
+        reasoning=Decimal("50"),
+    )
+
+    with patch(
+        "codex_usage_hud.runtime_commands.fetch_pricing_snapshot",
+        return_value=({"gpt-6-astra": official}, {"checked_at": "2026-01-01T00:00:00Z"}),
+    ):
+        result = handle_general_command(
+            {
+                "action": "fetchPricesPreview",
+                "provider": "custom",
+                "reason": "official-sync",
+            },
+            _ports(state),
+        )
+
+    rows = {str(row["model"]): row for row in result["pricingPreview"]["prices"]}
+    assert set(rows) == {"gpt-6-astra", "gpt-5.4"}
+    assert rows["gpt-5.4"]["officialMissing"] is True
+    assert rows["gpt-5.4"]["input"] == 2.5
+    assert rows["gpt-6-astra"]["officialMissing"] is False
+    # The snapshot omission of gpt-5.4 is not counted as a price change.
+    assert result["pricingPreview"]["changeCount"] == 1
+    assert result["pricingPreview"]["modelCount"] == 2
+    assert result["pricingSync"]["unread_change_count"] == 1
+    assert [row["model"] for row in result["pricingSync"]["pending_prices"]] == [
+        "gpt-6-astra",
+        "gpt-5.4",
+    ]
 
 
 def test_export_price_file_uses_current_prices_or_builtin_template(tmp_path: Path) -> None:

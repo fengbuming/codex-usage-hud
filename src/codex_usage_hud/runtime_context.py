@@ -50,7 +50,12 @@ from .usage_insights import (
     _run_usage_insights_refresh,
 )
 from .pricing_sync_scheduler import PricingSyncScheduler
-from .pricing_sync import classify_price_changes, fetch_pricing_snapshot
+from .pricing_sync import (
+    classify_price_changes,
+    fetch_pricing_snapshot,
+    merge_pricing_rows,
+    normalize_local_price_scope,
+)
 
 
 DEFAULT_SQLITE_LOG = "logs_2.sqlite"
@@ -211,10 +216,23 @@ def _initialize_runtime_context_resources(context: RuntimeContext) -> None:
         )
     if context.renderer_mode and context.pricing_sync_scheduler is None:
         def _pricing_check() -> dict[str, object]:
-            prices, metadata = fetch_pricing_snapshot()
-            local = context.user_config.price_table()
+            # Only the default (Codex App) provider takes part in the official
+            # price comparison. A non-default provider's price must never stand
+            # in for a model the default provider has not priced itself; the
+            # legacy global table stays the fallback when no default provider is
+            # configured. ``provider_price_table`` keys by bare model id, so no
+            # "<provider>/<model>" scope can leak into the comparison either.
+            local = normalize_local_price_scope(
+                context.user_config.provider_price_table(context.app_provider)
+            )
+            prices, metadata = fetch_pricing_snapshot(
+                extra_model_ids=[str(model) for model in local]
+            )
             changes = classify_price_changes(local, prices.values())
-            return {"ok": True, "count": len(prices), "changes": changes, "prices": [{**price.to_dict(), "provider": context.app_provider} for price in prices.values()], "metadata": metadata}
+            official_rows = [{**price.to_dict(), "provider": context.app_provider} for price in prices.values()]
+            merged = merge_pricing_rows(official_rows, local, context.app_provider)
+            applied = [item for item in changes if str(item.get("kind") or "") != "removed"]
+            return {"ok": True, "count": len(prices), "changes": changes, "changeCount": len(applied), "prices": merged, "metadata": metadata}
         def _pricing_publish(result: object) -> None:
             payload = dict(result) if isinstance(result, dict) else {}
             try:
@@ -223,7 +241,10 @@ def _initialize_runtime_context_resources(context: RuntimeContext) -> None:
                 checked_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
                 sync.update({"last_checked_at": checked_at, "snapshot_checked_at": str(metadata.get("checked_at") or ""), "last_result": "success" if payload.get("ok") else "error", "last_error": str(payload.get("error") or "")[:500]})
                 if payload.get("ok"):
-                    sync.update({"last_success_at": sync["last_checked_at"], "source_hash": str(metadata.get("source_hash") or ""), "pending_changes": list(payload.get("changes") or []), "pending_prices": list(payload.get("prices") or []), "unread_change_count": len(payload.get("changes") or [])})
+                    change_count = payload.get("changeCount")
+                    if not isinstance(change_count, int):
+                        change_count = len(payload.get("changes") or [])
+                    sync.update({"last_success_at": sync["last_checked_at"], "scope_provider": context.app_provider, "source_hash": str(metadata.get("source_hash") or ""), "pending_changes": list(payload.get("changes") or []), "pending_prices": list(payload.get("prices") or []), "unread_change_count": change_count})
                 context.settings_store.save(replace(current, pricing_sync=sync)); context.user_config = replace(current, pricing_sync=sync)
             except Exception:
                 _LOGGER.exception("pricing_sync_status_persist_failed")

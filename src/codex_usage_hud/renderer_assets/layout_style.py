@@ -542,12 +542,27 @@ TEXT = r"""
             color: #f3d27a;
           }
           #${rootId} .codex-usage-hud-settings-button {
+            position: relative;
             width: 22px;
             height: 22px;
             border-radius: 5px;
             background: transparent;
             color: #a9bcd2;
             font-size: 13px;
+          }
+          #${rootId} .codex-usage-hud-settings-alert-dot {
+            position: absolute;
+            top: -2px;
+            right: -2px;
+            width: 7px;
+            height: 7px;
+            border: 1px solid var(--codex-usage-hud-panel-surface, #18202b);
+            border-radius: 50%;
+            background: #ef4444;
+            pointer-events: none;
+          }
+          #${rootId} .codex-usage-hud-settings-alert-dot[hidden] {
+            display: none;
           }
           #${rootId} .codex-usage-hud-handle:hover {
             background: rgba(62, 74, 92, .92);
@@ -2650,7 +2665,10 @@ TEXT = r"""
             height: 7px;
             border: 1px solid var(--codex-usage-hud-panel-surface, #18202b);
             border-radius: 50%;
-            background: #3b82f6;
+            background: #ef4444;
+          }
+          #${rootId} .codex-usage-hud-pricing-check-dot[hidden] {
+            display: none;
           }
           #${rootId} .codex-usage-hud-pricing-apply-dirty-dot {
             position: absolute;
@@ -3272,17 +3290,19 @@ TEXT = r"""
           }
           #${rootId} .codex-usage-hud-pricing-table-scroll {
             max-height: 280px;
-            overflow: auto;
+            overflow-x: hidden;
+            overflow-y: auto;
             border: 1px solid var(--codex-usage-hud-divider, #273241);
             border-radius: 5px;
             background: var(--codex-usage-hud-panel-surface, #141b24);
           }
           #${rootId} .codex-usage-hud-pricing-model-table {
-            min-width: 650px;
+            width: 100%;
+            min-width: 0;
           }
           #${rootId} .codex-usage-hud-pricing-model-row {
             display: grid;
-            grid-template-columns: minmax(156px, 1.6fr) repeat(5, minmax(72px, 0.7fr));
+            grid-template-columns: minmax(0, 1.7fr) repeat(5, minmax(0, 0.66fr));
             min-height: 36px;
             border-top: 1px solid color-mix(in srgb, var(--codex-usage-hud-divider, #273241) 70%, transparent);
           }
@@ -3301,6 +3321,8 @@ TEXT = r"""
             display: flex;
             align-items: center;
             justify-content: flex-end;
+            overflow: hidden;
+            white-space: nowrap;
             padding: 7px 9px;
             border-left: 1px solid color-mix(in srgb, var(--codex-usage-hud-divider, #273241) 55%, transparent);
             color: var(--codex-usage-hud-text, #e8eef7);
@@ -3315,10 +3337,60 @@ TEXT = r"""
             font-family: inherit;
             font-weight: 650;
           }
+          #${rootId} .codex-usage-hud-pricing-model-row[data-changed="true"] {
+            background: color-mix(in srgb, var(--codex-usage-hud-warning, #ffb86b) 7%, transparent);
+          }
           #${rootId} .codex-usage-hud-pricing-model-row strong {
             overflow: hidden;
+            gap: 7px;
             text-overflow: ellipsis;
             white-space: nowrap;
+          }
+          #${rootId} .codex-usage-hud-pricing-model-row strong > span {
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+          }
+          #${rootId} .codex-usage-hud-pricing-model-row strong > em {
+            flex: 0 0 auto;
+            padding: 2px 5px;
+            border-radius: 999px;
+            background: color-mix(in srgb, var(--codex-usage-hud-warning, #ffb86b) 16%, transparent);
+            color: var(--codex-usage-hud-warning, #ffb86b);
+            font: 700 9px/1.2 inherit;
+            font-style: normal;
+          }
+          #${rootId} .codex-usage-hud-pricing-model-row strong > em[data-tone="muted"] {
+            background: color-mix(in srgb, var(--codex-usage-hud-muted, #8492a6) 16%, transparent);
+            color: var(--codex-usage-hud-muted, #8492a6);
+          }
+          #${rootId} .codex-usage-hud-pricing-model-row[data-official-missing="true"] > :not(:first-child) {
+            color: var(--codex-usage-hud-muted, #8492a6);
+          }
+          #${rootId} .codex-usage-hud-pricing-model-row [data-price-changed="true"] {
+            display: grid;
+            justify-items: end;
+            gap: 2px;
+            color: var(--codex-usage-hud-warning, #ffb86b);
+          }
+          #${rootId} .codex-usage-hud-pricing-model-row [data-price-changed="true"] del {
+            color: var(--codex-usage-hud-muted, #8492a6);
+            font-size: 9px;
+          }
+          #${rootId} .codex-usage-hud-pricing-model-row [data-price-changed="true"] strong {
+            color: var(--codex-usage-hud-warning, #ffb86b);
+          }
+          #${rootId} .codex-usage-hud-pricing-refresh-state {
+            min-height: 15px;
+            margin-inline: 18px;
+            color: var(--codex-usage-hud-muted, #8492a6);
+            font-size: 10px;
+          }
+          #${rootId} .codex-usage-hud-pricing-refresh-state[data-tone="loading"] {
+            color: var(--codex-usage-hud-info, #9ccbff);
+          }
+          #${rootId} .codex-usage-hud-pricing-refresh-state[data-tone="error"] {
+            color: var(--codex-usage-hud-warning, #ffb86b);
           }
           #${rootId} .codex-usage-hud-pricing-preview-notice {
             color: var(--codex-usage-hud-muted, #8492a6);
