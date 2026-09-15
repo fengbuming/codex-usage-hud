@@ -2175,15 +2175,14 @@ _TEXT_PREFIX = r"""
 
       function providerDraftFromSettings(settings, provider, enabled, notificationOnly) {
         const source = settings.provider_settings?.[provider] || {};
-        const modelPrices = source.model_prices && typeof source.model_prices === "object"
-          ? source.model_prices
-          : settings.model_prices;
         return {
           enabled: !!enabled,
           notificationOnly: !!notificationOnly && !enabled,
+          // 记录这条草稿的单价表来源，供 syncSettingsProviderDraftFromPayload 对账。
+          priceSourceSignature: settingsProviderPriceSourceSignature(settings, provider),
           settings: {
             ...source,
-            model_prices: canonicalSettingsPriceTable(modelPrices, provider),
+            model_prices: settingsProviderPriceSourceTable(settings, provider),
             pricing_url: String(source.pricing_url ?? settings.pricing_url ?? ""),
             weekly_adjustment_usd: Number(source.weekly_adjustment_usd ?? settings.weekly_adjustment_usd ?? 0),
           },
@@ -2245,6 +2244,74 @@ _TEXT_PREFIX = r"""
         settingsDirtyProviders.clear();
         window[settingsProviderName] = activeProvider;
         return settingsProviderDraft;
+      }
+
+      // 草稿单价表的唯一来源：payload 里该供应商的 model_prices，缺省时回退顶层
+      // legacy 表（与 providerDraftFromSettings 的取值规则完全一致）。
+      function settingsProviderPriceSourceTable(settings, provider) {
+        const normalized = String(provider || "").trim().toLowerCase();
+        const source = settings?.provider_settings?.[normalized] || {};
+        const modelPrices = source.model_prices && typeof source.model_prices === "object"
+          ? source.model_prices
+          : settings?.model_prices;
+        return canonicalSettingsPriceTable(modelPrices, normalized);
+      }
+
+      // 供应商草稿的单价表来源指纹：记录这条草稿是从 payload 的哪一版单价表构建的。
+      // 后台写入（价格导入 / 手动保存 / 外部改配置）之后 payload 会变、指纹随之变化，
+      // 用它判断缓存草稿是否过期。只看单价本身，不受 pricing_url 等无关字段影响。
+      function settingsProviderPriceSourceSignature(settings, provider) {
+        const table = settingsProviderPriceSourceTable(settings, provider);
+        return JSON.stringify(
+          Object.entries(table)
+            .map(([key, price]) => [key, pricingRowFingerprint(price, key)])
+            .sort((left, right) => (left[0] < right[0] ? -1 : left[0] > right[0] ? 1 : 0)),
+        );
+      }
+
+      // 设置域 payload 每次刷新都带着权威单价表，但已缓存的供应商草稿是创建时抓取的
+      // 快照，不会自己失效：「检查价格更新 → 确认更新」在后台写入新单价后，设置界面
+      // 的单价表会一直显示旧值，直到重开设置界面（或重启 HUD）才刷新。这里在每次
+      // payload 到达时对账，只重建「单价表来源指纹确实变了」的供应商草稿。
+      //
+      // 代价是有界的：只在 settings 域推送时跑一次，每个供应商一次小表指纹比较；
+      // 指纹没变就直接返回，不产生任何周期性工作。
+      function syncSettingsProviderDraftFromPayload(settings = hudSettingsFromPayload()) {
+        if (!settingsProviderDraft) return false;
+        const modal = document.getElementById(settingsModalId);
+        if (!modal || modal.hidden) return false;
+        const activeProvider = String(settingsProviderDraft.activeProvider || "").trim().toLowerCase();
+        let activeChanged = false;
+        let dirtyCleared = false;
+        settingsProviderDraft.order.forEach((provider) => {
+          const entry = settingsProviderDraft.providers[provider];
+          if (!entry) return;
+          const signature = settingsProviderPriceSourceSignature(settings, provider);
+          if (signature === entry.priceSourceSignature) return;
+          // 指纹变了说明配置里的单价已被后台改写，payload 现在才是权威值。此时草稿
+          // 上残留的「未保存修改」已经过期，继续保留会让单价表永远停在旧值上，所以
+          // 只在这条真实变更上清掉脏标记（而不是无条件清空用户的编辑状态）。
+          if (settingsDirtyProviders.delete(provider)) dirtyCleared = true;
+          settingsProviderDraft.providers[provider] = {
+            ...providerDraftFromSettings(settings, provider, entry.enabled, entry.notificationOnly),
+            // 保留草稿里的非单价字段（例如正在编辑的计费地址），只替换单价表。
+            settings: {
+              ...entry.settings,
+              model_prices: settingsProviderPriceSourceTable(settings, provider),
+            },
+          };
+          if (provider === activeProvider) activeChanged = true;
+        });
+        if (dirtyCleared) {
+          renderSettingsProviderTabs();
+          syncPricingApplyDirtyState();
+          updateSettingsProviderDraftStatus();
+        }
+        if (!activeChanged) return dirtyCleared;
+        // 只重绘当前供应商：其它供应商的草稿更新会在切换 tab 时自然生效，避免打断
+        // 用户正在编辑的表单。
+        if (settingsActiveTab === "settings") renderSettingsProviderEditor();
+        return true;
       }
 
       function settingsProviderTabBadge(settings, provider) {
@@ -3928,10 +3995,18 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
         // 不覆盖用户正在编辑的内容。
         if (action === "pricingImportCommit") {
           closeSettingsConfirm();
-          const activeProvider = String(settingsProviderDraft?.activeProvider || "").trim().toLowerCase();
-          if (!activeProvider || !settingsDirtyProviders.has(activeProvider)) {
-            renderSettingsProviderEditor();
+          // 提交会把官方价格写入某个供应商的单价表：后台同步走默认(App)供应商，
+          // 手动「检查价格更新」走当时选中的供应商。这里不猜 provider：把状态里
+          // 携带的已提交单价表并入当前 payload，再让对账函数按单价表指纹决定重绘
+          // 哪些供应商，这样不必等设置域重载或重启 HUD。
+          const settings = currentPayload().settings;
+          if (status.providerSettings && typeof status.providerSettings === "object") {
+            const prev = settings.provider_settings && typeof settings.provider_settings === "object"
+              ? settings.provider_settings
+              : {};
+            settings.provider_settings = { ...prev, ...status.providerSettings };
           }
+          syncSettingsProviderDraftFromPayload();
           syncPricingApplyDirtyState();
           syncPricingUnreadIndicators();
           return;
@@ -6466,6 +6541,10 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
         themeDomain.apply(root, payload || {});
         renderUpdateButtons(root, payload || {});
         applySettingsCommandStatus(payload || {});
+        // 设置域 payload 是单价的权威来源。命令状态可能因为快照刷新被提前清空
+        // （status 一旦丢了，提交就不会再触发重绘），所以这里按 payload 本身对账，
+        // 保证任何后台写入都会反映到单价表上。
+        syncSettingsProviderDraftFromPayload();
         restReminderDomain.apply(root, payload || {});
         refreshComposerBadgeState(root);
         syncPricingUnreadIndicators(root);
@@ -7254,6 +7333,7 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
       setSettingsLoadingText,
       syncSettingsUpdateLoading,
       applySettingsCommandStatus,
+      syncSettingsProviderDraftFromPayload,
       refreshSessionIndexIfStale,
       openSessionTransferDialog,
       renderSessionTransferDialog,
@@ -7406,6 +7486,7 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
     setSettingsLoadingText,
     syncSettingsUpdateLoading,
     applySettingsCommandStatus,
+    syncSettingsProviderDraftFromPayload,
     openSessionTransferDialog,
     renderSessionTransferDialog,
     closeSessionTransferDialog,

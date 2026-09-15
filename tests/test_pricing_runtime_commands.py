@@ -117,6 +117,47 @@ def test_import_preview_is_read_only_and_commit_is_atomic() -> None:
     assert committed["pricingSync"]["pending_changes"] == []
 
 
+def test_commit_status_carries_committed_price_tables() -> None:
+    # 回归：提交「确认更新」后，渲染器要能立刻重绘单价表，不必等设置域重载或重启 HUD。
+    # 已提交的单价表必须随状态返回，且值与落盘配置一致。
+    state = {"config": UserConfig.defaults()}
+    ports = _ports(state)
+    payload = {
+        "schema_version": 1,
+        "unit": "USD_per_1M_tokens",
+        "prices": [
+            {
+                "model": "gpt-imported",
+                "provider": "custom",
+                "input": 1,
+                "output": 2,
+                "cached_input": 0.1,
+                "cache_write": 1.25,
+                "reasoning": 2,
+            }
+        ],
+    }
+
+    preview = handle_general_command(
+        {"action": "pricingImportPreview", "payload": payload}, ports
+    )
+    committed = handle_general_command(
+        {
+            "action": "pricingImportCommit",
+            "payload": preview["pricingPayload"],
+            "conflictPolicy": "overwrite",
+        },
+        ports,
+    )
+
+    assert "providerSettings" in committed
+    # The imported model lands in provider_settings (provider-scoped), reflecting
+    # the committed price immediately after commit.
+    assert committed["providerSettings"]["custom"]["model_prices"]["gpt-imported"][
+        "cache_write"
+    ] == 1.25
+
+
 def test_commit_clears_pending_official_price_changes() -> None:
     state = {
         "config": replace(

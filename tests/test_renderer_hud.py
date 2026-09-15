@@ -829,16 +829,49 @@ class RendererHudPayloadTests(unittest.TestCase):
         # table, otherwise the UI keeps showing the pre-commit unit prices.
         self.assertIn('if (action === "pricingImportCommit") {', status)
         self.assertIn("closeSettingsConfirm();", status)
-        self.assertIn("renderSettingsProviderEditor();", status)
         self.assertIn("syncPricingApplyDirtyState();", status)
         self.assertIn("syncPricingUnreadIndicators();", status)
-        # Unsaved per-provider price drafts must survive the repaint.
-        self.assertIn("!settingsDirtyProviders.has(activeProvider)", status)
+        # 回归：提交后必须立刻把已提交单价表并入当前 payload，再交给按单价表指纹
+        # 工作的对账函数重绘，否则单价表会停在旧值上，直到重开设置界面才刷新（原
+        # bug）。提交可能落在默认供应商，也可能落在手动「检查价格更新」时选中的
+        # 供应商，所以这里不猜 provider。
+        self.assertIn("if (status.providerSettings && typeof status.providerSettings === \"object\")", status)
+        self.assertIn("syncSettingsProviderDraftFromPayload();", status)
+        self.assertNotIn("refreshSettingsProviderDraftEntry", status)
+        self.assertNotIn("committedProvider", status)
         # Errors keep the dialog open so the user can retry.
         self.assertLess(
             status.index('if (String(status.kind || "") === "error") return;'),
             status.index('if (action === "pricingImportCommit") {'),
         )
+
+    def test_settings_payload_reconciles_provider_price_drafts(self) -> None:
+        script = renderer_hud.RENDERER_HUD_SCRIPT
+
+        # settings 域 payload 是单价的权威来源：命令状态可能因快照刷新被提前清空，
+        # 只靠命令状态重绘会在 status 丢失时留下旧单价表，所以必须按 payload 对账。
+        payload_start = script.index("function applySettingsPayload(root, payload) {")
+        payload_end = script.index("\n      function ", payload_start + 1)
+        body = script[payload_start:payload_end]
+        self.assertIn("applySettingsCommandStatus(payload || {});", body)
+        self.assertIn("syncSettingsProviderDraftFromPayload();", body)
+        self.assertLess(
+            body.index("applySettingsCommandStatus(payload || {});"),
+            body.index("syncSettingsProviderDraftFromPayload();"),
+        )
+
+        reconcile_start = script.index("function syncSettingsProviderDraftFromPayload(")
+        reconcile_end = script.index("\n      function ", reconcile_start + 1)
+        reconcile = script[reconcile_start:reconcile_end]
+        # 只重建来源指纹真的变了的供应商草稿，未保存编辑不得被静默覆盖。
+        self.assertIn("settingsProviderPriceSourceSignature(settings, provider)", reconcile)
+        self.assertIn("if (signature === entry.priceSourceSignature) return;", reconcile)
+        self.assertIn("settingsDirtyProviders.delete(provider)", reconcile)
+        self.assertIn("model_prices: settingsProviderPriceSourceTable(settings, provider)", reconcile)
+        # 只有当前供应商的单价表变了才重绘编辑器，避免打断其它供应商的表单编辑。
+        self.assertIn("if (provider === activeProvider) activeChanged = true;", reconcile)
+        self.assertIn("if (!activeChanged) return dirtyCleared;", reconcile)
+        self.assertIn('if (settingsActiveTab === "settings") renderSettingsProviderEditor();', reconcile)
 
     def test_settings_auto_save_keeps_model_price_drafts_pending_for_apply(self) -> None:
         script = renderer_hud.RENDERER_HUD_SCRIPT

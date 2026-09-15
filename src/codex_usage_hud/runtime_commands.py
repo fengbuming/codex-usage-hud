@@ -39,7 +39,6 @@ from .config import (
     dismiss_warning_for_today,
     extract_model_prices,
     fetch_model_prices,
-    fetch_openai_models_prices,
     write_json_object,
 )
 from .core.background_usage import valid_background_event_id
@@ -1526,6 +1525,13 @@ def handle_general_command(
                 "importedAt": applied_at,
             }
             status["pricingSync"] = sync
+            # Carry the freshly committed provider-scoped price tables in the
+            # status so the renderer can repaint the model price list immediately,
+            # without depending on the settings-domain reload racing the command
+            # status. Imports are written to provider_settings only, so the
+            # top-level legacy model_prices is intentionally not relied on here.
+            updated_payload = updated.to_dict()
+            status["providerSettings"] = updated_payload.get("provider_settings", {})
             return status
         if action == "fetchPricesPreview":
             config = ports.load_config()
