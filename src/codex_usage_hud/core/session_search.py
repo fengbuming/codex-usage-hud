@@ -742,6 +742,58 @@ def search_terms(query: object) -> tuple[str, ...]:
     )
 
 
+# Session identity lookups. A session id or the ``codex://threads/<id>`` deep
+# link that Codex prints is a *pointer*, not a text query: tokenising it would
+# search for the literal words ``codex``/``threads`` and drop the id. Codex
+# also renders the link as ``[codex://threads/<id>]`` when it appears in a
+# message body, and users paste it wrapped in brackets or quotes, so the
+# normaliser has to tolerate that decoration.
+_THREAD_LINK_RE = re.compile(r"codex://threads/([0-9a-fA-F][0-9a-fA-F-]{6,})")
+# A bare id is accepted as a prefix, so the 8-character head of a UUID is
+# enough to locate a session without pasting all 36 characters.
+_UUID_QUERY_RE = re.compile(r"[0-9a-f]{8}(?:-[0-9a-f]{0,12}){0,4}")
+_IDENTITY_DECORATION = "[]<>(){}«»\"'` \t\n\r"
+MIN_SESSION_ID_QUERY = 8
+
+
+def session_identity_query(query: object) -> str:
+    """Return the session id a query points at, or ``""`` for a text query.
+
+    Accepts both forms the Codex UI exposes -- the bare id
+    (``01a0a28a-6825-7931-a247-f3e02c98f23a``) and the deep link
+    (``codex://threads/01a0a28a-...``, with or without surrounding brackets).
+    Anything else (Chinese titles, English words, file paths) returns ``""`` so
+    callers keep using the normal term search.
+    """
+
+    text = str(query or "").strip()
+    if not text:
+        return ""
+    link = _THREAD_LINK_RE.search(text)
+    if link:
+        return link.group(1).casefold().rstrip("-")
+    candidate = text.strip(_IDENTITY_DECORATION).casefold()
+    if len(candidate) < MIN_SESSION_ID_QUERY:
+        return ""
+    if _UUID_QUERY_RE.fullmatch(candidate) is None:
+        return ""
+    # A bare digit run ("20260915", a ticket number) is far more likely to be a
+    # text query than a UUID head, so it needs a separator to count as an id.
+    if candidate.isdigit() and "-" not in candidate:
+        return ""
+    return candidate
+
+
+def session_identity_matches(session_id: object, identity: str) -> bool:
+    """Return whether one session id satisfies a normalised identity query."""
+
+    canonical = str(session_id or "").strip().casefold()
+    target = str(identity or "").strip().casefold()
+    if not canonical or len(target) < MIN_SESSION_ID_QUERY:
+        return False
+    return canonical.startswith(target)
+
+
 def _index_tokens(value: object) -> tuple[str, ...]:
     """Return bounded unique tokens used by the in-memory search index.
 

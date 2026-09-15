@@ -313,6 +313,7 @@ TEXT = r"""
           tool: "工具记录",
           file: "修改文件",
           metadata: "会话信息",
+          identity: "会话 ID",
         })[String(value || "")] || "命中";
       }
 
@@ -918,6 +919,8 @@ TEXT = r"""
           // becomes a terminal `codex resume` fallback instead of a dead jump.
           const jumpUnavailable = sessionCleanupState.sessionJumpUnavailableIds.has(id);
           const jumpInflight = sessionCleanupState.sessionJumpInflight.has(id);
+          // 悬停提示保持一行内可读；无障碍名称保留完整句子，读屏没有「悬停即读」这一步。
+          const jumpTitle = jumpUnavailable ? "跳转到会话（终端 codex resume）" : "跳转到会话";
           const jumpLabel = jumpUnavailable
             ? "Codex Desktop 未保留此会话，在终端用 codex resume 恢复"
             : "在 Codex Desktop 中打开此会话";
@@ -926,7 +929,7 @@ TEXT = r"""
             ? `codex-usage-hud-session-jump codex-usage-hud-session-jump-inflight`
             : `codex-usage-hud-session-jump`;
           const jumpButton = (position) => id && inventoryRevision
-            ? `<button type="button" class="${jumpClass}" data-action="${jumpUnavailable ? "session-cleanup-resume-session" : "session-cleanup-open-session"}" data-session-cleanup-jump-id="${escapeHtml(id)}" data-session-cleanup-inventory-revision="${escapeHtml(inventoryRevision)}" data-session-cleanup-jump-position="${escapeHtml(position)}" data-kind="${jumpKind}" aria-label="${escapeHtml(jumpLabel)}" title="${escapeHtml(jumpLabel)}" ${jumpInflight ? "disabled" : ""}>${cleanupIconSvg(jumpUnavailable ? "terminal" : "external")}</button>`
+            ? `<button type="button" class="${jumpClass}" data-action="${jumpUnavailable ? "session-cleanup-resume-session" : "session-cleanup-open-session"}" data-session-cleanup-jump-id="${escapeHtml(id)}" data-session-cleanup-inventory-revision="${escapeHtml(inventoryRevision)}" data-session-cleanup-jump-position="${escapeHtml(position)}" data-kind="${jumpKind}" aria-label="${escapeHtml(jumpLabel)}" title="${escapeHtml(jumpTitle)}" ${jumpInflight ? "disabled" : ""}>${cleanupIconSvg(jumpUnavailable ? "terminal" : "external")}</button>`
             : "";
           const secondaryMeta = [
             updatedAt,
@@ -996,7 +999,7 @@ TEXT = r"""
           && new Set(["pending", "indexing"]).has(sessionCleanupState.searchResultState);
         const emptyState = rowHtml ? "" : `<div class="codex-usage-hud-cleanup-empty"><div class="codex-usage-hud-cleanup-empty-mark">${cleanupIconSvg("search", "codex-usage-hud-cleanup-icon-lg")}</div><p class="codex-usage-hud-cleanup-empty-title">${searchPreparing ? "搜索索引准备中" : "当前筛选没有会话"}</p><p class="codex-usage-hud-cleanup-empty-hint">${searchPreparing ? "准备完成后将自动更新搜索结果，无需重新打开界面" : "试试调整筛选条件，或清除筛选后重新查看"}</p></div>`;
         const indexToggle = sessionIndexToggleHtml(sessionIndex, indexVisible);
-        return `<section class="codex-usage-hud-session-cleanup" aria-label="会话管理">${unavailable}<div class="codex-usage-hud-session-tools"><div class="codex-usage-hud-session-tools-primary"><div class="codex-usage-hud-session-search">${cleanupIconSvg("search")}<input type="search" data-session-cleanup-search="true" value="${escapeHtml(sessionCleanupState.searchDraft)}" placeholder="搜索会话、内容或文件" aria-label="搜索会话"><button type="button" class="codex-usage-hud-session-search-submit" data-action="session-cleanup-search-submit" aria-label="开始搜索">${cleanupIconSvg("search")}<span>${searchButtonLabel}</span></button></div><div class="codex-usage-hud-session-index-workdir">${indexToggle}${workdirControl}</div><div class="codex-usage-hud-session-date-filter" data-open="${sessionCleanupState.datePickerOpen}"><button type="button" class="codex-usage-hud-session-date-trigger" data-action="session-cleanup-date-toggle" aria-expanded="${sessionCleanupState.datePickerOpen ? "true" : "false"}" aria-haspopup="dialog">${cleanupIconSvg("calendar")}<span>最后活动：${escapeHtml(sessionCleanupDateRangeLabel())}</span>${cleanupIconSvg("chevron")}</button>${datePopover}</div></div>${indexPanel}<div class="codex-usage-hud-session-filter-controls">${controls}</div>${sessionCleanupFilterSummary(data, rows)}</div><div class="codex-usage-hud-session-table"><div class="codex-usage-hud-session-head"><span><input type="checkbox" data-session-cleanup-select-all="true" ${allVisibleSelected ? "checked" : ""} ${visibleSelectable.length ? "" : "disabled"} aria-label="全选当前页"></span><span>会话</span><span aria-hidden="true"></span><span>最后活动</span><span>状态</span><span>占用</span></div>${rowHtml || emptyState}</div>${pagination}${resultHtml}</section>`;
+        return `<section class="codex-usage-hud-session-cleanup" aria-label="会话管理">${unavailable}<div class="codex-usage-hud-session-tools"><div class="codex-usage-hud-session-tools-primary"><div class="codex-usage-hud-session-search">${cleanupIconSvg("search")}<input type="search" data-session-cleanup-search="true" value="${escapeHtml(sessionCleanupState.searchDraft)}" placeholder="搜索会话、内容、文件或会话 ID" aria-label="搜索会话"><button type="button" class="codex-usage-hud-session-search-submit" data-action="session-cleanup-search-submit" aria-label="开始搜索">${cleanupIconSvg("search")}<span>${searchButtonLabel}</span></button></div><div class="codex-usage-hud-session-index-workdir">${indexToggle}${workdirControl}</div><div class="codex-usage-hud-session-date-filter" data-open="${sessionCleanupState.datePickerOpen}"><button type="button" class="codex-usage-hud-session-date-trigger" data-action="session-cleanup-date-toggle" aria-expanded="${sessionCleanupState.datePickerOpen ? "true" : "false"}" aria-haspopup="dialog">${cleanupIconSvg("calendar")}<span>最后活动：${escapeHtml(sessionCleanupDateRangeLabel())}</span>${cleanupIconSvg("chevron")}</button>${datePopover}</div></div>${indexPanel}<div class="codex-usage-hud-session-filter-controls">${controls}</div>${sessionCleanupFilterSummary(data, rows)}</div><div class="codex-usage-hud-session-table"><div class="codex-usage-hud-session-head"><span><input type="checkbox" data-session-cleanup-select-all="true" ${allVisibleSelected ? "checked" : ""} ${visibleSelectable.length ? "" : "disabled"} aria-label="全选当前页"></span><span>会话</span><span aria-hidden="true"></span><span>最后活动</span><span>状态</span><span>占用</span></div>${rowHtml || emptyState}</div>${pagination}${resultHtml}</section>`;
       }
 
       function captureStorageUiState() {

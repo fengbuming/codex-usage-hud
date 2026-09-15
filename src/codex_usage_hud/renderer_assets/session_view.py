@@ -1957,6 +1957,34 @@ TEXT = r"""
       return parseInt(m[2], 10) + "月" + parseInt(m[3], 10) + "日";
     }
 
+    const SEARCH_KIND_LABELS = {user: "用户提问", assistant: "助手回答", tool: "工具输出", file: "改动文件", metadata: "会话信息", identity: "会话 ID"};
+
+    function searchKindLabel(kind) {
+      return SEARCH_KIND_LABELS[String(kind || "")] || "命中";
+    }
+
+    // 命中徽标解释「这一条为什么算命中」。正文匹配可以直接被 Codex 原生查找高亮；
+    // 会话 ID / 会话信息命中只有元数据依据，正文里没有可定位的文本；索引命中落在
+    // 工具输出或改动文件上，原生查找不一定找得到。把三者混成一句「索引命中」会让
+    // 用标题或会话 ID 搜索的用户以为自己在看内容搜索结果。
+    function searchHitBadge(entry) {
+      if (entry.exactPhrase) {
+        return '<span class="codex-usage-hud-search-badge">正文匹配</span>';
+      }
+      const kinds = Array.isArray(entry.kinds) ? entry.kinds : [];
+      if (kinds.indexOf("identity") >= 0) {
+        return '<span class="codex-usage-hud-search-badge is-index-only" title="按会话 ID 或深度链接定位，正文里没有可高亮的文本">会话 ID 命中</span>';
+      }
+      if (kinds.indexOf("metadata") >= 0) {
+        return '<span class="codex-usage-hud-search-badge is-index-only" title="命中的是会话标题、首条提问或工作目录等会话信息，正文里没有可高亮的文本">会话信息命中</span>';
+      }
+      const rendered = kinds.some((kind) => kind === "user" || kind === "assistant");
+      if (!rendered && kinds.length > 0) {
+        return '<span class="codex-usage-hud-search-badge is-index-only" title="命中索引内容，打开后可能无法被 Codex 原生查找定位">索引命中</span>';
+      }
+      return "";
+    }
+
     function renderSearchFloat() {
       if (!searchFloat) return;
       let panel = document.getElementById("codex-usage-hud-search-float");
@@ -1989,16 +2017,9 @@ TEXT = r"""
             .map((token) => `<button type="button" class="codex-usage-hud-search-chip" data-token="${escapeAttr(token)}">${escapeHtml(token)}</button>`)
             .join("");
           const dateLabel = sessionDateLabel(entry.updatedAt);
-          const kinds = Array.isArray(entry.kinds) ? entry.kinds : [];
-          const indexOnly = !entry.exactPhrase
-            && kinds.length > 0
-            && kinds.every((kind) => kind !== "user" && kind !== "assistant");
-          const sourceLabels = {user: "用户提问", assistant: "助手回答", tool: "工具输出", file: "改动文件", metadata: "会话信息"};
           const rowMeta = [
-            escapeHtml(sourceLabels[entry.preview?.kind] || ""),
-            entry.exactPhrase
-              ? '<span class="codex-usage-hud-search-badge">正文匹配</span>'
-              : (indexOnly ? '<span class="codex-usage-hud-search-badge is-index-only" title="命中索引内容，打开后可能无法被 Codex 原生查找定位">索引命中</span>' : ""),
+            escapeHtml(entry.preview?.kind ? searchKindLabel(entry.preview.kind) : ""),
+            searchHitBadge(entry),
             dateLabel ? `<span class="codex-usage-hud-search-date">${dateLabel}</span>` : "",
           ].filter(Boolean).join("");
           rowsHtml += `
@@ -2028,7 +2049,7 @@ TEXT = r"""
           <button type="button" data-action="only-exact" class="codex-usage-hud-search-filter${onlyExact ? " is-on" : ""}" aria-pressed="${onlyExact ? "true" : "false"}" title="只列出用户提问或助手回答中包含关键词的会话；不保证原生查找可定位">正文命中</button>
         </div>
         ${searchFloat.notice && !searchFloat.collapsed ? `<div class="codex-usage-hud-search-notice">${escapeHtml(searchFloat.notice)}</div>` : ""}
-        ${total ? `<ul class="codex-usage-hud-search-list">${rowsHtml}</ul>` : '<div class="codex-usage-hud-search-empty">没有正文命中的会话，可关闭筛选查看文件或工具命中。</div>'}
+        ${total ? `<ul class="codex-usage-hud-search-list">${rowsHtml}</ul>` : '<div class="codex-usage-hud-search-empty">没有正文命中的会话，可关闭筛选查看会话信息、文件或工具命中。</div>'}
         <div class="codex-usage-hud-search-nav">
           <button type="button" data-action="prev" aria-label="上一个命中" ${idx <= 0 ? "disabled" : ""}><span class="codex-usage-hud-search-nav-icon" aria-hidden="true">←</span><span>上一个</span></button>
           <button type="button" data-action="next" aria-label="下一个命中" ${(idx < 0 || idx >= total - 1) ? "disabled" : ""}><span>下一个</span><span class="codex-usage-hud-search-nav-icon" aria-hidden="true">→</span></button>
@@ -2194,7 +2215,7 @@ TEXT = r"""
       const entry = (searchFloat?.matches || []).find((item) => item.id === itemId);
       if (searchFloat) {
         searchFloat.notice = entry && !entry.exactPhrase
-          ? `命中来源：${(entry.kinds || []).join("、") || "索引"}；将使用“${entry.findQuery || query}”定位可见内容`
+          ? `命中来源：${(entry.kinds || []).map(searchKindLabel).join("、") || "会话索引"}；将使用“${entry.findQuery || query}”定位可见内容`
           : "";
         renderSearchFloat();
       }

@@ -25,6 +25,8 @@ from .session_search import (
     _find_query_fallback,
     normalise_workdir,
     search_terms,
+    session_identity_matches,
+    session_identity_query,
     workdir_identity,
 )
 from .session_materializer import (
@@ -76,6 +78,11 @@ class _ThreadRecord:
     cwd: str
     archived: bool
     updated_at_ms: int
+    # The Codex-visible session name. ``threads.title`` holds the *first user
+    # message*, so the two differ whenever Codex generated a short name: the
+    # name is what the Codex session list shows and what a user copies when
+    # looking for a session, while ``title`` is only the opening prompt.
+    name: str = ""
 
 
 @dataclass(frozen=True)
@@ -104,6 +111,11 @@ class SessionCleanupItem:
     _cwd: str = field(default="", repr=False, compare=False)
     _descendant_ids: tuple[str, ...] = field(default=(), repr=False, compare=False)
     _rollout_paths: tuple[Path, ...] = field(default=(), repr=False, compare=False)
+    # Search-only copy of ``threads.title`` (the opening user message). It is
+    # never rendered, but it keeps "search the prompt I remember" working for
+    # sessions whose visible name is a generated short title -- which is the
+    # case whenever the index is off and metadata matching is the only path.
+    _search_title: str = field(default="", repr=False, compare=False)
 
     def to_payload(self, *, pending_source_cleanup: bool = False) -> dict[str, object]:
         return {
@@ -308,6 +320,23 @@ def _workdir_leaf(value: object) -> str:
     if "\\" in text:
         return PureWindowsPath(text).name
     return Path(text).name
+
+
+def _visible_session_title(record: _ThreadRecord, index_title: object = "") -> str:
+    """Return the session title a user recognises from the Codex UI.
+
+    Priority: the Codex-visible name (``threads.name``), then the legacy
+    session index ``thread_name``, then the recorded first user message, and
+    finally a placeholder. The first message is deliberately last: Codex
+    stores it in ``threads.title``, and using it as the row title made the
+    inventory disagree with the Codex session list.
+    """
+
+    for candidate in (record.name, index_title, record.title):
+        text = str(candidate or "").strip()
+        if text:
+            return text
+    return "Untitled session"
 
 
 def _updated_at_iso(value: int) -> str:
@@ -753,20 +782,43 @@ class SessionCleanupManager:
         ]
 
     @staticmethod
-    def _metadata_matches(item: SessionCleanupItem, query: str) -> bool:
+    def _metadata_match_kinds(item: SessionCleanupItem, query: str) -> tuple[str, ...]:
+        """Return the metadata match kinds for one item, ``()`` when it misses.
+
+        The kind is not cosmetic: it tells the renderer *why* a row matched so
+        the in-session float can explain a hit that has no text to highlight.
+        ``identity`` means the query was a session id / deep link, ``metadata``
+        means it matched the session's own fields (title, first prompt,
+        workdir, provider, client).
+        """
+
+        # A session id or ``codex://threads/<id>`` deep link is an identity
+        # lookup, not a text search: the id itself is never part of the row
+        # metadata, and tokenising the link would only look for the literal
+        # words ``codex``/``threads``. Matching happens here, behind the
+        # manager boundary, so the renderer payload still never carries a
+        # session UUID.
+        identity = session_identity_query(query)
+        if identity:
+            return ("identity",) if session_identity_matches(item._session_id, identity) else ()
         terms = search_terms(query)
         if not terms:
-            return True
+            # A query with nothing searchable in it (punctuation, emoji) is not
+            # a wildcard: the renderer's local fallback filters every row out,
+            # so matching everything here would only make the two paths
+            # disagree.
+            return ()
         haystack = " ".join(
             (
                 item.title,
+                item._search_title,
                 item.workdir_name,
                 item._cwd,
                 item.model_provider,
                 item.client_kind,
             )
         ).casefold().replace("\\", "/")
-        return all(term in haystack for term in terms)
+        return ("metadata",) if all(term in haystack for term in terms) else ()
 
     def _search_matches_locked(
         self,
@@ -775,11 +827,24 @@ class SessionCleanupManager:
     ) -> tuple[list[str], list[dict[str, object]], dict[str, object]]:
         visible_items = self._visible_search_items(workdir_id)
         by_session = {item._session_id: item for item in visible_items}
-        result = self._search_index.search(
-            query,
-            session_ids=by_session,
-            load=False,
-        )
+        if session_identity_query(query):
+            # Identity lookups are answered from inventory metadata alone. The
+            # resident index would otherwise contribute every session whose
+            # content happens to mention ``codex`` or ``threads``, burying the
+            # one session the user actually asked for.
+            result: dict[str, object] = {
+                "query": str(query or ""),
+                "matches": [],
+                "indexed": 0,
+                "indexAvailable": True,
+                "memoryLoaded": True,
+            }
+        else:
+            result = self._search_index.search(
+                query,
+                session_ids=by_session,
+                load=False,
+            )
         details: dict[str, dict[str, object]] = {}
         order: list[str] = []
         raw_matches = result.get("matches") if isinstance(result, Mapping) else []
@@ -811,18 +876,21 @@ class SessionCleanupManager:
                     }
         if query.strip():
             for item in visible_items:
-                if not self._metadata_matches(item, query):
+                metadata_kinds = self._metadata_match_kinds(item, query)
+                if not metadata_kinds:
                     continue
                 item_id = item.id
                 if item_id not in details:
                     order.append(item_id)
                     details[item_id] = {
                         "id": item_id,
-                        "kinds": ["metadata"],
+                        "kinds": list(metadata_kinds),
                         "score": 3.0,
                     }
-                elif "metadata" not in details[item_id]["kinds"]:
-                    details[item_id]["kinds"].append("metadata")
+                else:
+                    for kind in metadata_kinds:
+                        if kind not in details[item_id]["kinds"]:
+                            details[item_id]["kinds"].append(kind)
         else:
             order = [item.id for item in visible_items]
             details = {}
@@ -1132,7 +1200,6 @@ class SessionCleanupManager:
             return {"query": query, "error": "inventory-changed"}
         if str(revision) != self._revision or self._items.get(str(item_id)) is not item:
             return {"query": query, "error": "inventory-changed"}
-        titles = self._session_index_titles()
         ordered_ids = [str(value) for value in self._search_state.get("matches") or []]
         kind_map = {
             str(entry.get("id")): entry
@@ -1194,17 +1261,19 @@ class SessionCleanupManager:
             ranked.append(
                 {
                     "id": match_id,
-                "title": (
-                    titles.get(match_item._session_id)
-                    if match_item is not None
-                    else (entry.get("title") or match_id)
-                ),
-                "updatedAt": (
-                    match_item.updated_at
-                    if match_item is not None
-                    else (entry.get("updatedAt") or "")
-                ),
-                "kinds": list(entry.get("kinds") or []),
+                    # Same visible name the inventory row shows, so the float and
+                    # the list never disagree about which session this is.
+                    "title": (
+                        match_item.title
+                        if match_item is not None
+                        else (entry.get("title") or match_id)
+                    ),
+                    "updatedAt": (
+                        match_item.updated_at
+                        if match_item is not None
+                        else (entry.get("updatedAt") or "")
+                    ),
+                    "kinds": list(entry.get("kinds") or []),
                     "score": float(entry.get("score") or 0),
                     "exactPhrase": exact_phrase,
                     "matchedTokens": matched_tokens,
@@ -1360,11 +1429,13 @@ class SessionCleanupManager:
         records, parents, edge_states, unsafe_ids, unresolved = self._load_state()
         self._prune_migrated_source_ids(records)
         report("merge", "Merging root sessions and subagents", 2, 55)
-        # State rows normally carry the visible title. Avoid rereading the
-        # legacy session index on every scan; consult it only for missing titles.
+        # State rows carry the Codex-visible session name (``threads.name``).
+        # The legacy session index is a second source for the same value, so
+        # it is only read when a row has neither a name nor a first message --
+        # the only case where the index can still contribute a title.
         titles = (
             self._session_index_titles()
-            if any(not record.title for record in records.values())
+            if any(not (record.name or record.title) for record in records.values())
             else {}
         )
         current_ids = self._protected_ids(self.current_session_ids)
@@ -1445,9 +1516,14 @@ class SessionCleanupManager:
             items.append(
                 SessionCleanupItem(
                     id=f"session-{self.token_factory()}",
-                    title=(
-                        root.title or titles.get(root_id) or "Untitled session"
-                    ).strip(),
+                    # The visible name wins over ``threads.title``: Codex stores
+                    # the *first user message* in ``title`` and the short name
+                    # it shows in its own session list in ``name`` (mirrored to
+                    # the legacy session index as ``thread_name``). Listing the
+                    # raw first message made every row look different from
+                    # Codex, and made the name a user actually remembers
+                    # unsearchable.
+                    title=_visible_session_title(root, titles.get(root_id)),
                     workdir_name=_workdir_leaf(root.cwd),
                     updated_at=_updated_at_iso(
                         max(record.updated_at_ms for record in family_records)
@@ -1470,6 +1546,7 @@ class SessionCleanupManager:
                     _cwd=root.cwd,
                     _descendant_ids=tuple(descendants),
                     _rollout_paths=rollout_paths,
+                    _search_title=root.title,
                 )
             )
             if root_index == total_roots or root_index % progress_interval == 0:
@@ -3111,6 +3188,7 @@ class SessionCleanupManager:
                         "id",
                         "rollout_path",
                         "title",
+                        "name",
                         "cwd",
                         "archived",
                         "updated_at_ms",
@@ -3154,6 +3232,7 @@ class SessionCleanupManager:
                 cwd=str(values.get("cwd") or "").strip(),
                 archived=bool(values.get("archived")),
                 updated_at_ms=max(0, updated_at_ms),
+                name=str(values.get("name") or "").strip(),
             )
         parents: dict[str, set[str]] = defaultdict(set)
         edge_states: dict[str, str] = {}

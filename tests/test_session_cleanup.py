@@ -27,6 +27,14 @@ SECOND_ID = "10000000-0000-4000-8000-000000000003"
 
 
 def _create_state(path: Path, rows: list[tuple[object, ...]]) -> None:
+    """Create the Codex state database with the columns the HUD reads.
+
+    ``title`` mirrors Codex's "first user message" column and ``name`` mirrors
+    the session name Codex shows in its own list; real rows differ whenever
+    Codex generated a short name. Rows are
+    ``(id, rollout_path, title, name, cwd, archived, updated_at_ms)``.
+    """
+
     with closing(sqlite3.connect(path)) as connection, connection:
         connection.executescript(
             """
@@ -34,6 +42,7 @@ def _create_state(path: Path, rows: list[tuple[object, ...]]) -> None:
                 id TEXT PRIMARY KEY,
                 rollout_path TEXT NOT NULL,
                 title TEXT NOT NULL DEFAULT '',
+                name TEXT NOT NULL DEFAULT '',
                 cwd TEXT NOT NULL DEFAULT '',
                 archived INTEGER NOT NULL DEFAULT 0,
                 updated_at_ms INTEGER NOT NULL DEFAULT 0
@@ -47,8 +56,8 @@ def _create_state(path: Path, rows: list[tuple[object, ...]]) -> None:
         )
         connection.executemany(
             """
-            INSERT INTO threads(id, rollout_path, title, cwd, archived, updated_at_ms)
-            VALUES(?, ?, ?, ?, ?, ?)
+            INSERT INTO threads(id, rollout_path, title, name, cwd, archived, updated_at_ms)
+            VALUES(?, ?, ?, ?, ?, ?, ?)
             """,
             rows,
         )
@@ -136,6 +145,7 @@ class SessionCleanupManagerTests(unittest.TestCase):
                     ROOT_ID,
                     str(rollouts[ROOT_ID]),
                     "Root",
+                    "Root",
                     str(root / "project-a"),
                     0,
                     1_700_000_000_000,
@@ -144,6 +154,7 @@ class SessionCleanupManagerTests(unittest.TestCase):
                     CHILD_ID,
                     str(rollouts[CHILD_ID]),
                     "Child",
+                    "Child",
                     str(root / "project-a"),
                     0,
                     1_700_000_100_000,
@@ -151,6 +162,7 @@ class SessionCleanupManagerTests(unittest.TestCase):
                 (
                     SECOND_ID,
                     str(rollouts[SECOND_ID]),
+                    "Archived",
                     "Archived",
                     str(root / "project-b"),
                     1,
@@ -166,8 +178,12 @@ class SessionCleanupManagerTests(unittest.TestCase):
         index_path = root / "session_index.jsonl"
         index_path.write_text(
             "\n".join(
-                json.dumps({"id": item, "thread_name": f"Name {item[-1]}"})
-                for item in (ROOT_ID, CHILD_ID, SECOND_ID)
+                json.dumps({"id": item, "thread_name": title})
+                for item, title in (
+                    (ROOT_ID, "Root"),
+                    (CHILD_ID, "Child"),
+                    (SECOND_ID, "Archived"),
+                )
             )
             + "\n",
             encoding="utf-8",
@@ -262,6 +278,161 @@ class SessionCleanupManagerTests(unittest.TestCase):
 
         self.assertEqual(payload["operation"]["state"], "completed")
         self.assertEqual(payload["search"]["indexState"], "stale")
+
+    def test_inventory_title_uses_codex_visible_name_not_first_message(self) -> None:
+        """Regression: the row title must be the name Codex shows.
+
+        Codex stores the *first user message* in ``threads.title`` and the
+        short session name in ``threads.name``. The inventory used to render
+        ``title``, so a keyword from the name a user actually sees (and
+        remembers) matched nothing -- in the list and in search alike, with or
+        without a built index.
+        """
+
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        sessions = root / "sessions"
+        sessions.mkdir()
+        (root / "archived_sessions").mkdir()
+        rollout = sessions / f"rollout-{ROOT_ID}.jsonl"
+        rollout.write_text(
+            json.dumps(
+                {
+                    "type": "session_meta",
+                    "payload": {
+                        "model_provider": "token-x",
+                        "originator": "codex-tui",
+                        "source": "cli",
+                    },
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        first_message = (
+            "/E:/Project/zjxq-admin/scripts/sql/migration.sql 是上一个会话产出的迁移脚本，"
+            "在 stage 测试通过，但生产环境执行时结果返回 0 行"
+        )
+        visible_name = "排查生产迁移脚本零行原因"
+        state_db = root / "state_5.sqlite"
+        _create_state(
+            state_db,
+            [
+                (
+                    ROOT_ID,
+                    str(rollout),
+                    first_message,
+                    visible_name,
+                    str(root / "project-a"),
+                    0,
+                    1_700_000_000_000,
+                )
+            ],
+        )
+        manager = SessionCleanupManager(
+            state_db_path=state_db,
+            sessions_root=sessions,
+            session_index_path=root / "session_index.jsonl",
+            token_factory=iter(f"token-{index}" for index in range(100)).__next__,
+        )
+
+        payload = manager.scan(request_id="title-source")
+        self.assertEqual(len(payload["sessions"]), 1)
+        row = payload["sessions"][0]
+        self.assertEqual(row["title"], visible_name)
+
+        # The name a user reads off the Codex session list is now searchable.
+        title_hit = manager.search(visible_name)["search"]
+        self.assertEqual(title_hit["matches"], [row["id"]])
+        # ...and it is reported as a session-info hit, not as an index hit: the
+        # float uses the kind to explain a hit with no text to highlight.
+        self.assertEqual(
+            [entry["kinds"] for entry in title_hit["matchKinds"]],
+            [["metadata"]],
+        )
+        # ...and the opening prompt stays searchable as well.
+        self.assertEqual(
+            manager.search("migration.sql")["search"]["matches"],
+            [row["id"]],
+        )
+
+    def test_search_matches_session_id_and_codex_deep_link(self) -> None:
+        fixture = self._fixture()
+        temporary, _root, _state, _index, _rollouts, manager = fixture
+        self.addCleanup(temporary.cleanup)
+
+        payload = manager.scan(request_id="identity-scan")
+        rows = {row["title"]: row["id"] for row in payload["sessions"]}
+        root_row_id = rows["Root"]
+
+        for query in (
+            ROOT_ID,
+            ROOT_ID.upper(),
+            f"codex://threads/{ROOT_ID}",
+            f"[codex://threads/{ROOT_ID}]",
+            f"  codex://threads/{ROOT_ID}/  ",
+        ):
+            with self.subTest(query=query):
+                result = manager.search(query)
+                self.assertEqual(result["search"]["matches"], [root_row_id])
+                # Identity hits carry their own kind so the in-session float can
+                # say "会话 ID 命中" instead of blaming the content index.
+                self.assertEqual(
+                    [entry["kinds"] for entry in result["search"]["matchKinds"]],
+                    [["identity"]],
+                )
+
+        # The kind survives the jump payload the float actually renders.
+        thread_find = manager.thread_find_for_item(
+            root_row_id,
+            payload["revision"],
+            f"codex://threads/{ROOT_ID}",
+        )
+        self.assertEqual(thread_find["matches"][0]["kinds"], ["identity"])
+        self.assertEqual(thread_find["matches"][0]["title"], "Root")
+
+        # Identity lookups must not leak a session UUID into the inventory rows.
+        # (The submitted query is echoed back as-is, so only the rows are checked.)
+        serialized = json.dumps(
+            manager.search(f"codex://threads/{ROOT_ID}")["sessions"],
+            ensure_ascii=False,
+        )
+        self.assertNotIn(ROOT_ID, serialized)
+
+    def test_session_identity_query_separates_ids_from_text_queries(self) -> None:
+        from codex_usage_hud.core.session_search import (
+            session_identity_matches,
+            session_identity_query,
+        )
+
+        upper = "01A0A28A-6825-7931-A247-F3E02C98F23A"
+        self.assertEqual(
+            session_identity_query(f" {upper} "),
+            "01a0a28a-6825-7931-a247-f3e02c98f23a",
+        )
+        self.assertEqual(
+            session_identity_query(f"[codex://threads/{upper}]"),
+            "01a0a28a-6825-7931-a247-f3e02c98f23a",
+        )
+        self.assertEqual(session_identity_query("codex://threads/01a0a28a"), "01a0a28a")
+        for text in (
+            "排查生产迁移",
+            "session cleanup",
+            "E:/Project/codex-usage-hud",
+            "20260915",
+            "add",
+            "",
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(session_identity_query(text), "")
+
+        session_id = "01a0a28a-6825-7931-a247-f3e02c98f23a"
+        self.assertTrue(session_identity_matches(session_id, "01a0a28a"))
+        self.assertTrue(session_identity_matches(session_id, "01a0a28a-6825"))
+        self.assertTrue(session_identity_matches(session_id, session_id))
+        self.assertFalse(session_identity_matches(session_id, "01a0a28b"))
+        self.assertFalse(session_identity_matches(session_id, "01a0a28"))
 
     def test_search_indexes_user_assistant_and_changed_file_text(self) -> None:
         fixture = self._fixture()

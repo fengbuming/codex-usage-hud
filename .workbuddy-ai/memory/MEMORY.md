@@ -34,6 +34,68 @@ settings shell 的 `settingsProviderDraft` 是「创建时抓取的快照」，*
 - 新增/修改单价表渲染相关逻辑时，同步更新 `providerDraftFromSettings` 的取值规则与
   `settingsProviderPriceSourceTable()`——两者必须取同一份表，否则指纹会误判。
 
+## 不变量：会话清单标题取 Codex 可见名，不取首条消息
+
+Codex 的 `state_5.sqlite` `threads` 表里有两个不同的字段，很容易混：
+
+- `title` = **首条用户消息**（可长达数百字符的原始 prompt）；
+- `name` = Codex 会话列表里显示的**会话名**（LLM 生成的短标题），
+  `~/.codex/session_index.jsonl` 的 `thread_name` 是同一个值的镜像。
+
+清单行标题必须走 `_visible_session_title()`：`name` → `thread_name` → `title` → `Untitled session`。
+**不要再用 `root.title` 当行标题** —— 那会让界面显示一堵首条消息的墙，且用户从 Codex 里
+看到的会话名既搜不到也认不出（实测 983 个会话里 406 个 `name != title`）。
+
+- 首条消息仍要可搜：`SessionCleanupItem._search_title` 保留 `threads.title`，只进
+  `_metadata_matches` 的 haystack，不进 payload、不上屏。索引关闭时元数据匹配是唯一路径，
+  少了它就会丢掉「按记得的 prompt 搜」这个能力。
+- 会话身份查询（裸 id / `codex://threads/<id>`）走 `session_identity_query()` +
+  `session_identity_matches()`，在 `_metadata_matches` 里**先于**分词匹配判定，
+  并在 `_search_matches_locked` 对身份查询短路（否则深链里的 `codex`/`threads`
+  会把大量无关内容命中混进来）。
+- **UUID 不出 manager 边界**是既有隐私契约：身份比对只在服务端做，渲染器只拿到
+  不透明 `session-<token>` 行 id。渲染器本地兜底 haystack 里没有、也不该有会话 id。
+- 命中类型（`kinds`）是**用户可见文案的依据**，不是内部细节：`_metadata_match_kinds()`
+  返回 `identity` / `metadata`，加上内容索引的 `user`/`assistant`/`tool`/`file`，
+  一路带到 `thread_find_for_item` 的 `matches`，浮窗据此显示
+  「正文匹配 / 会话 ID 命中 / 会话信息命中 / 索引命中」。新增 kind 时必须同时更新
+  `session_view.py` 的 `SEARCH_KIND_LABELS` 与 `searchHitBadge()`、以及
+  `session_cleanup.py` 的 `sessionCleanupMatchKindLabel()`——**不要让内部英文标识
+  直接上屏**（曾出现「命中来源：metadata」）。
+
+## 不变量：白屏（blank Codex UI）是锁屏 × CDP 耦合，不是进程风暴
+
+`renderer_client.quiesce()` 的 docstring 就是权威定义：长锁屏期间**继续保留持久 CDP 会话 +
+周期性 `Runtime.evaluate`** 会把 Codex renderer 主线程钉住 → 白屏。quiesce 是缓解手段
+（`_quiesced=True` + 关闭 5 个 binding + `_clear_target_cache(clear_script=True)`），
+`resume()` 后第一次 update 走**全量重装**脚本。`renderer_runtime.py:398-410` 的
+`on_session_lock` 是唯一触发点。
+
+实测（窗口最小化时）：`document.visibilityState="hidden"`，`setInterval(fn,100)` 被钳到
+**~1000ms**，`requestAnimationFrame` **0 帧/2s**。所以白屏期间 Chromium 已停止合成，
+恢复要等渲染进程出首帧——这就是「等一两分钟自己好」的形态。**它跟 helper 熔断无因果关系**：
+熔断把 spawn 压到 1.5 次/分钟（健康期恒定 121.2s 一次），而把 renderer 饿白屏的风暴量级是 150 次/分钟。
+
+- `crash.log` 的 helper 启动行可当 **HUD renderer tick 心跳**用：按「相邻行间隔 > 10s」分组，
+  恒定 121.2s = tick 健康（120s 熔断 + 3 次自旋）；187~330s 甚至 844s/1307s = 循环被 quiesce 或
+  页面节流拖慢。`RENDERER_IDLE_POLL_MS = 1500` 是正常节奏。排查白屏先看这条节律。
+- **启动行空档 = 锁屏静默窗口的指纹**（重要）。`renderer_event_loop.py:778` 的
+  `if self.ports.quiesce_active():` 分支不建 snapshot → 不调 `publish_active_work`
+  → 不调 `DesktopWorkOverlay.update()` → `_maybe_start_helper()` 不跑 → 无启动行。
+  实测午休那段：静默 3888.3s（64.8min），解锁（Kernel-Power 566）后 **10 秒**才出现首个 helper
+  ——那 10 秒就是 resume 后的 CDP 重建 + 全量重装脚本窗口，**成功路径零日志**，
+  所以只能靠这个空档反推。统计时**必须先按 `time=` 过滤日期**：crash.log 是多日累积文件。
+- **可观测性缺口**：`renderer_hud_quiesced_for_session_lock` 等 INFO 只走 stderr，
+  `attach_cli_logger_to_daemon_log` 只挂 cli/file_watcher，**锁屏时间线事后查不到**
+  （实测 daemon.log 里 `quiesce|session_lock|session_unlock` 匹配 0 条）。
+- Windows 侧：`Kernel-Power` id=566 能拿到 `SessionUnlock`/`InputHid` 会话转换；
+  Security 4800/4801 默认没开审计，拿不到精确锁屏时刻。今日无 42/107 即**没进睡眠**。
+- 白屏时页面 DOM 其实完好（bodyTextLen / `codex-usage-hud-root` / 截图都有内容）
+  → 更像**长 hidden 之后重新可见的渲染/合成延迟**，不是内容被清掉。
+- 本机取证坑：`GetProcessTimes` 返回 **UTC FILETIME**，不 +8 换算会把启动时间读成凌晨；
+  `nohup ... &` 起的后台采样器会在本轮结束时被回收（不是常驻），**不要对用户宣称它在跑**；
+  `wmic` 本机不可用，枚举进程用 `tasklist /FO CSV`。
+
 ## 本机环境：改了 renderer 资产必须重启 HUD 才生效
 
 renderer bundle 由 Python 进程启动时装配进内存（`renderer_assets/manifest.py` → `RENDERER_HUD_SCRIPT_TEMPLATE`），
@@ -57,6 +119,28 @@ renderer bundle 由 Python 进程启动时装配进内存（`renderer_assets/man
   按供应商的当前单价，`user.pricing_sync.pending_prices`/`scope_provider` 是官方快照差异，
   `user.pricing_audit`/`pricing_versions` 能还原某次「确认更新」到底写了什么。
 - `work-overlay-transitions.jsonl` — overlay 气泡状态迁移审计（含 ownerPid / stateFile）。
+
+`~/.codex/`（排查会话清单 / 搜索行为时直接取证）：
+
+- `state_5.sqlite` — `threads(id, rollout_path, title, name, cwd, archived, updated_at_ms, ...)`；
+  `title` 是首条用户消息、`name` 是可见会话名，两者常不同。**只读打开**（`mode=ro`）。
+- `session_index.jsonl` — `{"id","thread_name","updated_at"}`，`thread_name` 与 `threads.name` 同源。
+- `sessions/YYYY/MM/DD/rollout-<ts>-<uuid>.jsonl` — 会话正文；判断"关键字到底存不存在于会话内容里"
+  就 grep 这里（决定索引开着时能不能搜到）。
+
+```bash
+# 会话清单 / 搜索行为的端到端取证：直接构造 manager 打真实数据（只读）
+"C:/Users/zjxqm/AppData/Local/Programs/Python/Python314/python.exe" - <<'PY'
+import sys; sys.path.insert(0, "src")
+from pathlib import Path
+from codex_usage_hud.core.session_cleanup import SessionCleanupManager
+c = Path.home() / ".codex"
+m = SessionCleanupManager(state_db_path=c/"state_5.sqlite", sessions_root=c/"sessions",
+                          session_index_path=c/"session_index.jsonl")
+rows = {r["id"]: r["title"] for r in m.scan()["sessions"]}
+print(m.search("排查生产迁移")["search"]["matches"])
+PY
+```
 
 ## 常用验证命令
 

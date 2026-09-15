@@ -1718,6 +1718,15 @@ class RendererHudPayloadTests(unittest.TestCase):
         self.assertIn("正文匹配", script)
         self.assertIn("索引命中", script)
         self.assertIn("命中索引内容，打开后可能无法被 Codex 原生查找定位", script)
+        # A hit that only matched the session's own metadata (title, first
+        # prompt, workdir) or a session id / deep link must not be labelled
+        # "索引命中": nothing about it came from the content index, and the
+        # user searching a title would think they were reading content hits.
+        self.assertIn("会话信息命中", script)
+        self.assertIn("会话 ID 命中", script)
+        self.assertIn("function searchHitBadge(entry)", script)
+        self.assertIn('kinds.indexOf("identity") >= 0', script)
+        self.assertIn('kinds.indexOf("metadata") >= 0', script)
 
         # The pointer origin is captured while the side-anchored panel still
         # has its visual transform; only then is the transform removed.
