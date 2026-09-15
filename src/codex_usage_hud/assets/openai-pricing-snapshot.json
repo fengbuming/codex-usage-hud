@@ -1,5 +1,5 @@
 {
-  "checked_at": "2026-09-10T06:52:03.648314Z",
+  "checked_at": "2026-09-15T19:42:09.036517Z",
   "currency": "USD",
   "prices": [
     {
@@ -47,11 +47,11 @@
   "schema_version": 2,
   "sources": [
     {
-      "sha256": "aa0124e991c65fefcaeefcf7bef90f28ba9665c56fcac95ffa753e8e4d03fd63",
+      "sha256": "4cf2a1aa5942384fc152bee26617534f493bdf1624a500d3a0171cf54355eabb",
       "url": "https://developers.openai.com/api/docs/models"
     },
     {
-      "sha256": "4d12c6cf225bd079827be838f968b01e2fe52d5a4cd0f346e5cf04b97b4c9073",
+      "sha256": "b64276d5f5f1e9f5c2a753c2e8683a597006c75ca00793b64eb96d6162306efa",
       "url": "https://platform.openai.com/docs/pricing"
     }
   ],
