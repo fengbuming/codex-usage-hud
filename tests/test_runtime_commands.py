@@ -648,6 +648,85 @@ def test_general_provider_save_prompts_for_default_codex_restart() -> None:
     assert "重启 Codex Desktop" in status["message"]
 
 
+def test_general_provider_set_default_dispatches_without_restart_prompt() -> None:
+    config = UserConfig.defaults()
+    set_default = MagicMock(
+        return_value={"changed": True, "providerId": "hiyo", "name": "Hiyo Free"}
+    )
+    ports = GeneralCommandPorts(
+        load_config=lambda: config,
+        save_config=lambda value: None,
+        fetch_prices=lambda url: {},
+        rest_reminder=None,
+        update_manager=None,
+        work_overlay=None,
+        request_restart=lambda: None,
+        request_exit=lambda: None,
+        check_update=lambda: SimpleNamespace(error="", available=False, current_version="1"),
+        install_update=lambda info: None,
+        overlay_status=lambda: {},
+        start_overlay_install=lambda: False,
+        clear_forced_missing=lambda: None,
+        forced_missing_with_real_install=lambda: False,
+        pyside_version=lambda: "",
+        default_overlay_limit=lambda: 1,
+        dismiss_warnings_today=lambda: True,
+        set_default_provider=set_default,
+    )
+
+    status = dispatch_command(
+        {"action": "providerSetDefault", "provider": "hiyo", "requestId": "switch-1"},
+        RuntimeCommandPorts(),
+        ports,
+    )
+
+    set_default.assert_called_once_with("hiyo")
+    assert status["requestId"] == "switch-1"
+    assert status["action"] == "providerSetDefault"
+    assert status["providerSetDefaultProvider"] == "hiyo"
+    assert "Hiyo Free" in status["message"]
+    assert status.get("restartVisible") is not True
+    assert status.get("restartCodex") is not True
+
+
+def test_general_provider_set_default_surfaces_failure() -> None:
+    config = UserConfig.defaults()
+
+    def failing(provider):
+        raise ValueError("供应商「nope」未在 config.toml 中定义")
+
+    ports = GeneralCommandPorts(
+        load_config=lambda: config,
+        save_config=lambda value: None,
+        fetch_prices=lambda url: {},
+        rest_reminder=None,
+        update_manager=None,
+        work_overlay=None,
+        request_restart=lambda: None,
+        request_exit=lambda: None,
+        check_update=lambda: SimpleNamespace(error="", available=False, current_version="1"),
+        install_update=lambda info: None,
+        overlay_status=lambda: {},
+        start_overlay_install=lambda: False,
+        clear_forced_missing=lambda: None,
+        forced_missing_with_real_install=lambda: False,
+        pyside_version=lambda: "",
+        default_overlay_limit=lambda: 1,
+        dismiss_warnings_today=lambda: True,
+        set_default_provider=failing,
+    )
+
+    status = dispatch_command(
+        {"action": "providerSetDefault", "provider": "nope", "requestId": "switch-2"},
+        RuntimeCommandPorts(),
+        ports,
+    )
+
+    assert status["action"] == "providerSetDefault"
+    assert status["kind"] == "error"
+    assert "未在 config.toml" in status["message"]
+
+
 def test_general_provider_save_without_default_change_does_not_prompt_restart() -> None:
     config = UserConfig.defaults()
     ports = GeneralCommandPorts(

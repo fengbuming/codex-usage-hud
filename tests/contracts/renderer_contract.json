@@ -6,8 +6,8 @@
   },
   "currentBundle": {
     "phase": "P6.7",
-    "sha256": "683b9f945a473f746030095845b7962b62dad9d153bfd0a4945d0f62efe0c496",
-    "byteLength": 1307172
+    "sha256": "2ec010e6f109dabbc8b7a996996fe3f3fd239a398d86b2b4977e30de854a6503",
+    "byteLength": 1335055
   },
   "sha256": "f83d65265c55143fa775f509f09ce109c2aa75a03946b42cf462cb6cbd4ea637",
   "byteLength": 548705,
@@ -46,7 +46,7 @@
     "setIntervals": 6,
     "setTimeouts": 42,
     "kernelSetIntervals": 1,
-    "kernelSetTimeouts": 2
+    "kernelSetTimeouts": 5
   },
   "lifecycleInventory": [
     {

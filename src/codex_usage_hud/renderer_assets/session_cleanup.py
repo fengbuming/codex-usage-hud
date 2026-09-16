@@ -125,7 +125,7 @@ TEXT = r"""
               return serverMatches.has(String(item?.id || ""));
             }
           }
-          const haystack = `${item?.title || ""} ${item?.workdirName || ""} ${item?.modelProvider || ""} ${item?.clientKind || ""}`.toLowerCase();
+          const haystack = `${item?.title || ""} ${item?.workdirName || ""} ${item?.modelProvider || ""} ${item?.clientKind || ""} ${item?.id || ""}`.toLowerCase();
           return search.split(/\s+/).filter(Boolean).every((term) => haystack.includes(term));
         });
         const sort = String(filterState.sort || "recent");

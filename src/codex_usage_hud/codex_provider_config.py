@@ -881,6 +881,72 @@ def save_provider_configs(
     }
 
 
+def set_default_codex_provider(
+    provider_id: str,
+    *,
+    config_path: str | Path | None = None,
+) -> dict[str, object]:
+    """Set the top-level ``model_provider`` key without touching other TOML.
+
+    The running Codex Desktop re-reads config.toml when a new session starts
+    (verified by a live probe: flipping ``model_provider`` took effect for the
+    next thread with no app restart), so this is the hot-switch path for new
+    App sessions.  Only the selected provider section/ID is validated; all
+    unrelated TOML is preserved byte-for-byte and written atomically.
+    """
+    requested = str(provider_id or "").strip()
+    if not requested:
+        raise ValueError("供应商 ID 不能为空。")
+    normalized = requested.casefold()
+    if not PROVIDER_ID_PATTERN.fullmatch(requested):
+        raise ValueError(
+            f"供应商 ID「{requested}」不合法：仅允许字母、数字、下划线和连字符。"
+        )
+    path = (
+        Path(config_path).expanduser()
+        if config_path is not None
+        else default_codex_config_path()
+    )
+    if not path.exists():
+        raise FileNotFoundError(f"Codex config was not found: {path}")
+    original_text = _read_text_exact(path)
+    parsed = _parse_toml_mapping(original_text)
+    current = str(parsed.get("model_provider") or "").strip().casefold()
+    if current == normalized:
+        return {"changed": False, "providerId": requested}
+    raw_model_providers = parsed.get("model_providers")
+    defined_ids = (
+        {
+            str(provider).strip().casefold()
+            for provider in raw_model_providers
+            if str(provider or "").strip()
+        }
+        if isinstance(raw_model_providers, Mapping)
+        else set()
+    )
+    if normalized not in defined_ids and normalized not in RESERVED_BUILTIN_PROVIDER_IDS:
+        raise ValueError(
+            f"供应商「{requested}」未在 config.toml 的 [model_providers] 中定义，无法设为默认。"
+        )
+    newline = _preferred_newline(original_text)
+    first_table = re.search(
+        r"(?m)^[\t ]*\[\[?[^\r\n]+\]\]?\s*(?:#.*)?(?:\r?\n|$)",
+        original_text,
+    )
+    head_end = first_table.start() if first_table else len(original_text)
+    head = original_text[:head_end]
+    tail = original_text[head_end:]
+    candidate_head = _set_quoted_value(head, "model_provider", normalized, newline)
+    # 顶层键必须与后续表头用换行分隔（head 为空或原文件末行无换行时都会被粘在一起）。
+    candidate_head = candidate_head.rstrip("\r\n") + newline
+    candidate_text = candidate_head + tail
+    candidate_parsed = _parse_toml_mapping(candidate_text)
+    if str(candidate_parsed.get("model_provider") or "").strip().casefold() != normalized:
+        raise ValueError("config.toml 顶层 model_provider 写入后校验失败。")
+    _write_text_atomically(path, candidate_text, original_text)
+    return {"changed": True, "providerId": requested, "configPath": str(path)}
+
+
 MAX_PROVIDER_MODELS_RESPONSE_BYTES = 8 * 1024 * 1024
 
 

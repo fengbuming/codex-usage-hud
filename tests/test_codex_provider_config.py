@@ -25,6 +25,7 @@ from codex_usage_hud.codex_provider_config import (
     save_provider_configs,
     send_cli_chat_probe,
     send_provider_chat_probe,
+    set_default_codex_provider,
     verify_provider_connectivity,
 )
 
@@ -57,6 +58,85 @@ class CodexProviderConfigTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "默认 Codex App Provider"):
                 delete_provider_config("custom", config_path=path)
             self.assertEqual(path.read_text(encoding="utf-8"), config_text)
+
+    def test_set_default_provider_switches_top_level_key_and_preserves_toml(self) -> None:
+        config_text = (
+            'model_provider = "custom"\n\n'
+            "[model_providers.custom]\n"
+            'name = "OpenRouter 代理"\n'
+            'base_url = "https://openrouter.zjxqai.com/v1"\n'
+            'env_key = "OPENROUTER_API_KEY"\n\n'
+            "[model_providers.hiyo]\n"
+            'name = "Hiyo Free"\n'
+            'base_url = "https://free.hiyo.top/v1"\n'
+            'env_key = "HIYO_API_KEY"\n'
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "config.toml"
+            path.write_text(config_text, encoding="utf-8")
+            result = set_default_codex_provider("hiyo", config_path=path)
+            self.assertTrue(result["changed"])
+            self.assertEqual(result["providerId"], "hiyo")
+            updated = path.read_text(encoding="utf-8")
+            self.assertEqual(
+                updated.splitlines()[0],
+                'model_provider = "hiyo"',
+            )
+            self.assertIn('name = "OpenRouter 代理"', updated)
+            self.assertIn('base_url = "https://free.hiyo.top/v1"', updated)
+            self.assertNotIn('model_provider = "custom"', updated)
+
+    def test_set_default_provider_is_idempotent(self) -> None:
+        config_text = (
+            'model_provider = "hiyo"\n\n'
+            "[model_providers.custom]\n"
+            'name = "OpenRouter 代理"\n'
+            'base_url = "https://openrouter.zjxqai.com/v1"\n'
+            'env_key = "OPENROUTER_API_KEY"\n\n'
+            "[model_providers.hiyo]\n"
+            'name = "Hiyo Free"\n'
+            'base_url = "https://free.hiyo.top/v1"\n'
+            'env_key = "HIYO_API_KEY"\n'
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "config.toml"
+            path.write_text(config_text, encoding="utf-8")
+            result = set_default_codex_provider("hiyo", config_path=path)
+            self.assertFalse(result["changed"])
+            self.assertEqual(path.read_text(encoding="utf-8"), config_text)
+
+    def test_set_default_provider_rejects_unknown_and_invalid_ids(self) -> None:
+        config_text = (
+            'model_provider = "custom"\n\n'
+            "[model_providers.custom]\n"
+            'name = "OpenRouter 代理"\n'
+            'base_url = "https://openrouter.zjxqai.com/v1"\n'
+            'env_key = "OPENROUTER_API_KEY"\n'
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "config.toml"
+            path.write_text(config_text, encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "未在 config.toml"):
+                set_default_codex_provider("nope", config_path=path)
+            with self.assertRaisesRegex(ValueError, "不合法"):
+                set_default_codex_provider("bad id!", config_path=path)
+            self.assertEqual(path.read_text(encoding="utf-8"), config_text)
+
+    def test_set_default_provider_appends_key_when_missing(self) -> None:
+        config_text = (
+            "[model_providers.custom]\n"
+            'name = "OpenRouter 代理"\n'
+            'base_url = "https://openrouter.zjxqai.com/v1"\n'
+            'env_key = "OPENROUTER_API_KEY"\n'
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "config.toml"
+            path.write_text(config_text, encoding="utf-8")
+            result = set_default_codex_provider("custom", config_path=path)
+            self.assertTrue(result["changed"])
+            updated = path.read_text(encoding="utf-8")
+            self.assertTrue(updated.startswith('model_provider = "custom"'))
+            self.assertIn("[model_providers.custom]", updated)
 
     def test_delete_provider_removes_related_tables_and_profile(self) -> None:
         config_text = (

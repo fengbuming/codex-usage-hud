@@ -63,19 +63,27 @@ Codex 的 `state_5.sqlite` `threads` 表里有两个不同的字段，很容易�
   `session_cleanup.py` 的 `sessionCleanupMatchKindLabel()`——**不要让内部英文标识
   直接上屏**（曾出现「命中来源：metadata」）。
 
-## 不变量：白屏（blank Codex UI）是锁屏 × CDP 耦合，不是进程风暴
+## 不变量：白屏（blank Codex UI）是合成表面重建，不是进程风暴、也不是 HUD 的 CDP
 
-`renderer_client.quiesce()` 的 docstring 就是权威定义：长锁屏期间**继续保留持久 CDP 会话 +
-周期性 `Runtime.evaluate`** 会把 Codex renderer 主线程钉住 → 白屏。quiesce 是缓解手段
-（`_quiesced=True` + 关闭 5 个 binding + `_clear_target_cache(clear_script=True)`），
-`resume()` 后第一次 update 走**全量重装**脚本。`renderer_runtime.py:398-410` 的
-`on_session_lock` 是唯一触发点。
+`renderer_client.quiesce()` 的 docstring 点名了一种失效模式：长锁屏期间**继续保留持久 CDP 会话 +
+周期性 `Runtime.evaluate`** 会把 Codex renderer 主线程钉住 → 白屏。**但这条路已经被堵住了**，
+2026-09-15 实测确认：
 
-实测（窗口最小化时）：`document.visibilityState="hidden"`，`setInterval(fn,100)` 被钳到
-**~1000ms**，`requestAnimationFrame` **0 帧/2s**。所以白屏期间 Chromium 已停止合成，
-恢复要等渲染进程出首帧——这就是「等一两分钟自己好」的形态。**它跟 helper 熔断无因果关系**：
-熔断把 spawn 压到 1.5 次/分钟（健康期恒定 121.2s 一次），而把 renderer 饿白屏的风暴量级是 150 次/分钟。
+- tick loop 在锁屏期间整个停掉（唯一路径是 `renderer_event_loop.py:778` 的 `quiesce_active()` 分支）。
+- `renderer_client.py` 四个 CDP 入口全部有 `_quiesced` 守卫：`update():432`、`update_payload():508`、
+  `probe_connection():922`、`report_active_session():985`。新增 CDP 入口必须同样加守卫。
+- **注入脚本里不能有周期性定时器**：`scheduleInterval` 在 `renderer_assets/` 里从未被调用，
+  唯一的调度原语是一次性 `requestAnimationFrame`（`kernel.py:97`，hidden 时 Chromium 直接挂起它）。
+  新增循环 UI 时不要引入 `setInterval`。
+- overlay keepalive 线程（`desktop_overlay.py:590-652`）只在已发布气泡时存活，空闲不占线程。
 
+→ **白屏的成因是 Chromium 丢弃了长时间不可见窗口的合成表面，重新可见时需要渲染进程重新出首帧。**
+关键判据：主线程被阻塞只会让画面**停在最后一帧**（DWM 保留），**不会变白**；变白说明表面没了。
+配套证据：hidden 期间 rAF 0 帧/2s、`setInterval` 被钳到 ~1000ms、白屏后 DOM/注入/截图全部完好、
+Codex 渲染进程从未重建（9 个 `ChatGPT.exe` 全在 08:56:40–08:57:02 创建）。
+
+- HUD 唯一确定的责任是 resume 延迟：解锁 → 首个 helper 间隔 **10 秒**（quiesce 等待 ≤5s +
+  快照 1500ms + 全量重装脚本）。这是症状不是成因，且**成功路径零日志**。
 - `crash.log` 的 helper 启动行可当 **HUD renderer tick 心跳**用：按「相邻行间隔 > 10s」分组，
   恒定 121.2s = tick 健康（120s 熔断 + 3 次自旋）；187~330s 甚至 844s/1307s = 循环被 quiesce 或
   页面节流拖慢。`RENDERER_IDLE_POLL_MS = 1500` 是正常节奏。排查白屏先看这条节律。
@@ -89,9 +97,7 @@ Codex 的 `state_5.sqlite` `threads` 表里有两个不同的字段，很容易�
   `attach_cli_logger_to_daemon_log` 只挂 cli/file_watcher，**锁屏时间线事后查不到**
   （实测 daemon.log 里 `quiesce|session_lock|session_unlock` 匹配 0 条）。
 - Windows 侧：`Kernel-Power` id=566 能拿到 `SessionUnlock`/`InputHid` 会话转换；
-  Security 4800/4801 默认没开审计，拿不到精确锁屏时刻。今日无 42/107 即**没进睡眠**。
-- 白屏时页面 DOM 其实完好（bodyTextLen / `codex-usage-hud-root` / 截图都有内容）
-  → 更像**长 hidden 之后重新可见的渲染/合成延迟**，不是内容被清掉。
+  Security 4800/4801 默认没开审计，拿不到精确锁屏时刻。无 42/107 即**没进睡眠**。
 - 本机取证坑：`GetProcessTimes` 返回 **UTC FILETIME**，不 +8 换算会把启动时间读成凌晨；
   `nohup ... &` 起的后台采样器会在本轮结束时被回收（不是常驻），**不要对用户宣称它在跑**；
   `wmic` 本机不可用，枚举进程用 `tasklist /FO CSV`。

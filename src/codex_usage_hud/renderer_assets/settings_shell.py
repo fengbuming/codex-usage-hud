@@ -71,6 +71,27 @@ _TEXT_PREFIX = r"""
         workdirSurface: null,
         workdirExpanded: false,
       };
+      const codexProviderSwitchMenuState = {
+        open: false,
+        toggle: null,
+        surface: null,
+        providers: [],
+      };
+      // 点击供应商切换菜单项且存在活跃会话（其供应商与目标不同）时弹出的
+      // 迁移提示对话框。迁移优先在弹窗内完成（thread/fork 通常亚秒）；超过
+      // 1 秒则转交设置里的「复制/迁移会话」对话框（标题/会话 ID 筛选 + 勾选）。
+      const codexProviderMigrateDialogState = {
+        layer: null,
+        surface: null,
+        targetProvider: "",
+        targetName: "",
+        activeProvider: "",
+        activeSessionId: "",
+        busy: false,
+        result: null,
+        thresholdTimer: 0,
+        startedAt: 0,
+      };
 
       function codexCliLaunchStateKey(optionsValue = codexCliState.options || {}, providerValue = codexCliState.provider) {
         const options = optionsValue || {};
@@ -4600,7 +4621,7 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
           <div class="codex-usage-hud-session-transfer-body">
             <div class="codex-usage-hud-session-transfer-context"><span>源 Provider</span><strong>${escapeHtml(source ? providerDisplayName(settings, source) : "未选择")}</strong><span>目标 Provider</span><select data-session-transfer-target="true" ${busy || !targets.length ? "disabled" : ""}>${targetOptions}</select></div>
             <div class="codex-usage-hud-session-transfer-mode"><label><input type="radio" name="codex-session-transfer-mode" data-session-transfer-mode="copy" value="copy" ${sessionTransferState.mode === "copy" ? "checked" : ""} ${busy ? "disabled" : ""}><span>复制</span><small>保留源会话</small></label><label><input type="radio" name="codex-session-transfer-mode" data-session-transfer-mode="migrate" value="migrate" ${sessionTransferState.mode === "migrate" ? "checked" : ""} ${busy ? "disabled" : ""}><span>迁移</span><small>复制成功后删除源会话</small></label></div>
-            <div class="codex-usage-hud-session-transfer-search"><span aria-hidden="true">⌕</span><input type="search" data-session-transfer-search="true" value="${escapeHtml(sessionTransferState.search)}" placeholder="搜索标题或工作目录" aria-label="搜索会话" ${busy ? "disabled" : ""}></div>
+            <div class="codex-usage-hud-session-transfer-search"><span aria-hidden="true">⌕</span><input type="search" data-session-transfer-search="true" value="${escapeHtml(sessionTransferState.search)}" placeholder="搜索标题、会话 ID 或工作目录" aria-label="搜索会话" ${busy ? "disabled" : ""}></div>
              <div class="codex-usage-hud-session-transfer-toolbar"><label><input type="checkbox" data-session-transfer-select-all="true" ${allSelected ? "checked" : ""} ${busy || !selectableIds.length ? "disabled" : ""}>全选当前筛选</label><span data-session-transfer-selection-count="true">${selected.size} / ${selectableIds.length} 个可选会话</span></div>
              ${transferList}
              ${pagination}
@@ -4654,7 +4675,7 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
         return requestSessionCleanupScan({ preserveTransfer: true });
       }
 
-      function openSessionTransferDialog(provider = "") {
+      function openSessionTransferDialog(provider = "", preferredTarget = "") {
         const dialog = settingsDialogRoot();
         if (!dialog) return false;
         const settings = hudSettingsFromPayload();
@@ -4675,7 +4696,10 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
         sessionTransferState.open = true;
         window[sessionTransferStateName] = sessionTransferState;
         sessionTransferState.sourceProvider = source;
-        sessionTransferState.targetProvider = targets[0];
+        const preferred = String(preferredTarget || "").trim().toLowerCase();
+        sessionTransferState.targetProvider = targets.some(
+          (item) => String(item || "").trim().toLowerCase() === preferred,
+        ) ? preferred : targets[0];
         sessionTransferState.mode = "copy";
         sessionTransferState.search = "";
         sessionTransferState.page = 0;
@@ -6810,7 +6834,7 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
             display: inline-flex;
             align-items: center;
             gap: 6px;
-            cursor: default;
+            cursor: pointer;
             user-select: none;
             opacity: .78;
           }
@@ -6822,6 +6846,17 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
             border-radius: 50%;
             background: color-mix(in srgb, currentColor 55%, transparent);
           }
+          .codex-usage-hud-cli-provider-label::after {
+            content: "▾";
+            color: var(--text-tertiary, #a9b2bf);
+            font: 700 10px/1 system-ui, sans-serif;
+          }
+          .codex-usage-hud-cli-provider-label:hover,
+          .codex-usage-hud-cli-provider-label:focus-visible {
+            outline: none;
+            opacity: 1;
+            background: var(--surface-hover, rgba(255, 255, 255, .1));
+          }
           .codex-usage-hud-cli-provider-label[data-mismatch="true"] {
             color: var(--status-warning, #e2a23a);
             opacity: 1;
@@ -6829,10 +6864,119 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
           .codex-usage-hud-cli-provider-label[data-mismatch="true"]::before {
             background: var(--status-warning, #e2a23a);
           }
+          [data-codex-usage-hud-provider-switch-surface="true"] [role="menuitem"] {
+            min-height: 32px;
+            justify-content: space-between;
+          }
+          [data-codex-usage-hud-provider-switch-surface="true"] [role="menuitem"] small {
+            flex: 0 0 auto;
+            padding: 2px 6px;
+            border-radius: 4px;
+            color: var(--text-tertiary, #a9b2bf);
+            background: rgba(255, 255, 255, .07);
+            font: 700 10px/1 system-ui, sans-serif;
+          }
+          [data-codex-usage-hud-provider-switch-surface="true"] [role="menuitem"][data-current="true"] {
+            color: var(--accent, #7aa2ff);
+          }
+          [data-codex-usage-hud-provider-switch-surface="true"] [role="menuitem"][data-current="true"] small {
+            color: var(--accent, #7aa2ff);
+            background: color-mix(in srgb, var(--accent, #7aa2ff) 14%, transparent);
+          }
+          [data-codex-usage-hud-provider-switch-surface="true"] [role="menuitem"][data-active="true"] small {
+            color: var(--status-warning, #e2a23a);
+            background: color-mix(in srgb, var(--status-warning, #e2a23a) 13%, transparent);
+          }
+          [data-codex-provider-migrate-layer="true"] {
+            position: fixed;
+            inset: 0;
+            z-index: 2147483100;
+            display: grid;
+            place-items: center;
+            padding: 16px;
+            background: rgba(8, 11, 16, .42);
+            backdrop-filter: blur(3px);
+            animation: codexUsageHudCliQuickFade 140ms ease-out both;
+          }
+          .codex-usage-hud-provider-migrate-surface {
+            width: min(400px, calc(100vw - 32px));
+            box-sizing: border-box;
+            padding: 16px;
+            border: 1px solid color-mix(in srgb, var(--border-subtle, #47505c) 72%, transparent);
+            border-radius: 12px;
+            background: color-mix(in srgb, var(--surface-elevated, #20252d) 96%, #111722);
+            color: var(--text-primary, #f2f4f7);
+            box-shadow: 0 22px 60px rgba(0, 0, 0, .42);
+            animation: codexUsageHudCliQuickRise 180ms cubic-bezier(.2, .8, .2, 1) both;
+          }
+          .codex-usage-hud-provider-migrate-head {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 12px;
+          }
+          .codex-usage-hud-provider-migrate-head strong {
+            overflow: hidden;
+            font: 650 14px/1.3 system-ui, sans-serif;
+            text-overflow: ellipsis;
+          }
+          .codex-usage-hud-provider-migrate-head button {
+            width: 26px;
+            height: 26px;
+            padding: 0;
+            border: 0;
+            border-radius: 6px;
+            background: transparent;
+            color: var(--text-tertiary, #a9b2bf);
+            font: 400 19px/1 system-ui, sans-serif;
+            cursor: pointer;
+          }
+          .codex-usage-hud-provider-migrate-head button:hover { background: rgba(255, 255, 255, .08); }
+          .codex-usage-hud-provider-migrate-body {
+            margin-top: 10px;
+            color: var(--text-secondary, #c7ced8);
+            font: 400 12px/1.6 system-ui, sans-serif;
+          }
+          .codex-usage-hud-provider-migrate-actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 8px;
+            margin-top: 16px;
+          }
+          .codex-usage-hud-provider-migrate-actions button {
+            min-height: 30px;
+            padding: 5px 12px;
+            border: 1px solid rgba(255, 255, 255, .12);
+            border-radius: 7px;
+            background: transparent;
+            color: inherit;
+            font: 600 12px/1 system-ui, sans-serif;
+            cursor: pointer;
+          }
+          .codex-usage-hud-provider-migrate-actions button:hover { background: rgba(255, 255, 255, .08); }
+          .codex-usage-hud-provider-migrate-actions button[data-primary="true"] {
+            border-color: color-mix(in srgb, var(--accent, #7aa2ff) 65%, transparent);
+            background: color-mix(in srgb, var(--accent, #7aa2ff) 18%, transparent);
+          }
+          .codex-usage-hud-provider-migrate-spinner {
+            display: inline-block;
+            width: 11px;
+            height: 11px;
+            margin-right: 5px;
+            border: 2px solid color-mix(in srgb, var(--accent, #7aa2ff) 30%, transparent);
+            border-top-color: var(--accent, #7aa2ff);
+            border-radius: 50%;
+            vertical-align: -1px;
+            animation: codexUsageHudProviderMigrateSpin .7s linear infinite;
+          }
+          @keyframes codexUsageHudProviderMigrateSpin { to { transform: rotate(360deg); } }
           @media (prefers-reduced-motion: reduce) {
             [data-codex-cli-quick-launch="true"],
             .codex-usage-hud-cli-quick-surface,
-            .codex-usage-hud-cli-quick-track span { animation: none; }
+            .codex-usage-hud-cli-quick-track span,
+            [data-codex-provider-migrate-layer="true"],
+            .codex-usage-hud-provider-migrate-surface,
+            .codex-usage-hud-provider-migrate-spinner { animation: none; }
           }
         `;
         document.head.appendChild(style);
@@ -6976,6 +7120,74 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
         renderCodexCliQuickLaunchMenu();
       }
 
+      function renderCodexProviderSwitchMenu() {
+        const label = codexProviderSwitchMenuState.toggle;
+        const settings = hudSettingsFromPayload();
+        const providers = settingsProviderNames(settings);
+        const appProvider = String(settings.app_provider || "").trim().toLowerCase();
+        const activeSession = String(currentPayload()?.activeSessionProvider || "").trim().toLowerCase();
+        if (!label?.isConnected || !providers.length) {
+          closeCodexProviderSwitchMenu();
+          return;
+        }
+        codexProviderSwitchMenuState.providers = providers;
+        let surface = codexProviderSwitchMenuState.surface;
+        if (!surface?.isConnected) {
+          surface = document.createElement("div");
+          surface.dataset.codexUsageHudCliMenuSurface = "true";
+          surface.dataset.codexUsageHudProviderSwitchSurface = "true";
+          surface.setAttribute("role", "menu");
+          surface.setAttribute("aria-label", "切换默认供应商");
+          document.body.appendChild(surface);
+          codexProviderSwitchMenuState.surface = surface;
+        }
+        surface.innerHTML = providers.map((provider) => {
+          const name = providerDisplayName(settings, provider);
+          const current = provider === appProvider;
+          const isActive = provider === activeSession;
+          const badge = isActive ? "当前会话" : current ? "默认" : "";
+          return `
+          <button type="button" role="menuitem" tabindex="-1" data-codex-usage-hud-provider-switch="true" data-provider="${escapeHtml(provider)}" ${current ? 'data-current="true"' : ""} ${isActive ? 'data-active="true"' : ""} title="${escapeHtml(isActive ? `当前会话正在使用 ${name}` : current ? `当前默认供应商：${name}` : `切换默认供应商到 ${name}`)}">
+            <span>${escapeHtml(name)}</span>
+            ${badge ? `<small>${escapeHtml(badge)}</small>` : ""}
+          </button>
+        `;
+        }).join("");
+        const rect = label.getBoundingClientRect();
+        const width = Math.min(300, Math.max(190, surface.scrollWidth || 190));
+        const left = Math.max(6, Math.min(rect.left, innerWidth - width - 6));
+        surface.style.left = `${Math.round(left)}px`;
+        surface.style.top = `${Math.round(Math.min(innerHeight - 8, rect.bottom + 4))}px`;
+        surface.style.maxHeight = `${Math.max(120, innerHeight - rect.bottom - 16)}px`;
+        surface.style.overflowY = "auto";
+        surface.hidden = false;
+        codexProviderSwitchMenuState.open = true;
+        label.setAttribute("aria-expanded", "true");
+        label.dataset.state = "open";
+      }
+
+      function closeCodexProviderSwitchMenu() {
+        codexProviderSwitchMenuState.open = false;
+        if (codexProviderSwitchMenuState.toggle) {
+          codexProviderSwitchMenuState.toggle.setAttribute("aria-expanded", "false");
+          codexProviderSwitchMenuState.toggle.dataset.state = "closed";
+        }
+        codexProviderSwitchMenuState.surface?.remove();
+        codexProviderSwitchMenuState.surface = null;
+        codexProviderSwitchMenuState.providers = [];
+      }
+
+      function toggleCodexProviderSwitchMenu() {
+        const label = codexProviderSwitchMenuState.toggle;
+        if (!label?.isConnected) return;
+        if (codexProviderSwitchMenuState.surface?.isConnected) {
+          closeCodexProviderSwitchMenu();
+          return;
+        }
+        closeCodexCliQuickLaunchMenu();
+        renderCodexProviderSwitchMenu();
+      }
+
       function openCodexCliFromApplicationMenu(provider) {
         const normalizedProvider = String(provider || "").trim().toLowerCase();
         if (!normalizedProvider) return;
@@ -6995,6 +7207,330 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
         }
         if (requestedWorkdir) openCodexCliQuickLaunch(normalizedProvider, requestedWorkdir);
         else openCodexCliQuickLaunch(normalizedProvider);
+      }
+
+      // 直接向当前运行的 Codex Desktop App Server 发一次 JSON-RPC 请求
+      // （window.electronBridge），不经过 HUD 的 Python 运行时，保证最快路径
+      // 亚秒级完成；响应经 window message 的 "mcp-response" 异步返回。
+      function codexBridgeRequest(method, params, timeoutMs = 20000) {
+        return new Promise((resolve) => {
+          const bridge = window.electronBridge;
+          if (!bridge || typeof bridge.sendMessageFromView !== "function") {
+            resolve({ error: { message: "desktop-bridge-unavailable" } });
+            return;
+          }
+          const id = `hud-provider-migrate-${String(method || "").replace(/[^a-z]/g, "-")}-${
+            typeof crypto?.randomUUID === "function"
+              ? crypto.randomUUID()
+              : `${Date.now()}-${Math.random().toString(36).slice(2)}`
+          }`;
+          const onMessage = (event) => {
+            const data = event?.data;
+            if (!data || data.hostId !== "local" || data.type !== "mcp-response") return;
+            if (data.message?.id !== id) return;
+            window.removeEventListener("message", onMessage);
+            resolve(data.message);
+          };
+          window.addEventListener("message", onMessage);
+          const timer = window.setTimeout(() => {
+            window.removeEventListener("message", onMessage);
+            resolve({ error: { message: "timeout" } });
+          }, timeoutMs);
+          Promise.resolve(bridge.sendMessageFromView({
+            type: "mcp-request",
+            hostId: "local",
+            request: { id, method, params },
+            priority: "critical",
+            source: "hud-provider-migrate",
+            timeoutMs,
+            expiresAtMs: Date.now() + timeoutMs,
+          })).catch((error) => {
+            window.clearTimeout(timer);
+            window.removeEventListener("message", onMessage);
+            resolve({ error: { message: String(error || "send-failed") } });
+          });
+        });
+      }
+
+      function openCodexProviderMigrateDialog({ targetProvider, targetName, activeProvider, activeSessionId } = {}) {
+        const target = String(targetProvider || "").trim().toLowerCase();
+        const source = String(activeProvider || "").trim().toLowerCase();
+        const sourceId = String(activeSessionId || "").trim();
+        if (!target || !source || !sourceId) return false;
+        ensureCodexCliQuickLaunchMenuStyle();
+        closeCodexProviderMigrateDialog();
+        const settings = hudSettingsFromPayload();
+        const state = codexProviderMigrateDialogState;
+        state.targetProvider = target;
+        state.targetName = String(targetName || providerDisplayName(settings, target));
+        state.activeProvider = source;
+        state.activeSessionId = sourceId;
+        const layer = document.createElement("div");
+        layer.dataset.codexProviderMigrateLayer = "true";
+        document.body.appendChild(layer);
+        state.layer = layer;
+        state.surface = layer;
+        renderCodexProviderMigrateDialog();
+        bindCodexProviderMigrateDialogClicks();
+        return true;
+      }
+
+      function closeCodexProviderMigrateDialog() {
+        const state = codexProviderMigrateDialogState;
+        if (state.thresholdTimer) {
+          window.clearTimeout(state.thresholdTimer);
+          state.thresholdTimer = 0;
+        }
+        state.layer?.remove();
+        state.layer = null;
+        state.surface = null;
+        state.busy = false;
+        state.result = null;
+        state.startedAt = 0;
+      }
+
+      function codexProviderMigrateResultText(result) {
+        const state = codexProviderMigrateDialogState;
+        const targetName = state.targetName;
+        const detail = result && typeof result === "object" ? result : {};
+        if (detail.ok !== true) {
+          return String(detail.error || "未知错误");
+        }
+        const title = String(detail.title || "").trim();
+        if (detail.named === true && detail.navigated === true) {
+          return `已复制到「${targetName}」并切换到新会话「${title}」，原会话保留，可以直接继续聊天。`;
+        }
+        if (detail.named === true) {
+          return `已复制到「${targetName}」，新会话「${title}」已生成，原会话保留。自动切换未成功，请从会话列表打开新副本。`;
+        }
+        if (detail.navigated === true) {
+          return `已复制到「${targetName}」并切换到新会话，原会话保留，可以直接继续聊天。`;
+        }
+        return `已复制到「${targetName}」，原会话保留。自动切换未成功，请从会话列表打开新副本。`;
+      }
+
+      function renderCodexProviderMigrateDialog() {
+        const state = codexProviderMigrateDialogState;
+        const layer = state.layer;
+        if (!layer) return;
+        const targetName = state.targetName;
+        const activeName = providerDisplayName(hudSettingsFromPayload(), state.activeProvider);
+        const closeButton = `<button type="button" data-codex-provider-migrate-close="true" aria-label="关闭" title="关闭">×</button>`;
+        if (state.result) {
+          const ok = state.result.ok === true;
+          layer.innerHTML = `
+            <div class="codex-usage-hud-provider-migrate-surface">
+              <div class="codex-usage-hud-provider-migrate-head">
+                <strong>${escapeHtml(ok ? "已复制并切换会话" : "迁移未完成")}</strong>
+                ${closeButton}
+              </div>
+              <div class="codex-usage-hud-provider-migrate-body">${escapeHtml(codexProviderMigrateResultText(state.result))}</div>
+              <div class="codex-usage-hud-provider-migrate-actions">
+                <button type="button" data-codex-provider-migrate-dismiss="true" data-primary="true">${escapeHtml(ok ? "开始聊天" : "关闭")}</button>
+              </div>
+            </div>
+          `;
+          return;
+        }
+        if (state.busy) {
+          layer.innerHTML = `
+            <div class="codex-usage-hud-provider-migrate-surface">
+              <div class="codex-usage-hud-provider-migrate-head">
+                <strong>正在复制到「${escapeHtml(targetName)}」</strong>
+                ${closeButton}
+              </div>
+              <div class="codex-usage-hud-provider-migrate-body">
+                <span class="codex-usage-hud-provider-migrate-spinner" aria-hidden="true"></span>
+                正在复制当前会话并切换到新副本，请稍候…
+              </div>
+              <div class="codex-usage-hud-provider-migrate-actions">
+                <button type="button" data-codex-provider-migrate-dismiss="true" data-variant="ghost">稍后处理</button>
+              </div>
+            </div>
+          `;
+          return;
+        }
+        layer.innerHTML = `
+          <div class="codex-usage-hud-provider-migrate-surface">
+            <div class="codex-usage-hud-provider-migrate-head">
+              <strong>${escapeHtml(`当前会话仍在使用 ${activeName}`)}</strong>
+              ${closeButton}
+            </div>
+            <div class="codex-usage-hud-provider-migrate-body">
+              默认已切换到「${escapeHtml(targetName)}」，仅对新会话生效。可立即复制当前会话到「${escapeHtml(targetName)}」并自动切换，副本标题带「（副本）」标识，原会话保留。
+            </div>
+            <div class="codex-usage-hud-provider-migrate-actions">
+              <button type="button" data-codex-provider-migrate-dismiss="true" data-variant="ghost">暂不迁移</button>
+              <button type="button" data-codex-provider-migrate-run="true" data-primary="true">迁移到 ${escapeHtml(targetName)}</button>
+            </div>
+          </div>
+        `;
+      }
+
+      function codexSourceSessionTitle(sourceId) {
+        // 优先读侧边栏当前行（与用户所见一致），读不到再回退到 thread/read
+        // 的首条消息预览。返回空串时调用方使用兜底标题。
+        const sourceIdText = String(sourceId || "").trim();
+        if (!sourceIdText) return Promise.resolve("");
+        const row = document.querySelector(
+          `[data-app-action-sidebar-thread-id="local:${sourceIdText}"]`
+        );
+        const rowText = row ? String(row.textContent || "").trim() : "";
+        if (rowText) return Promise.resolve(rowText);
+        return codexBridgeRequest("thread/read", {
+          threadId: sourceIdText,
+          includeTurns: false,
+        }, 8000).then((response) => {
+          const thread = response?.result?.thread || {};
+          return String(thread?.preview || thread?.name || "").trim();
+        }).catch(() => "");
+      }
+
+      function codexNavigateToThread(threadId) {
+        const bridge = window.electronBridge;
+        if (!bridge || typeof bridge.sendMessageFromView !== "function") {
+          return Promise.resolve(false);
+        }
+        return Promise.resolve(bridge.sendMessageFromView({
+          type: "open-in-main-window",
+          path: `/local/${String(threadId).trim()}?hostId=local`,
+          appEntryAttribution: { channel: "hud", source: "hud" },
+        })).then(() => true).catch(() => false);
+      }
+
+      function codexWaitForSidebarActive(threadId, timeoutMs = 2500) {
+        const threadIdText = String(threadId || "").trim();
+        const deadline = Date.now() + Math.max(0, Number(timeoutMs) || 2500);
+        return new Promise((resolve) => {
+          const poll = () => {
+            if (Date.now() >= deadline) {
+              resolve(false);
+              return;
+            }
+            const rows = document.querySelectorAll(
+              `[data-app-action-sidebar-thread-id="local:${threadIdText}"]`
+            );
+            const active = Array.from(rows).some((row) => (
+              row.getAttribute("aria-current") === "page"
+              || row.getAttribute("aria-current") === "true"
+              || row.getAttribute("aria-selected") === "true"
+              || row.getAttribute("data-app-action-sidebar-thread-active") === "true"
+            ));
+            if (active) {
+              resolve(true);
+              return;
+            }
+            window.setTimeout(poll, 150);
+          };
+          poll();
+        });
+      }
+
+      function startCodexProviderMigrate() {
+        const state = codexProviderMigrateDialogState;
+        if (state.busy) return;
+        const target = state.targetProvider;
+        const sourceId = state.activeSessionId;
+        if (!target || !sourceId) return;
+        state.busy = true;
+        state.result = null;
+        state.startedAt = Date.now();
+        renderCodexProviderMigrateDialog();
+        // 超过 1 秒仍未完成，转交设置里的「复制/迁移会话」对话框继续。
+        state.thresholdTimer = window.setTimeout(() => {
+          state.thresholdTimer = 0;
+          const source = state.activeProvider;
+          const targetProvider = state.targetProvider;
+          closeCodexProviderMigrateDialog();
+          const modal = document.getElementById(settingsModalId);
+          if (!modal || modal.hidden) renderSettingsModal("settings", "", {});
+          openSessionTransferDialog(source, targetProvider);
+        }, 1000);
+        codexBridgeRequest("thread/fork", {
+          threadId: sourceId,
+          modelProvider: target,
+          threadSource: "user",
+          ephemeral: false,
+        }).then((response) => {
+          if (state.thresholdTimer) {
+            window.clearTimeout(state.thresholdTimer);
+            state.thresholdTimer = 0;
+          }
+          const error = response?.error;
+          const thread = response?.result?.thread || {};
+          const newId = String(thread?.id || response?.result?.threadId || response?.result?.id || "");
+          const got = String(thread?.modelProvider || response?.result?.modelProvider || "").trim().toLowerCase();
+          if (error || !newId || (got && got !== target)) {
+            state.result = {
+              ok: false,
+              error: error
+                ? String(error?.message || "未知错误")
+                : (!newId
+                    ? "Codex 未返回新会话。"
+                    : `新会话使用了「${got}」，未按目标迁移。`),
+            };
+            state.busy = false;
+            if (codexProviderMigrateDialogState.layer) renderCodexProviderMigrateDialog();
+            return;
+          }
+          // fork 成功：取原标题 → 命名副本 → 导航切换 → 确认侧边栏已高亮
+          const finish = (detail) => {
+            state.result = detail;
+            state.busy = false;
+            if (codexProviderMigrateDialogState.layer) renderCodexProviderMigrateDialog();
+          };
+          codexSourceSessionTitle(sourceId).then((sourceTitle) => {
+            const title = `${(sourceTitle || "复制会话")}（副本）`;
+            return codexBridgeRequest("thread/name/set", {
+              threadId: newId,
+              name: title,
+            }, 8000).then((nameResponse) => ({
+              title,
+              named: !nameResponse?.error,
+            })).catch(() => ({ title, named: false }));
+          }).then(async ({ title, named }) => {
+            const navigated = await codexNavigateToThread(newId);
+            const active = navigated ? await codexWaitForSidebarActive(newId) : false;
+            finish({
+              ok: true,
+              newId,
+              title: named ? title : "",
+              named,
+              navigated: navigated && active,
+            });
+          }).catch((innerError) => {
+            finish({
+              ok: false,
+              error: String(innerError?.message || innerError || "迁移后续处理失败。"),
+            });
+          });
+        });
+      }
+
+      function bindCodexProviderMigrateDialogClicks() {
+        const layer = codexProviderMigrateDialogState.layer;
+        if (!layer) return;
+        layer.addEventListener("click", (event) => {
+          // 点击遮罩（弹窗外空白处）即关闭
+          if (event.target === layer) {
+            closeCodexProviderMigrateDialog();
+            return;
+          }
+          if (
+            event.target?.closest?.('[data-codex-provider-migrate-close="true"]')
+            || event.target?.closest?.('[data-codex-provider-migrate-dismiss="true"]')
+          ) {
+            event.preventDefault();
+            event.stopPropagation();
+            closeCodexProviderMigrateDialog();
+            return;
+          }
+          if (event.target?.closest?.('[data-codex-provider-migrate-run="true"]')) {
+            event.preventDefault();
+            event.stopPropagation();
+            startCodexProviderMigrate();
+          }
+        });
       }
 
       function handleCodexCliQuickLaunchMenuClick(event) {
@@ -7044,6 +7580,42 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
           openCodexCliFromApplicationMenu(providerItem.dataset.provider || "");
           return;
         }
+        const providerSwitchItem = event.target?.closest?.('[data-codex-usage-hud-provider-switch="true"]');
+        if (providerSwitchItem && codexProviderSwitchMenuState.surface?.contains(providerSwitchItem)) {
+          event.preventDefault();
+          event.stopPropagation();
+          const provider = String(providerSwitchItem.dataset.provider || "").trim();
+          closeCodexProviderSwitchMenu();
+          if (!provider) return;
+          const settings = hudSettingsFromPayload();
+          const payload = currentPayload() || {};
+          const activeProvider = String(payload.activeSessionProvider || "").trim().toLowerCase();
+          const activeSessionId = String(payload.sessionId || "").trim();
+          const name = providerDisplayName(settings, provider);
+          submitSettingsCommand(
+            { action: "providerSetDefault", provider },
+            `正在切换默认供应商到「${name}」...`,
+            { preserveOverlay: true, quiet: true },
+          );
+          // 存在活跃会话且其供应商与目标不同：切换默认后弹出迁移提示，
+          // 新会话立即走新默认，当前会话可选择一键复制迁移到目标供应商。
+          if (activeProvider && activeProvider !== provider && activeSessionId) {
+            openCodexProviderMigrateDialog({
+              targetProvider: provider,
+              targetName: name,
+              activeProvider,
+              activeSessionId,
+            });
+          }
+          return;
+        }
+        const providerLabel = event.target?.closest?.('[data-codex-usage-hud-cli-provider-label="true"]');
+        if (providerLabel && codexProviderSwitchMenuState.toggle === providerLabel) {
+          event.preventDefault();
+          event.stopPropagation();
+          toggleCodexProviderSwitchMenu();
+          return;
+        }
         const toggle = event.target?.closest?.('[data-codex-usage-hud-cli-menu-toggle="true"]');
         if (toggle && codexCliQuickLaunchMenuState.toggle === toggle) {
           event.preventDefault();
@@ -7086,15 +7658,23 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
         const state = codexCliQuickLaunchProviderLabelState();
         if (!state) {
           label?.remove();
+          closeCodexProviderSwitchMenu();
+          codexProviderSwitchMenuState.toggle = null;
           return;
         }
         if (!label) {
-          label = document.createElement("span");
+          label = document.createElement("button");
+          label.type = "button";
           label.dataset.codexUsageHudCliProviderLabel = "true";
+          label.setAttribute("role", "menuitem");
+          label.setAttribute("aria-haspopup", "menu");
+          label.setAttribute("aria-expanded", "false");
+          label.dataset.state = "closed";
           const template = menubar.querySelector('button[role="menuitem"][aria-haspopup="menu"]');
           label.className = `${template?.className || ""} codex-usage-hud-cli-provider-label`.trim();
-          label.setAttribute("aria-label", "当前会话供应商");
+          label.setAttribute("aria-label", "当前会话供应商，点击切换");
         }
+        codexProviderSwitchMenuState.toggle = label;
         // The body-wide MutationObserver re-runs this sync on every DOM write,
         // so steady state must write nothing: touch the DOM only when the
         // placement or content actually differs, otherwise the renderer ends
@@ -7121,10 +7701,12 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
         const existing = document.querySelector('[data-codex-usage-hud-cli-menu-toggle="true"]');
         if (!providers.length || !menubar) {
           closeCodexCliQuickLaunchMenu();
+          closeCodexProviderSwitchMenu();
           existing?.remove();
           menubar?.querySelector('[data-codex-usage-hud-cli-provider-label="true"]')?.remove();
           codexCliQuickLaunchMenuState.toggle = null;
           codexCliQuickLaunchMenuState.providers = [];
+          codexProviderSwitchMenuState.toggle = null;
           return;
         }
         let toggle = menubar.querySelector('[data-codex-usage-hud-cli-menu-toggle="true"]');
@@ -7157,25 +7739,41 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
         ensureCodexCliQuickLaunchMenuStyle();
         ctx.lifecycle.listen("codex_cli_quick_launch_menu", document, "click", handleCodexCliQuickLaunchMenuClick, true);
         ctx.lifecycle.listen("codex_cli_quick_launch_menu", document, "pointerdown", (event) => {
-          if (!codexCliQuickLaunchMenuState.open) return;
+          if (!codexCliQuickLaunchMenuState.open && !codexProviderSwitchMenuState.open) return;
           const surface = codexCliQuickLaunchMenuState.surface;
           const workdirSurface = codexCliQuickLaunchMenuState.workdirSurface;
           const toggle = codexCliQuickLaunchMenuState.toggle;
+          const providerSurface = codexProviderSwitchMenuState.surface;
+          const providerLabel = codexProviderSwitchMenuState.toggle;
           if (
             !surface?.contains(event.target)
             && !workdirSurface?.contains(event.target)
             && event.target !== toggle
             && !toggle?.contains(event.target)
+            && !providerSurface?.contains(event.target)
+            && event.target !== providerLabel
+            && !providerLabel?.contains(event.target)
           ) {
             closeCodexCliQuickLaunchMenu();
+            closeCodexProviderSwitchMenu();
           }
         }, true);
         ctx.lifecycle.listen("codex_cli_quick_launch_menu", document, "keydown", (event) => {
           if (event.key !== "Escape") return;
+          if (codexProviderMigrateDialogState.layer) {
+            event.preventDefault();
+            closeCodexProviderMigrateDialog();
+            return;
+          }
           if (codexCliQuickLaunchLayer()) {
             event.preventDefault();
             event.stopPropagation();
             dismissCodexCliQuickLaunch();
+            return;
+          }
+          if (codexProviderSwitchMenuState.open) {
+            event.preventDefault();
+            closeCodexProviderSwitchMenu();
             return;
           }
           if (codexCliQuickLaunchMenuState.workdirSurface) {
@@ -7190,6 +7788,7 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
         }, true);
         ctx.lifecycle.listen("codex_cli_quick_launch_menu", window, "resize", () => {
           if (codexCliQuickLaunchMenuState.open) renderCodexCliQuickLaunchMenu();
+          if (codexProviderSwitchMenuState.open) renderCodexProviderSwitchMenu();
           if (codexCliQuickLaunchMenuState.workdirSurface) {
             renderCodexCliQuickLaunchWorkdirMenu(
               codexCliQuickLaunchMenuState.workdirProvider,
@@ -7214,12 +7813,14 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
       function disposeCodexCliQuickLaunchMenu() {
         ctx.observers.clear("codex_cli_quick_launch_menu");
         closeCodexCliQuickLaunchMenu();
+        closeCodexProviderSwitchMenu();
         document.querySelector('[data-codex-usage-hud-cli-menu-toggle="true"]')?.remove();
         document.querySelector('[data-codex-usage-hud-cli-provider-label="true"]')?.remove();
         document.getElementById("codex-usage-hud-codex-cli-menu-style")?.remove();
         codexCliQuickLaunchLayer()?.remove();
         codexCliQuickLaunchMenuState.toggle = null;
         codexCliQuickLaunchMenuState.providers = [];
+        codexProviderSwitchMenuState.toggle = null;
       }
 
     function install() {

@@ -24,6 +24,7 @@ from .codex_provider_config import (
     save_provider_configs,
     send_cli_chat_probe,
     send_provider_chat_probe,
+    set_default_codex_provider,
 )
 from .codex_cli_launcher import (
     build_codex_cli_command,
@@ -178,6 +179,7 @@ class GeneralCommandPorts:
     send_cli_chat_probe: Callable[[str, str, str], Mapping[str, object]] | None = None
     codex_cli_discover: Callable[[Mapping[str, object]], Mapping[str, object]] | None = None
     codex_cli_launch: Callable[[Mapping[str, object]], Mapping[str, object]] | None = None
+    set_default_provider: Callable[[str], Mapping[str, object]] | None = None
 
 
 def _status(message: str, *, kind: str = "") -> dict[str, object]:
@@ -1385,6 +1387,26 @@ def handle_general_command(
             )
             status["codexCliLaunch"] = dict(result)
             return status
+        if action == "providerSetDefault":
+            if ports.set_default_provider is None:
+                return _status("默认供应商切换当前不可用。", kind="error")
+            provider = str(command.get("provider") or "").strip()
+            try:
+                result = ports.set_default_provider(provider)
+            except (ValueError, OSError, FileNotFoundError) as exc:
+                return _status(
+                    _exc_detail_log(exc, tag="provider_set_default_failed"),
+                    kind="error",
+                )
+            display_name = str(
+                (result.get("name") if isinstance(result, Mapping) else "") or provider
+            )
+            status = _status(
+                f"默认供应商已切换为「{display_name}」，新的 Codex 会话将使用该供应商。"
+            )
+            status["providerSetDefault"] = dict(result)
+            status["providerSetDefaultProvider"] = str(provider).strip().lower()
+            return status
         if action == "deleteProvider":
             if ports.delete_provider is None:
                 return _status("供应商删除当前不可用。", kind="error")
@@ -2255,6 +2277,29 @@ def _handle_renderer_settings_command(
             }
         return result
 
+    def set_default_provider(provider: str) -> Mapping[str, object]:
+        result = set_default_codex_provider(provider)
+        if isinstance(result, Mapping):
+            normalized = str(result.get("providerId") or provider or "").strip().lower()
+            registry = getattr(context, "provider_registry", None)
+            entries = getattr(registry, "entries", {})
+            display_name = ""
+            if isinstance(entries, Mapping):
+                entry = entries.get(normalized)
+                display_name = str(getattr(entry, "name", "") or "")
+            if display_name:
+                result = {**result, "name": display_name}
+        # config.toml 已热生效（运行中的 Codex Desktop 新建会话即读取新默认值），
+        # 但 HUD 自己的 app_provider/供应商注册表需要重载一次，让菜单栏标签立即刷新。
+        context.settings_mtime = None
+        context.reload_user_config()
+        # 保存流程通过写 HUD 设置文件触发 watcher 发布 settings_changed；本流程只改
+        # config.toml，需显式发布同一事件，渲染器才会重拉 payload 并刷新菜单栏标签。
+        publish = getattr(getattr(context, "runtime_events", None), "publish", None)
+        if callable(publish):
+            publish("settings_changed", source="provider_switch", context={})
+        return result
+
     general_ports = GeneralCommandPorts(
         load_config=load_config,
         save_config=save_config,
@@ -2290,6 +2335,7 @@ def _handle_renderer_settings_command(
         send_cli_chat_probe=chat_probe_for_cli,
         codex_cli_discover=discover_cli,
         codex_cli_launch=launch_cli,
+        set_default_provider=set_default_provider,
     )
     result = dispatch_command(command, command_ports, general_ports)
     session_index = result.get("sessionIndex") if isinstance(result, Mapping) else None
