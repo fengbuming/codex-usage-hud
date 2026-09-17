@@ -430,9 +430,12 @@ class UserConfig:
                 minimum=REST_REMINDER_POSTPONE_MIN,
                 maximum=REST_REMINDER_POSTPONE_MAX,
             ),
-            # Legacy value is deliberately ignored: brief idle periods must not
-            # silently reset a user's focus timer.
-            rest_reminder_idle_reset_minutes=DEFAULT_REST_REMINDER_IDLE_RESET_MINUTES,
+            rest_reminder_idle_reset_minutes=_bounded_int(
+                value.get("rest_reminder_idle_reset_minutes"),
+                defaults.rest_reminder_idle_reset_minutes,
+                minimum=REST_REMINDER_IDLE_RESET_MIN,
+                maximum=REST_REMINDER_IDLE_RESET_MAX,
+            ),
             rest_reminder_work_start_time=normalize_time_text(
                 value.get("rest_reminder_work_start_time"),
                 defaults.rest_reminder_work_start_time,

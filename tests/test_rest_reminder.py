@@ -107,7 +107,7 @@ class RestReminderConfigTests(unittest.TestCase):
             self.assertEqual(loaded.rest_reminder_interval_minutes, 10)
             self.assertEqual(loaded.rest_reminder_break_minutes, 3)
             self.assertEqual(loaded.rest_reminder_postpone_minutes, 15)
-            self.assertEqual(loaded.rest_reminder_idle_reset_minutes, 0)
+            self.assertEqual(loaded.rest_reminder_idle_reset_minutes, 8)
             self.assertEqual(loaded.rest_reminder_work_start_time, "08:30")
             self.assertEqual(loaded.rest_reminder_work_end_time, "17:30")
 

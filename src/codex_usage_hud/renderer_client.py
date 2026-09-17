@@ -91,11 +91,13 @@ class RendererHudClient:
         *,
         port: int | None = None,
         timeout_seconds: float = DEFAULT_RENDERER_TIMEOUT_SECONDS,
+        update_timeout_seconds: float = 1.5,
         target_cache_seconds: float = DEFAULT_RENDERER_TARGET_CACHE_SECONDS,
         enabled: bool | None = None,
     ) -> None:
         self.port = int(port or cdp_port_from_env())
         self.timeout_seconds = max(0.05, float(timeout_seconds))
+        self.update_timeout_seconds = max(0.2, float(update_timeout_seconds))
         self.target_cache_seconds = max(0.0, float(target_cache_seconds))
         self.enabled = renderer_enabled_from_env() if enabled is None else bool(enabled)
         self.last_status = "idle" if self.enabled else "disabled"
@@ -145,6 +147,21 @@ class RendererHudClient:
         )
         # When True, the HUD issues no CDP traffic at all (session lock / sleep).
         self._quiesced = False
+        # --- renderer white-screen cure state (2026-09-17) ---
+        # Unlock warmup gate: after resume only 1+1 probes run until the
+        # renderer acks three probes <100ms; no payload is pushed meanwhile.
+        self._warming = False
+        self._warmup_acks = 0
+        # Degraded state: on a hung renderer the HUD removes its injection
+        # and probes at a low cadence so Codex self-heals. Never restarts
+        # Codex from this path.
+        self._degraded = False
+        self._degraded_reason = ""
+        self._degraded_at = 0.0
+        self._last_degrade_probe_at = 0.0
+        # First full update after warmup: send small domains first, heavy
+        # domains immediately after (never one ~1MB Runtime.evaluate).
+        self._split_next_full = False
 
     def quiesce(self) -> None:
         """Stop all CDP activity toward the Codex renderer without exiting.
@@ -174,14 +191,178 @@ class RendererHudClient:
                     binding.close()
                 except Exception:
                     pass
-        # Drop target/script identifiers so the first post-resume update does a
-        # full reinstall and re-ensures every persistent binding.
-        self._clear_target_cache(clear_script=True)
+        # Keep the script identifier and target across the lock: the page realm
+        # survives, so the first post-resume update must NOT reinstall the whole
+        # ~1.3MB bundle into a thawing renderer. resume() enters the warmup gate
+        # instead; a genuinely lost context is re-installed by the existing
+        # in-place recovery in _update_payload_once.
+        self._clear_target_cache(clear_script=False)
+        self._warming = False
+        self._warmup_acks = 0
 
     def resume(self) -> None:
-        """Re-enable CDP activity after unlock/wake; next update re-attaches."""
+        """Re-enable CDP activity after unlock/wake through the warmup gate.
+
+        The page realm survives a session lock, so the script identifier and
+        target cache are retained: the first post-unlock update must not
+        reinstall the whole ~1.3MB HUD bundle while the renderer is thawing.
+        Instead, updates become probe-only until the renderer acknowledges
+        three consecutive 1+1 probes under 100ms.
+        """
         self._quiesced = False
-        self._clear_target_cache(clear_script=True)
+        self._warming = True
+        self._warmup_acks = 0
+        self._split_next_full = True
+
+    def _probe_renderer_alive(self, *, timeout_seconds: float) -> tuple[bool, float]:
+        """Best-effort 1+1 Runtime.evaluate against the current page target."""
+        started = time.perf_counter()
+        try:
+            target = self._page_target()
+            websocket_url = str(target.get("webSocketDebuggerUrl") or "")
+            target_id = str(target.get("id") or websocket_url)
+            if not websocket_url:
+                raise RuntimeError("CDP target has no websocket URL")
+            send_persistent = getattr(self._active_session_binding, "send_command", None)
+            if callable(send_persistent):
+                try:
+                    if self._active_session_binding is not None:
+                        self._active_session_binding.ensure(websocket_url, target_id)
+                    result = send_persistent(
+                        websocket_url,
+                        "Runtime.evaluate",
+                        _runtime_expression_params("1+1"),
+                        timeout_seconds,
+                    )
+                except Exception:
+                    result = send_cdp_command(
+                        websocket_url,
+                        "Runtime.evaluate",
+                        _runtime_expression_params("1+1"),
+                        timeout_seconds,
+                    )
+            else:
+                result = send_cdp_command(
+                    websocket_url,
+                    "Runtime.evaluate",
+                    _runtime_expression_params("1+1"),
+                    timeout_seconds,
+                )
+            probe_ok, _apply_ms = self._update_acknowledgement(result)
+            return bool(probe_ok), (time.perf_counter() - started) * 1000.0
+        except Exception:
+            return False, (time.perf_counter() - started) * 1000.0
+
+    def _warmup_tick(self) -> bool:
+        """Unlock warmup gate: probe-only until the renderer is responsive.
+
+        Returns True (successful no-op) so the event loop never counts a
+        warmup probe as a payload failure.
+        """
+        ok, probe_ms = self._probe_renderer_alive(timeout_seconds=2.0)
+        if ok and probe_ms < 100.0:
+            self._warmup_acks += 1
+        else:
+            self._warmup_acks = 0
+        self.last_update_metrics = {
+            **dict(self.last_update_metrics),
+            "rendererAliveProbe": "warmup-alive" if ok else "warmup-pending",
+            "rendererAliveProbeMs": probe_ms,
+            "warmupAcks": self._warmup_acks,
+            "payloadBytes": 0,
+            "payloadDomains": [],
+        }
+        if self._warmup_acks >= 3:
+            self._warming = False
+            self._split_next_full = True
+            self.last_update_metrics["rendererAliveProbe"] = "warmup-complete"
+        return True
+
+    def degrade(self, reason: str = "") -> None:
+        """Enter the degraded state: remove the HUD from the page so Codex
+        regains the main thread and can self-heal, then probe at a low
+        cadence. Never restarts Codex from this path."""
+        if self._degraded:
+            return
+        self._degraded = True
+        self._degraded_reason = str(reason or "")
+        self._degraded_at = time.monotonic()
+        self._last_degrade_probe_at = 0.0
+        self._warming = False
+        self.close(remove_from_page=True)
+
+    def _degraded_tick(self) -> bool:
+        """Low-cadence probe while degraded; self-heal back to normal on ack."""
+        now = time.monotonic()
+        if now - self._last_degrade_probe_at < 10.0:
+            return True
+        self._last_degrade_probe_at = now
+        ok, probe_ms = self._probe_renderer_alive(timeout_seconds=2.0)
+        self.last_update_metrics = {
+            **dict(self.last_update_metrics),
+            "rendererAliveProbe": "degraded-alive" if ok else "degraded-pending",
+            "rendererAliveProbeMs": probe_ms,
+            "payloadBytes": 0,
+            "payloadDomains": [],
+        }
+        if ok:
+            self._degraded = False
+            self._degraded_reason = ""
+            # The HUD script was removed on degrade; force a clean reinstall.
+            self._clear_target_cache(clear_script=True)
+            self.last_update_metrics["rendererAliveProbe"] = "degraded-recovered"
+        return True
+
+    _HEAVY_UPDATE_DOMAINS = frozenset({
+        "usageInsights",
+        "supportImages",
+        "sessionIndex",
+        "backgroundUsage",
+        "backgroundUsageNotification",
+    })
+
+    def _update_payload_split(
+        self,
+        payload: dict[str, object],
+        *,
+        startup_retry: bool,
+    ) -> bool:
+        """First full update after unlock: send small domains first, heavy
+        domains immediately after, so a thawing renderer never parses a
+        ~1MB expression in one synchronous Runtime.evaluate."""
+        heavy_keys = {key for key in self._HEAVY_UPDATE_DOMAINS if key in payload}
+        if not heavy_keys:
+            return self._update_payload_once(payload, startup_retry=startup_retry)
+        light_payload = {
+            key: value for key, value in payload.items() if key not in heavy_keys
+        }
+        heavy_payload = {
+            key: value for key, value in payload.items() if key in heavy_keys
+        }
+        light_domains = payload.get("payloadDomains")
+        if isinstance(light_domains, dict):
+            light_payload["payloadDomains"] = {
+                key: value
+                for key, value in light_domains.items()
+                if key not in heavy_keys
+            }
+            heavy_payload["payloadDomains"] = {
+                key: value
+                for key, value in light_domains.items()
+                if key in heavy_keys
+            }
+        light_ok = self._update_payload_once(
+            light_payload,
+            startup_retry=startup_retry,
+        )
+        if not light_ok:
+            return False
+        if not heavy_payload.get("payloadDomains"):
+            return True
+        return self._update_payload_once(
+            heavy_payload,
+            startup_retry=startup_retry,
+        )
 
     @property
     def quiesced(self) -> bool:
@@ -431,6 +612,10 @@ class RendererHudClient:
     ) -> bool:
         if self._quiesced:
             return False
+        if self._degraded:
+            return self._degraded_tick()
+        if self._warming:
+            return self._warmup_tick()
         started = time.perf_counter()
         if not startup_retry:
             deferred = self._update_gate_state()
@@ -507,6 +692,10 @@ class RendererHudClient:
     ) -> bool:
         if self._quiesced:
             return False
+        if self._degraded:
+            return self._degraded_tick()
+        if self._warming:
+            return self._warmup_tick()
         if not self.enabled:
             self.last_status = "disabled"
             return False
@@ -524,6 +713,12 @@ class RendererHudClient:
             return False
         try:
             self.record_renderer_metric("payload_updates")
+            if self._split_next_full:
+                self._split_next_full = False
+                return self._update_payload_split(
+                    payload,
+                    startup_retry=startup_retry,
+                )
             return self._update_payload_once(payload, startup_retry=startup_retry)
         finally:
             lock.release()
@@ -1205,7 +1400,7 @@ class RendererHudClient:
                     websocket_url,
                     "Runtime.evaluate",
                     _runtime_expression_params(expression),
-                    self.timeout_seconds,
+                    self.update_timeout_seconds,
                 )
                 persistent_ms = (time.perf_counter() - persistent_started) * 1000.0
                 transport = "active-session-binding"
@@ -1232,7 +1427,7 @@ class RendererHudClient:
                             websocket_url,
                             "Runtime.evaluate",
                             _runtime_expression_params(expression),
-                            self.timeout_seconds,
+                            self.update_timeout_seconds,
                         )
                         fallback_ms = (
                             time.perf_counter() - verification_started
@@ -1256,7 +1451,7 @@ class RendererHudClient:
                 websocket_url,
                 "Runtime.evaluate",
                 _runtime_expression_params(expression),
-                self.timeout_seconds,
+                self.update_timeout_seconds,
             )
         elapsed_ms = (time.perf_counter() - started) * 1000.0
         ok, renderer_apply_ms = self._update_acknowledgement(result)
@@ -1267,9 +1462,40 @@ class RendererHudClient:
             else []
         )
         log_threshold = float(SLOW_RENDERER_UPDATE_LOG_MS)
+        renderer_alive_probe: str | None = None
+        renderer_alive_probe_ms: float | None = None
+        if not ok:
+            # The payload update failed. Probe whether the renderer main
+            # thread is still responsive with a trivial Runtime.evaluate.
+            # "alive" means the renderer is running and the HUD payload JS
+            # itself is what is stuck; "no-ack"/"error:*" means the renderer
+            # main thread is wedged -- the long-lock blank-UI failure mode
+            # documented in renderer_connection.maybe_escalate_renderer_hung.
+            probe_started = time.perf_counter()
+            try:
+                probe_result = send_cdp_command(
+                    websocket_url,
+                    "Runtime.evaluate",
+                    _runtime_expression_params("1+1"),
+                    max(0.35, min(1.0, self.update_timeout_seconds)),
+                )
+                renderer_alive_probe_ms = (
+                    time.perf_counter() - probe_started
+                ) * 1000.0
+                probe_ok, _probe_apply_ms = self._update_acknowledgement(
+                    probe_result
+                )
+                renderer_alive_probe = "alive" if probe_ok else "no-ack"
+            except Exception as exc:
+                renderer_alive_probe_ms = (
+                    time.perf_counter() - probe_started
+                ) * 1000.0
+                renderer_alive_probe = f"error:{type(exc).__name__}"
         self.last_update_metrics = {
             "cdpMs": elapsed_ms,
             "rendererApplyMs": renderer_apply_ms,
+            "rendererAliveProbe": renderer_alive_probe,
+            "rendererAliveProbeMs": renderer_alive_probe_ms,
             "payloadBytes": len(payload_json.encode("utf-8")),
             "payloadDomains": payload_domains,
             "transport": transport,

@@ -344,6 +344,16 @@ class RendererConnectionManager:
         if unresponsive < RENDERER_HUNG_GRACE_SECONDS:
             self._hung_escalated = False
             return False
+        # A renderer that still answers the 1+1 liveness probe is busy, not
+        # hung. Never escalate (and never ask for a Codex restart) for busy
+        # work -- the probe result is authoritative over a stale last_ok_at.
+        probe = None
+        metrics = getattr(self.client, "last_update_metrics", None)
+        if isinstance(metrics, dict):
+            probe = metrics.get("rendererAliveProbe")
+        if probe == "alive":
+            self._hung_escalated = False
+            return False
         locked = bool(windows_session_locked())
         if locked != self._last_locked_probe:
             if self._last_locked_probe is True and not locked:

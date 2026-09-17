@@ -1,6 +1,6 @@
 HEAD = r"""
 (() => {
-  const version = "69";
+  const version = "70";
   const bundleFingerprint = "__CODEX_USAGE_HUD_BUNDLE_FINGERPRINT__";
   const rootId = "codex-usage-hud-root";
   // Reinstalling the same Renderer bundle in a live document must be

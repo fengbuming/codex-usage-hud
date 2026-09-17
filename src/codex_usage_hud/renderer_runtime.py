@@ -410,6 +410,15 @@ def run_renderer_hud_session(args: argparse.Namespace, *, lock_already_held: boo
                     return  # 兜底模式：守护进程负责重启 HUD
                 client.resume()
                 quiesce_event.clear()
+                reminder = getattr(context, "rest_reminder", None)
+                if reminder is not None:
+                    try:
+                        reminder.rearm_after_session_unlock()
+                    except Exception:
+                        ports._LOGGER.debug(
+                            "renderer_hud_rest_reminder_rearm_failed",
+                            exc_info=True,
+                        )
                 manager = connection_managers.get("manager") if isinstance(connection_managers, dict) else None
                 note = getattr(manager, "note_session_resumed", None)
                 if callable(note):
@@ -417,7 +426,11 @@ def run_renderer_hud_session(args: argparse.Namespace, *, lock_already_held: boo
                         note()
                     except Exception:
                         ports._LOGGER.debug("renderer_hud_resume_note_failed", exc_info=True)
-                command_refresh_requested.set()
+                # No unconditional refresh here: resume() puts the client in
+                # the warmup gate, so the first post-unlock ticks only probe
+                # (1+1) until the thawing renderer acks three times under
+                # 100ms. Forcing a refresh now would push a full ~1MB payload
+                # into the renderer at its most fragile moment.
                 ports._LOGGER.info("renderer_hud_resumed_for_session_unlock")
 
             session_lock_monitor = WindowsSessionLockMonitor(
@@ -536,8 +549,6 @@ def run_renderer_hud_session(args: argparse.Namespace, *, lock_already_held: boo
                 def escalate_renderer_hung(reason: str) -> None:
                     if restart_codex_requested.is_set():
                         return
-                    restart_codex_requested.set()
-                    command_refresh_requested.set()
                     ports._append_renderer_diagnostic(
                         'renderer_hung_escalation',
                         reason=reason,
@@ -548,6 +559,24 @@ def run_renderer_hud_session(args: argparse.Namespace, *, lock_already_held: boo
                         'renderer_hung_escalation_requested reason=%s',
                         reason,
                     )
+                    # White-screen cure: never auto-restart Codex from a hung
+                    # renderer. Degrade instead -- remove the HUD injection so
+                    # Codex owns the main thread and can self-heal, then the
+                    # client probes at a low cadence and re-attaches on ack.
+                    try:
+                        client.degrade(reason)
+                    except Exception:
+                        ports._LOGGER.exception('renderer_hung_degrade_failed')
+                    try:
+                        show_notice = getattr(work_overlay, 'show_system_notice', None)
+                        if callable(show_notice):
+                            show_notice(
+                                title="Codex 界面无响应",
+                                message="HUD 已暂停注入，让 Codex 自行恢复；若长时间白屏，请手动重启 Codex。",
+                            )
+                    except Exception:
+                        ports._LOGGER.debug('renderer_hung_notice_failed', exc_info=True)
+                    command_refresh_requested.set()
 
                 connection_manager = renderer_connection.RendererConnectionManager(client=client, tracker_provider=lambda: getattr(context, 'active_session_tracker', None), wake=command_refresh_requested.set, schedule_soft_reinstall=loop_controls.schedule_soft_reinstall, debug_enabled=ports._runtime_debug_enabled, runtime_errors=lambda: ports._runtime_errors_payload_for_context(context), health=connection_health, escalate_renderer_hung=escalate_renderer_hung)
                 connection_managers['manager'] = connection_manager

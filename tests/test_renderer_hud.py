@@ -1930,7 +1930,17 @@ class RendererHudPayloadTests(unittest.TestCase):
                     {"payloadDomains": {}},
                 )
             )
-        send.assert_not_called()
+        # The failed payload must not fall back to a CDP payload send, but a
+        # trivial Runtime.evaluate probe still runs to classify whether the
+        # renderer main thread is alive (rendererAliveProbe instrumentation).
+        send.assert_called_once()
+        probe = client.last_update_metrics["rendererAliveProbe"]
+        self.assertIsNotNone(probe)
+        self.assertTrue(
+            str(probe).startswith(("alive", "no-ack", "error:")),
+            f"unexpected probe result {probe!r}",
+        )
+        self.assertIsNotNone(client.last_update_metrics["rendererAliveProbeMs"])
         self.assertEqual(
             client.last_update_metrics["persistentFallbackReason"],
             "TimeoutError: binding timed out",
@@ -2280,7 +2290,7 @@ class RendererHudPayloadTests(unittest.TestCase):
     def test_renderer_top_redesign_styles_are_theme_tokenized(self) -> None:
         script = renderer_hud.RENDERER_HUD_SCRIPT
 
-        self.assertIn('const version = "69";', script)
+        self.assertIn('const version = "70";', script)
         self.assertIn("function refreshProgressRailBadge", script)
         self.assertIn("function progressBadgeCandidates", script)
         self.assertIn("function progressRailLeftLabelFits", script)
@@ -3426,7 +3436,7 @@ class RendererHudClientTests(unittest.TestCase):
                     "ws://127.0.0.1/devtools/page/1",
                     "Runtime.evaluate",
                     ANY,
-                    client.timeout_seconds,
+                    client.update_timeout_seconds,
                 ),
             ],
         )
@@ -3462,7 +3472,7 @@ class RendererHudClientTests(unittest.TestCase):
                     "ws://127.0.0.1/devtools/page/1",
                     "Runtime.evaluate",
                     ANY,
-                    client.timeout_seconds,
+                    client.update_timeout_seconds,
                 ),
             ],
         )

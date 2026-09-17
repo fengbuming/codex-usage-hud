@@ -668,8 +668,12 @@ def run_daemon(
                             title=RENDERER_RESTART_NOTICE_TITLE,
                             message="正在以调试/CDP 模式重启 Codex App，并重新尝试注入 HUD...",
                         ).start()
+                    # This branch now serves only user-initiated restarts
+                    # (the restart card / settings command). Renderer-hung
+                    # escalation no longer requests a Codex restart: it
+                    # degrades the HUD instead (white-screen cure, 2026-09-17).
                     previous_pid = _manager_primary_pid(manager)
-                    if not restart():
+                    if not automatic_restart():
                         if startup_loading is not None:
                             startup_loading.close()
                         _close_overlay_handoff(overlay_handoff)

@@ -7,6 +7,14 @@ and this repository follows Semantic Versioning for release tags.
 
 ## [Unreleased]
 
+### Fixed
+
+- Checkboxes, radios, and select dropdown arrows in the Renderer HUD could
+  become invisible after Codex Desktop ships a global form-control reset
+  (`input/select { appearance: none }`) on its app page; the HUD stylesheet now
+  re-asserts native `appearance: auto` for these controls so the boxes,
+  checkmarks, and arrows paint again.
+
 ## [1.2.0] - 2026-09-08
 
 Session Search, Navigation, and Event-Driven Renderer Edition.

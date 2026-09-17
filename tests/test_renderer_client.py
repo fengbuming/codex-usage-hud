@@ -124,8 +124,9 @@ def test_client_quiesce_blocks_all_cdp_entrypoints_and_resume_reenables() -> Non
     fake_binding.close.assert_called_once_with()
     # 对象保留：恢复后 update 流程会 ensure 重连，通道不丢。
     assert client._active_session_binding is fake_binding  # noqa: SLF001
-    # script id 清空：恢复后强制重装脚本 + 重建绑定。
-    assert client._script_identifier == ""  # noqa: SLF001
+    # script id 保留：页面 realm 在锁屏期间存续，恢复后无需重装整个 bundle
+    # （白屏根治 P0-A：resume 走苏醒门而不是强制全量重装）。
+    assert client._script_identifier == "sid"  # noqa: SLF001
     assert client.update(SimpleNamespace()) is False
     assert client.update_payload({}) is False
     assert client.probe_connection() is False
@@ -134,8 +135,10 @@ def test_client_quiesce_blocks_all_cdp_entrypoints_and_resume_reenables() -> Non
     client.resume()
 
     assert not client.quiesced
-    # resume 后 target cache 清空，强制下次 update 重新 attach。
-    assert client._cached_target_id == ""  # noqa: SLF001
+    # resume 后进入苏醒门（warmup），只允许 1+1 探活，不再清 target cache
+    # 强制全量重装。
+    assert client._warming  # noqa: SLF001
+    assert client._warmup_acks == 0  # noqa: SLF001
 
 
 def test_client_update_and_probe_short_circuit_before_cdp_when_quiesced() -> None:

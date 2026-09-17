@@ -60,6 +60,17 @@ TEXT = r"""
             color-scheme: dark;
             font-family: "Microsoft YaHei UI", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
           }
+          /* Codex app page ships a global form-control reset (input/select
+           * appearance:none, transparent background, 0 border) that cascades
+           * into the injected HUD root. Re-assert native appearance so
+           * checkbox/radio boxes, checkmarks and select dropdown arrows paint
+           * again regardless of the host page stylesheet. */
+          #${rootId} input[type="checkbox"],
+          #${rootId} input[type="radio"],
+          #${rootId} select {
+            appearance: auto;
+            -webkit-appearance: auto;
+          }
           #${rootId}[data-hud-ready="false"] .codex-usage-hud-panel {
             display: none !important;
           }

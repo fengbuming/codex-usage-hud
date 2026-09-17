@@ -941,6 +941,18 @@ class RestReminderScheduler:
         self._next_fire_wall = wall_value + duration
         self._postpone_until_wall = 0.0
 
+    def rearm_from_now(self) -> None:
+        """Re-arm the focus cycle from the current moment (post-lock recovery).
+
+        A reminder that matured while the machine was locked must not fire
+        right after the user returns; the cycle is restarted from the unlock
+        moment instead. A stale prompt that was left visible before the lock
+        is dismissed, and any postpone credit is cleared.
+        """
+        self._clear_prompt()
+        self._arm_from_now()
+        self._postpone_used = False
+
     def _restore_focus_times(
         self,
         current: float,
@@ -1314,6 +1326,27 @@ class RestReminderPresenter:
         self.scheduler.set_cycle_started_at_wall(started)
         self._persist_state()
         return True
+
+    def rearm_after_session_unlock(self) -> dict[str, object] | None:
+        """Restart the focus cycle from the unlock moment.
+
+        Called by the renderer runtime right after a session-lock resume so
+        that a reminder which matured while the machine was locked never
+        fires the moment the user returns. A rest in progress is left to
+        finish naturally; otherwise the cycle is re-armed from the unlock
+        moment and any stale prompt is dismissed. Returns a renderer
+        payload when the cycle changed, else None.
+        """
+        if self.scheduler.phase == "resting":
+            return None
+        self.scheduler.rearm_from_now()
+        self._clear_completion()
+        self._clear_preview()
+        self._persist_state()
+        payload = self.renderer_payload()
+        payload["stateChanged"] = True
+        payload["rescheduledAfterUnlock"] = True
+        return payload
 
     def test_notification(self) -> dict[str, object]:
         """Send a system notification and open the full rest overlay as a preview."""
