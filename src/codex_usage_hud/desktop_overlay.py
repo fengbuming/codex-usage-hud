@@ -875,21 +875,39 @@ class DesktopWorkOverlay:
         )
 
     def _start(self) -> None:
+        helper_stderr = subprocess.DEVNULL
+        try:
+            # Keep helper stderr for forensics (helper exit reason / Qt
+            # failures); DEVNULL previously swallowed every trace.
+            helper_stderr = open(
+                self._runtime_dir() / "work-overlay-helper-stderr.log",
+                "ab",
+                buffering=0,
+            )
+        except OSError:
+            helper_stderr = subprocess.DEVNULL
         try:
             self._process = subprocess.Popen(
                 _work_overlay_command(self._state_path),
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                stderr=helper_stderr,
                 # This is the same frozen executable, so its PyInstaller
                 # parent/child environment must remain intact.
                 env=internal_process_environment(),
             )
+            if helper_stderr is not subprocess.DEVNULL:
+                helper_stderr.close()
             started_at = self._clock.time()
             self._helper_started_at = started_at
             self._last_helper_heartbeat_at = started_at
             self._helper_started_monotonic = self._clock.monotonic()
         except Exception:
+            if helper_stderr is not subprocess.DEVNULL:
+                try:
+                    helper_stderr.close()
+                except OSError:
+                    pass
             self._process = None
             self._helper_started_monotonic = 0.0
             self._restart_blocked_until = (

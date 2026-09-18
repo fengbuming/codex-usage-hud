@@ -648,7 +648,13 @@ class OverlayWindow(OverlayTransitionsMixin, OverlayRenderingMixin, QWidget):
             for action_window in self._rest_action_windows:
                 action_window.hide()
 
-        def shutdown(self) -> None:
+        def shutdown(self, reason: str = "") -> None:
+            try:
+                sys.stderr.write(
+                    f"work_overlay_helper_shutdown reason={reason or 'unknown'}\n"
+                )
+            except Exception:
+                pass
             self.hide_overlay()
             self._dispose_interactive_windows()
             try:
@@ -680,7 +686,7 @@ class OverlayWindow(OverlayTransitionsMixin, OverlayRenderingMixin, QWidget):
             if state is None:
                 now = time.monotonic()
                 if self._owner_pid is not None and not self._process_exists(self._owner_pid):
-                    self.shutdown()
+                    self.shutdown("owner-gone")
                     return True
                 if self._state_read_failed_at <= 0.0:
                     self._state_read_failed_at = now
@@ -693,7 +699,7 @@ class OverlayWindow(OverlayTransitionsMixin, OverlayRenderingMixin, QWidget):
                     message="Desktop work overlay helper could not read state file.",
                     context={"stateFile": str(self._state_path)},
                 )
-                self.shutdown()
+                self.shutdown("state-read-failed")
                 return True
             self._state_read_failed_at = 0.0
             previous_side = self._side
@@ -702,18 +708,18 @@ class OverlayWindow(OverlayTransitionsMixin, OverlayRenderingMixin, QWidget):
             system_action = _normalized_system_action(state.get("systemAction"))
             system_notice = _normalized_system_notice(state.get("systemNotice"))
             rest_reminder = _normalized_rest_reminder(state.get("restReminder"))
-            updated_at = float(state.get("updatedAt") or 0.0)
-            file_stale = updated_at > 0 and (time.time() - updated_at) > self._stale_seconds
             if self._owner_pid is not None and not self._process_exists(self._owner_pid):
-                self.shutdown()
+                self.shutdown("owner-gone")
                 return True
-            persistent_sidecar = _state_has_persistent_sidecar(
-                system_action,
-                system_notice,
-                rest_reminder,
-            )
-            if should_close or (file_stale and not persistent_sidecar):
-                self.shutdown()
+            # White-screen cure (2026-09-18): a stale state file means
+            # the HUD has not republished (renderer busy or no change),
+            # NOT that the HUD is dead. The owner-alive check above is the
+            # authoritative liveness signal. Without this, a busy
+            # renderer stalls state writes, the helper self-terminates on
+            # staleness, and the rapid-exit breaker respawn loop runs
+            # exactly when the overlay is needed most.
+            if should_close:
+                self.shutdown("close-requested")
                 return True
             raw_items = state.get("items") or []
             items = [item for item in raw_items if isinstance(item, Mapping)]

@@ -18,7 +18,9 @@ _LOGGER = logging.getLogger(__name__)
 # still answer 0.35s liveness probes every ~5s, so any real unresponsiveness
 # of this duration means the Codex renderer main thread is wedged and the app
 # window is showing blank content that only a Codex restart can recover.
-RENDERER_HUNG_GRACE_SECONDS = 90.0
+# Degrade (not restart) after 30s with no acknowledgement while the
+# probe also fails; a probe-alive renderer is busy and never escalates.
+RENDERER_HUNG_GRACE_SECONDS = 30.0
 # After an unlock/resume, give a frozen-but-recoverable renderer time to thaw
 # before the HUD escalates to a Codex restart.
 RENDERER_HUNG_POST_UNLOCK_GRACE_SECONDS = 45.0

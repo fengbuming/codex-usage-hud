@@ -4911,9 +4911,11 @@ class BudgetHelperTests(unittest.TestCase):
             "postponeEndsAtMs": 1_700_000_600_000,
         }
         overlay._rest_reminder = dict(reminder)
+        # A clean helper exit (code 0) is immediately restartable; a failed
+        # exit receives the bounded backoff from overlay_supervision.
         overlay._process = SimpleNamespace(
-            poll=MagicMock(return_value=1),
-            returncode=1,
+            poll=MagicMock(return_value=0),
+            returncode=0,
         )
         restarted = SimpleNamespace(poll=MagicMock(return_value=None))
 
