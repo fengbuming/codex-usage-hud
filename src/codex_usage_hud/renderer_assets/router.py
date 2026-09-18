@@ -1327,6 +1327,12 @@ TEXT = r"""
         applyProviderConfigWithRestartDecision("now");
         return;
       }
+      if (action.dataset.action === "settings-provider-clone-switch") {
+        event.preventDefault();
+        event.stopPropagation();
+        applyProviderConfigWithRestartDecision("clone");
+        return;
+      }
       if (action.dataset.action === "settings-provider-toggle-api-key") {
         event.preventDefault();
         event.stopPropagation();

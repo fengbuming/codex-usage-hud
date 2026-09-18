@@ -1944,7 +1944,11 @@ _TEXT_PREFIX = r"""
       function settingsProviderNames(settings) {
         const registry = settings.provider_registry && typeof settings.provider_registry === "object" ? settings.provider_registry : {};
         const providerSettings = settings.provider_settings && typeof settings.provider_settings === "object" ? settings.provider_settings : {};
-        const appProvider = String(settings.app_provider || "").trim().toLowerCase();
+        // config.toml 顶层 model_provider（稳定默认）优先；app_provider 会被
+        // 活跃会话供应商观察覆盖，不用于「默认」语义。
+        const appProvider = String(
+          settings.default_provider || settings.app_provider || ""
+        ).trim().toLowerCase();
         const providerOrder = Array.isArray(settings.provider_order) ? settings.provider_order : [];
         const available = new Set(
           [...Object.keys(providerSettings), ...Object.keys(registry), appProvider]
@@ -2216,12 +2220,16 @@ _TEXT_PREFIX = r"""
           codexProviderDirty.clear();
         }
         if (settingsProviderDraft && !reset) {
-          const currentAppProvider = String(settings.app_provider || "").trim().toLowerCase();
+          const currentAppProvider = String(
+            settings.default_provider || settings.app_provider || ""
+          ).trim().toLowerCase();
           if (currentAppProvider) settingsProviderDraft.appProvider = currentAppProvider;
           return settingsProviderDraft;
         }
         const order = settingsProviderNames(settings);
-        const appProvider = String(settings.app_provider || "").trim().toLowerCase();
+        const appProvider = String(
+          settings.default_provider || settings.app_provider || ""
+        ).trim().toLowerCase();
         const providerSettings = settings.provider_settings && typeof settings.provider_settings === "object"
           ? settings.provider_settings
           : {};
@@ -3039,8 +3047,8 @@ _TEXT_PREFIX = r"""
               </label>
             </details>
             <div class="codex-usage-hud-settings-confirm-body">${isDefaultProvider
-              ? "保存设置后会更新主 config.toml 的默认 Provider 段；API key 写入 Codex auth.json，不会创建 custom.config.toml。编辑时已填充当前密钥，点击 👁 可查看明文。修改 Base URL / API key 后，需要重启 Codex Desktop 才能生效，保存后会提示你选择立即重启或稍后重启。"
-              : "保存设置后会更新用户的 config.toml；API key 只写入用户环境变量，不会保存到 HUD 配置。编辑时已填充当前密钥，点击 👁 可查看明文。"}</div>
+              ? "保存设置后会更新主 config.toml 的默认 Provider 段，Base URL / 名称等修改保存后立即生效（新会话，无需重启）；API key 写入 Codex auth.json，编辑时已填充当前密钥，点击 👁 可查看明文。修改 API key 后需重启 Codex Desktop 才能确保生效，保存后会提示你选择立即重启或稍后重启。"
+              : "保存设置后会更新用户的 config.toml，保存后立即生效（新会话，无需重启）；API key 只写入用户环境变量，不会保存到 HUD 配置。编辑时已填充当前密钥，点击 👁 可查看明文。"}</div>
             <div class="codex-usage-hud-provider-config-status" data-provider-config-status="true" role="alert" aria-live="polite"></div>
             <div class="codex-usage-hud-settings-confirm-actions">
               <button type="button" class="codex-usage-hud-settings-action" data-action="settings-provider-cancel" data-variant="ghost">取消</button>
@@ -3207,14 +3215,36 @@ _TEXT_PREFIX = r"""
           );
           return false;
         }
-        // 默认供应商编辑时，先弹出重启确认框，由用户选择取消 / 稍后重启 / 立即重启。
-        // 弹窗按钮会设置 providerRestartDecision 并再次调用本函数完成提交。
-        if (isDefaultProvider && providerRestartDecision === null) {
+        // 默认供应商编辑：仅「修改了 API key」（写入 auth.json）才需要重启确认；
+        // Base URL / 名称 / wire_api 等 config.toml 字段已实测可热读，保存后即时生效，
+        // 直接提交保存。弹窗按钮会设置 providerRestartDecision 并再次调用本函数完成提交。
+        const apiKeyChanged = isDefaultProvider
+          && !!apiKey
+          && apiKey !== String(existingCodex?.currentApiKey || "");
+        if (isDefaultProvider && apiKeyChanged && providerRestartDecision === null) {
           openProviderRestartConfirmDialog(provider);
           return;
         }
         const restartDecision = providerRestartDecision;
         providerRestartDecision = null;
+        if (restartDecision === "clone") {
+          // 克隆并切换：新 key 写入新供应商段的 experimental_bearer_token
+          // （config.toml 字段，实测运行中的 Codex 热读并用于下一个请求，无需重启），
+          // 顶层默认同步切到新供应商；不写 auth.json。原供应商段保留。
+          const submitted = submitSettingsCommand(
+            { action: "providerCloneSwitch", provider, apiKey },
+            `正在克隆供应商 ${displayName} 并切换...`,
+          );
+          if (submitted) {
+            codexProviderDirty.clear();
+            renderSettingsProviderTabs();
+          }
+          return true;
+        }
+        // 默认供应商未修改 API key 的保存：config.toml 字段热读，免重启即可生效。
+        if (isDefaultProvider && !apiKeyChanged) {
+          codexProviderHotSavePending = true;
+        }
         if (isNew) {
           const sourceProvider = String(sourceNode?.value || "").trim().toLowerCase();
           const sourceEntry = settingsProviderDraft.providers[sourceProvider];
@@ -3678,6 +3708,8 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
       let providerRestartDecision = null;
       // 保存提交后待执行的重启动作，由 applySettingsCommandStatus 在保存成功后消费。
       let pendingProviderRestartAfterSave = null;
+      // 默认供应商免重启保存（未修改 API key）成功后的待展示提示。
+      let codexProviderHotSavePending = false;
 
       function setSettingsStatus(text, kind = "") {
         const node = document.querySelector(`#${settingsModalId} [data-settings-status="true"]`);
@@ -3879,19 +3911,20 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
         layer.dataset.settingsConfirm = "true";
         layer.dataset.providerRestartDialog = "true";
         layer.innerHTML = `
-          <div class="codex-usage-hud-settings-confirm-card" role="alertdialog" aria-modal="true" aria-label="重启 Codex Desktop 确认">
+          <div class="codex-usage-hud-settings-confirm-card" role="alertdialog" aria-modal="true" aria-label="修改 API key 生效方式">
             <div class="codex-usage-hud-settings-confirm-kicker">Codex Desktop</div>
-            <div class="codex-usage-hud-settings-confirm-title">重启 Codex Desktop 以生效？</div>
-            <div class="codex-usage-hud-settings-confirm-body">修改默认 Codex App Provider${provider ? `（${escapeHtml(providerDisplayName(hudSettingsFromPayload(), provider))}）` : ""}的 Base URL / API key 后，需要重启 Codex Desktop 才能加载新配置。\n\n选择操作方式：</div>
+            <div class="codex-usage-hud-settings-confirm-title">修改 API key 的生效方式</div>
+            <div class="codex-usage-hud-settings-confirm-body">API key 写入 auth.json 后，Codex Desktop 在运行中不会重新读取，重启后才会生效；Base URL / 名称等修改已即时生效（新会话）。\n\n也可以把当前供应商克隆为一个带新 key 的新供应商并切换为默认——新 key 直接写入 config.toml，无需重启即可生效，原供应商保留。\n\n选择操作方式：</div>
             <div class="codex-usage-hud-settings-confirm-actions">
               <button type="button" class="codex-usage-hud-settings-action" data-action="settings-provider-restart-cancel" data-variant="ghost">取消</button>
+              <button type="button" class="codex-usage-hud-settings-action" data-action="settings-provider-clone-switch" data-primary="true">克隆并切换（无需重启）</button>
+              <button type="button" class="codex-usage-hud-settings-action" data-action="settings-provider-restart-now">立即重启</button>
               <button type="button" class="codex-usage-hud-settings-action" data-action="settings-provider-restart-later">稍后重启</button>
-              <button type="button" class="codex-usage-hud-settings-action" data-action="settings-provider-restart-now" data-primary="true">立即重启</button>
             </div>
           </div>
         `;
         dialog.appendChild(layer);
-        layer.querySelector('[data-action="settings-provider-restart-now"]')?.focus?.();
+        layer.querySelector('[data-action="settings-provider-clone-switch"]')?.focus?.();
       }
 
       function closeProviderRestartConfirmDialog() {
@@ -3904,6 +3937,45 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
         providerRestartDecision = decision;
         closeProviderRestartConfirmDialog();
         applyProviderConfigDialog();
+      }
+
+      // 克隆切换成功后：把新供应商复制进 HUD 供应商列表（价格表随源供应商），
+      // 并保存 HUD 侧设置（不带 codexProviders，避免覆盖 config.toml 中已写入的
+      // experimental_bearer_token）。菜单/统计立即认识新供应商。
+      function handleProviderCloneSwitchResult(result) {
+        const newId = String(result.newProviderId || "").trim().toLowerCase();
+        const sourceId = String(result.providerId || "").trim().toLowerCase();
+        if (!newId || !sourceId || newId === sourceId) return false;
+        const settings = hudSettingsFromPayload();
+        const draft = ensureSettingsProviderDraft(settings);
+        const sourceEntry = draft.providers[sourceId];
+        const sourceTable = sourceEntry?.settings?.model_prices
+          || settings.default_model_prices
+          || settings.model_prices
+          || {};
+        if (draft.order.includes(newId)) return false;
+        draft.order.push(newId);
+        draft.providers[newId] = {
+          enabled: true,
+          notificationOnly: false,
+          settings: {
+            model_prices: cloneProviderModelPrices(sourceTable, newId),
+            pricing_url: sourceEntry?.settings?.pricing_url || "",
+            weekly_adjustment_usd: sourceEntry?.settings?.weekly_adjustment_usd || 0,
+          },
+        };
+        draft.activeProvider = newId;
+        // 默认供应商标记立即对齐：不依赖后端 settings_changed 的时序，前端先把
+        // HUD 侧 appProvider 与 config.toml 已切换的顶层 model_provider 保持一致。
+        draft.appProvider = newId;
+        window[settingsProviderName] = newId;
+        renderSettingsProviderTabs();
+        const nextSettings = { ...collectSettingsForm(), app_provider: newId };
+        const submitted = submitSettingsCommand(
+          { action: "save", settings: nextSettings },
+          "正在同步供应商列表...",
+        );
+        return !!submitted;
       }
 
       function setSettingsLoadingText({ kicker = "", title = "", body = "" } = {}) {
@@ -4901,6 +4973,15 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
       function applySettingsCommandStatus(payload) {
         const status = payload?.settingsCommandStatus;
         sessionViewDomain.applySearchJump(status?.sessionCleanupSessionJump);
+        const providerCloneSwitch = status?.providerCloneSwitch;
+        if (providerCloneSwitch && typeof providerCloneSwitch === "object") {
+          if (handleProviderCloneSwitchResult(providerCloneSwitch)) {
+            setSettingsStatus(
+              status?.message || "供应商已克隆并切换为默认，新 key 已生效（无需重启），原供应商保留。",
+              "",
+            );
+          }
+        }
         const sessionIndex = status?.sessionIndex || payload?.sessionIndex;
         if (sessionIndex && typeof sessionIndex === "object") {
           // Capture the prior job state BEFORE the optimistic overwrite so we
@@ -5124,7 +5205,15 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
             }
           }
           if (!providerDeleteTerminalHandled) {
-            if (status.restartVisible) {
+            // 默认供应商免重启保存（未修改 API key）：config.toml 字段已实测热读，
+            // 保存成功后直接提示已生效，并清掉任何历史遗留的重启提示。
+            if (codexProviderHotSavePending && status.kind !== "error") {
+              codexProviderHotSavePending = false;
+              clearSettingsRestartPrompt();
+              setSettingsStatus("已保存，新的 Codex 会话将立即生效（无需重启）。", "");
+            } else {
+              codexProviderHotSavePending = false;
+              if (status.restartVisible) {
               // 默认供应商保存后，若用户已在弹窗中做出重启决策，则按决策执行，
               // 不再走旧的「状态栏 + 底部立即重启按钮」流程。
               if (pendingProviderRestartAfterSave === "now") {
@@ -5144,6 +5233,7 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
               // 避免残留状态影响后续操作。
               pendingProviderRestartAfterSave = null;
               setSettingsStatus(status.message || "", status.kind || "");
+            }
             }
           }
           // 重启提示是粘性的：一旦因默认供应商等配置显示，就只能由用户
@@ -7124,7 +7214,11 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
         const label = codexProviderSwitchMenuState.toggle;
         const settings = hudSettingsFromPayload();
         const providers = settingsProviderNames(settings);
-        const appProvider = String(settings.app_provider || "").trim().toLowerCase();
+        // 默认徽标基于 config.toml 顶层 model_provider（稳定值），而非会被
+        // 活跃会话供应商观察覆盖的 app_provider。
+        const appProvider = String(
+          settings.default_provider || settings.app_provider || ""
+        ).trim().toLowerCase();
         const activeSession = String(currentPayload()?.activeSessionProvider || "").trim().toLowerCase();
         if (!label?.isConnected || !providers.length) {
           closeCodexProviderSwitchMenu();
@@ -7626,7 +7720,13 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
 
       function codexCliQuickLaunchProviderLabelState() {
         const active = String(currentPayload()?.activeSessionProvider || "").trim().toLowerCase();
-        const fallback = String(hudSettingsFromPayload().app_provider || "").trim().toLowerCase();
+        // config.toml 顶层 model_provider 的稳定默认（新会话默认供应商）；
+        // app_provider 会被活跃会话供应商观察覆盖，不能作为「默认」展示。
+        const fallback = String(
+          hudSettingsFromPayload().default_provider
+            || hudSettingsFromPayload().app_provider
+            || ""
+        ).trim().toLowerCase();
         if (active) {
           const mismatch = !!fallback && fallback !== active;
           const settings = hudSettingsFromPayload();

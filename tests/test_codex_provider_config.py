@@ -17,6 +17,7 @@ from codex_usage_hud.codex_provider_config import (
     CODEX_AUTH_API_KEY,
     _delete_user_environment_value,
     _chat_completions_url,
+    clone_provider_with_bearer_key,
     delete_provider_config,
     fetch_provider_models,
     fetch_provider_models_for_cli,
@@ -1411,6 +1412,83 @@ class SendCliChatProbeTests(unittest.TestCase):
 
         self.assertFalse(result["ok"])
         self.assertIn("没有可用的 API key", str(result["error"]))
+
+
+class CloneProviderWithBearerKeyTests(unittest.TestCase):
+    def test_clone_creates_new_section_and_switches_default(self) -> None:
+        config_text = (
+            'model_provider = "custom"\n\n'
+            "[model_providers.custom]\n"
+            'name = "OpenAI"\n'
+            'base_url = "https://openrouter.zjxqai.com/v1"\n'
+            'wire_api = "responses"\n'
+            "requires_openai_auth = true\n"
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "config.toml"
+            path.write_text(config_text, encoding="utf-8")
+            result = clone_provider_with_bearer_key(
+                "custom", "sk-clone-key-123", config_path=path
+            )
+            self.assertTrue(result["changed"])
+            self.assertEqual(result["newProviderId"], "custom-copy")
+            self.assertEqual(result["name"], "OpenAI（副本）")
+            updated = path.read_text(encoding="utf-8")
+            self.assertEqual(
+                updated.splitlines()[0],
+                'model_provider = "custom-copy"',
+            )
+            self.assertIn("[model_providers.custom-copy]", updated)
+            self.assertIn('name = "OpenAI（副本）"', updated)
+            self.assertIn(
+                'experimental_bearer_token = "sk-clone-key-123"', updated
+            )
+            self.assertIn("[model_providers.custom]", updated)
+            copy_section = updated.split("[model_providers.custom-copy]", 1)[1]
+            self.assertNotIn("requires_openai_auth", copy_section)
+
+    def test_clone_increments_suffix_on_collision(self) -> None:
+        config_text = (
+            'model_provider = "custom"\n\n'
+            "[model_providers.custom]\n"
+            'name = "OpenAI"\n'
+            'base_url = "https://openrouter.zjxqai.com/v1"\n\n'
+            "[model_providers.custom-copy]\n"
+            'name = "OpenAI 旧副本"\n'
+            'base_url = "https://openrouter.zjxqai.com/v1"\n'
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "config.toml"
+            path.write_text(config_text, encoding="utf-8")
+            result = clone_provider_with_bearer_key(
+                "custom", "sk-clone-key-456", config_path=path
+            )
+            self.assertEqual(result["newProviderId"], "custom-copy2")
+            updated = path.read_text(encoding="utf-8")
+            self.assertIn("[model_providers.custom-copy2]", updated)
+            self.assertIn(
+                'experimental_bearer_token = "sk-clone-key-456"', updated
+            )
+            self.assertEqual(
+                updated.splitlines()[0],
+                'model_provider = "custom-copy2"',
+            )
+
+    def test_clone_rejects_missing_source_and_empty_key(self) -> None:
+        config_text = (
+            'model_provider = "custom"\n\n'
+            "[model_providers.custom]\n"
+            'name = "OpenAI"\n'
+            'base_url = "https://openrouter.zjxqai.com/v1"\n'
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "config.toml"
+            path.write_text(config_text, encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "未在 config.toml 的 .*中定义"):
+                clone_provider_with_bearer_key("missing", "sk-1", config_path=path)
+            with self.assertRaisesRegex(ValueError, "API key 不能为空"):
+                clone_provider_with_bearer_key("custom", "", config_path=path)
+            self.assertEqual(path.read_text(encoding="utf-8"), config_text)
 
 
 if __name__ == "__main__":

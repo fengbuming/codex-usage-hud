@@ -727,6 +727,92 @@ def test_general_provider_set_default_surfaces_failure() -> None:
     assert "未在 config.toml" in status["message"]
 
 
+def test_general_provider_clone_switch_dispatches_with_result() -> None:
+    config = UserConfig.defaults()
+    clone_switch = MagicMock(
+        return_value={
+            "changed": True,
+            "providerId": "custom",
+            "newProviderId": "custom-copy",
+            "name": "OpenAI（副本）",
+        }
+    )
+    ports = GeneralCommandPorts(
+        load_config=lambda: config,
+        save_config=lambda value: None,
+        fetch_prices=lambda url: {},
+        rest_reminder=None,
+        update_manager=None,
+        work_overlay=None,
+        request_restart=lambda: None,
+        request_exit=lambda: None,
+        check_update=lambda: SimpleNamespace(error="", available=False, current_version="1"),
+        install_update=lambda info: None,
+        overlay_status=lambda: {},
+        start_overlay_install=lambda: False,
+        clear_forced_missing=lambda: None,
+        forced_missing_with_real_install=lambda: False,
+        pyside_version=lambda: "",
+        default_overlay_limit=lambda: 1,
+        dismiss_warnings_today=lambda: True,
+        clone_provider_with_bearer_key=clone_switch,
+    )
+
+    status = dispatch_command(
+        {"action": "providerCloneSwitch", "provider": "custom", "apiKey": "sk-new", "requestId": "clone-1"},
+        RuntimeCommandPorts(),
+        ports,
+    )
+
+    clone_switch.assert_called_once_with("custom", "sk-new")
+    assert status["requestId"] == "clone-1"
+    assert status["action"] == "providerCloneSwitch"
+    assert status["providerCloneSwitchProvider"] == "custom-copy"
+    assert status["providerCloneSwitch"]["newProviderId"] == "custom-copy"
+    assert "OpenAI（副本）" in status["message"]
+    assert status.get("restartVisible") is not True
+    assert status.get("restartCodex") is not True
+
+
+def test_general_provider_clone_switch_surfaces_failure() -> None:
+    config = UserConfig.defaults()
+
+    def failing(source, api_key):
+        del api_key
+        raise ValueError(f"供应商「{source}」未在 config.toml 中定义，无法克隆。")
+
+    ports = GeneralCommandPorts(
+        load_config=lambda: config,
+        save_config=lambda value: None,
+        fetch_prices=lambda url: {},
+        rest_reminder=None,
+        update_manager=None,
+        work_overlay=None,
+        request_restart=lambda: None,
+        request_exit=lambda: None,
+        check_update=lambda: SimpleNamespace(error="", available=False, current_version="1"),
+        install_update=lambda info: None,
+        overlay_status=lambda: {},
+        start_overlay_install=lambda: False,
+        clear_forced_missing=lambda: None,
+        forced_missing_with_real_install=lambda: False,
+        pyside_version=lambda: "",
+        default_overlay_limit=lambda: 1,
+        dismiss_warnings_today=lambda: True,
+        clone_provider_with_bearer_key=failing,
+    )
+
+    status = dispatch_command(
+        {"action": "providerCloneSwitch", "provider": "nope", "apiKey": "sk-x", "requestId": "clone-2"},
+        RuntimeCommandPorts(),
+        ports,
+    )
+
+    assert status["action"] == "providerCloneSwitch"
+    assert status["kind"] == "error"
+    assert "未在 config.toml" in status["message"]
+
+
 def test_general_provider_save_without_default_change_does_not_prompt_restart() -> None:
     config = UserConfig.defaults()
     ports = GeneralCommandPorts(

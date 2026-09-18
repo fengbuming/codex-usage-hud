@@ -19,6 +19,7 @@ import uuid
 from . import runtime_settings
 from . import __version__
 from .codex_provider_config import (
+    clone_provider_with_bearer_key as clone_provider_with_bearer_key_config,
     fetch_provider_models,
     fetch_provider_models_for_cli,
     save_provider_configs,
@@ -180,6 +181,7 @@ class GeneralCommandPorts:
     codex_cli_discover: Callable[[Mapping[str, object]], Mapping[str, object]] | None = None
     codex_cli_launch: Callable[[Mapping[str, object]], Mapping[str, object]] | None = None
     set_default_provider: Callable[[str], Mapping[str, object]] | None = None
+    clone_provider_with_bearer_key: Callable[[str, str], Mapping[str, object]] | None = None
 
 
 def _status(message: str, *, kind: str = "") -> dict[str, object]:
@@ -1407,6 +1409,30 @@ def handle_general_command(
             status["providerSetDefault"] = dict(result)
             status["providerSetDefaultProvider"] = str(provider).strip().lower()
             return status
+        if action == "providerCloneSwitch":
+            if ports.clone_provider_with_bearer_key is None:
+                return _status("供应商克隆切换当前不可用。", kind="error")
+            source = str(command.get("provider") or command.get("sourceProvider") or "").strip()
+            api_key = str(command.get("apiKey") or command.get("api_key") or "").strip()
+            try:
+                result = ports.clone_provider_with_bearer_key(source, api_key)
+            except (ValueError, OSError, FileNotFoundError) as exc:
+                return _status(
+                    _exc_detail_log(exc, tag="provider_clone_switch_failed"),
+                    kind="error",
+                )
+            new_name = str(
+                (result.get("name") if isinstance(result, Mapping) else "") or ""
+            )
+            new_id = str(
+                (result.get("newProviderId") if isinstance(result, Mapping) else "") or ""
+            )
+            status = _status(
+                f"已克隆为供应商「{new_name}」并切换为默认（新 key 已生效，无需重启），原供应商保留。"
+            )
+            status["providerCloneSwitch"] = dict(result) if isinstance(result, Mapping) else {}
+            status["providerCloneSwitchProvider"] = new_id
+            return status
         if action == "deleteProvider":
             if ports.delete_provider is None:
                 return _status("供应商删除当前不可用。", kind="error")
@@ -2300,6 +2326,19 @@ def _handle_renderer_settings_command(
             publish("settings_changed", source="provider_switch", context={})
         return result
 
+    def clone_provider_with_bearer_key(source: str, api_key: str) -> Mapping[str, object]:
+        result = clone_provider_with_bearer_key_config(source, api_key)
+        # 新供应商段与顶层 model_provider 均已被运行中的 App Server 热读
+        # （实测：新增 [model_providers.<id>] 段 + experimental_bearer_token
+        # 在未重启时即被 App 识别并用于下一个请求）；这里重载 HUD 自身的
+        # 配置缓存并发布 settings_changed，让菜单栏标签与供应商列表立即刷新。
+        context.settings_mtime = None
+        context.reload_user_config()
+        publish = getattr(getattr(context, "runtime_events", None), "publish", None)
+        if callable(publish):
+            publish("settings_changed", source="provider_clone_switch", context={})
+        return result
+
     general_ports = GeneralCommandPorts(
         load_config=load_config,
         save_config=save_config,
@@ -2336,6 +2375,7 @@ def _handle_renderer_settings_command(
         codex_cli_discover=discover_cli,
         codex_cli_launch=launch_cli,
         set_default_provider=set_default_provider,
+        clone_provider_with_bearer_key=clone_provider_with_bearer_key,
     )
     result = dispatch_command(command, command_ports, general_ports)
     session_index = result.get("sessionIndex") if isinstance(result, Mapping) else None

@@ -122,6 +122,7 @@ def payload_from_snapshot(
     desktop_overlay_dependency: dict[str, object] | None = None,
     provider_registry: dict[str, object] | None = None,
     app_provider: str = "",
+    default_provider: str = "",
     usage_insights: dict[str, object] | None = None,
     session_cleanup: dict[str, object] | None = None,
     connection_health: dict[str, object] | ConnectionHealth | None = None,
@@ -183,6 +184,10 @@ def payload_from_snapshot(
     }
     settings_payload["provider_registry"] = dict(provider_registry or {})
     settings_payload["app_provider"] = str(app_provider or "")
+    # config.toml 顶层 model_provider（新会话默认供应商）的稳定值：与会被活跃
+    # 会话供应商观察覆盖的 app_provider 不同，它只随 config 重载变化，供渲染器
+    # 菜单栏「默认」徽标与供应商编辑器「默认 Codex App Provider」判定使用。
+    settings_payload["default_provider"] = str(default_provider or "")
     return RendererHudPayload(
         top_line=top_line,
         request_line=request_line,

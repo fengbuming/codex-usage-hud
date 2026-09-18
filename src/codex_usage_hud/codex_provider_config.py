@@ -947,6 +947,111 @@ def set_default_codex_provider(
     return {"changed": True, "providerId": requested, "configPath": str(path)}
 
 
+def clone_provider_with_bearer_key(
+    source_provider: str,
+    api_key: str,
+    *,
+    config_path: str | Path | None = None,
+) -> dict[str, object]:
+    """Clone a provider section with a fresh bearer token and switch default.
+
+    Used for the "edit default provider's API key" flow: rewriting auth.json
+    only takes effect after a Codex restart (the App Server loads credentials
+    at startup and never re-reads them while running).  Instead this clones
+    the provider's ``[model_providers.<id>]`` section into a new id that
+    carries the new key in ``experimental_bearer_token`` — a config.toml field
+    the running App re-reads hot (verified by a live probe: a newly added
+    provider section with a bearer token was picked up by the App Server and
+    used for the next request without restart) — then flips the top-level
+    ``model_provider`` to the new id.  The original provider section is
+    preserved untouched.
+    """
+    requested = str(source_provider or "").strip()
+    if not requested:
+        raise ValueError("要克隆的供应商 ID 不能为空。")
+    normalized_source = requested.casefold()
+    key = str(api_key or "").strip()
+    if not key:
+        raise ValueError("API key 不能为空。")
+    path = (
+        Path(config_path).expanduser()
+        if config_path is not None
+        else default_codex_config_path()
+    )
+    if not path.exists():
+        raise FileNotFoundError(f"Codex config was not found: {path}")
+    original_text = _read_text_exact(path)
+    parsed = _parse_toml_mapping(original_text)
+    raw_model_providers = parsed.get("model_providers")
+    definitions = (
+        raw_model_providers
+        if isinstance(raw_model_providers, Mapping)
+        else {}
+    )
+    source_entry = definitions.get(normalized_source)
+    if not isinstance(source_entry, Mapping):
+        raise ValueError(f"供应商「{requested}」未在 config.toml 的 [model_providers] 中定义，无法克隆。")
+    existing_ids = {str(pid or "").strip().casefold() for pid in definitions}
+    base = f"{normalized_source}-copy"
+    new_id = base
+    suffix = 2
+    while new_id in existing_ids:
+        new_id = f"{base}{suffix}"
+        suffix += 1
+    if not PROVIDER_ID_PATTERN.fullmatch(new_id):
+        raise ValueError(f"克隆生成的供应商 ID「{new_id}」不合法。")
+    section = _section_range(original_text, normalized_source)
+    if section is None:
+        raise ValueError(f"供应商「{requested}」的配置段不存在。")
+    _start, _end, source_body = section
+    newline = _preferred_newline(original_text)
+    source_name = _get_quoted_value(source_body, "name") or requested
+    base_url = _get_quoted_value(source_body, "base_url")
+    if not base_url:
+        raise ValueError(f"供应商「{requested}」缺少 base_url，无法克隆。")
+    wire_api = _get_quoted_value(source_body, "wire_api") or "responses"
+    new_body = newline.join(
+        (
+            f'name = "{_toml_string(f"{source_name}（副本）")}"',
+            f'base_url = "{_toml_string(base_url)}"',
+            f'wire_api = "{_toml_string(wire_api)}"',
+            f'experimental_bearer_token = "{_toml_string(key)}"',
+        )
+    )
+    candidate_text = _add_provider_section_text(original_text, new_id, new_body)
+    # 顶层 model_provider 切到新供应商（复用 set_default_codex_provider 的 head/tail 改写）。
+    first_table = re.search(
+        r"(?m)^[\t ]*\[\[?[^\r\n]+\]\]?\s*(?:#.*)?(?:\r?\n|$)",
+        candidate_text,
+    )
+    head_end = first_table.start() if first_table else len(candidate_text)
+    head = candidate_text[:head_end]
+    tail = candidate_text[head_end:]
+    candidate_head = _set_quoted_value(head, "model_provider", new_id, newline)
+    candidate_head = candidate_head.rstrip("\r\n") + newline
+    candidate_text = candidate_head + tail
+    _validate_toml(candidate_text)
+    candidate_parsed = _parse_toml_mapping(candidate_text)
+    candidate_providers = candidate_parsed.get("model_providers")
+    new_entry = (
+        candidate_providers.get(new_id)
+        if isinstance(candidate_providers, Mapping)
+        else None
+    )
+    if not isinstance(new_entry, Mapping):
+        raise ValueError("克隆后的供应商段写入校验失败。")
+    if str(candidate_parsed.get("model_provider") or "").strip().casefold() != new_id:
+        raise ValueError("config.toml 顶层 model_provider 写入后校验失败。")
+    _write_text_atomically(path, candidate_text, original_text)
+    return {
+        "changed": True,
+        "providerId": requested,
+        "newProviderId": new_id,
+        "name": f"{source_name}（副本）",
+        "configPath": str(path),
+    }
+
+
 MAX_PROVIDER_MODELS_RESPONSE_BYTES = 8 * 1024 * 1024
 
 
