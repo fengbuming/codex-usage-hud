@@ -103,6 +103,12 @@ class SessionCleanupItem:
     descendant_count: int
     selectable: bool
     blocked_reason: str
+    # Whether the session tree still has work in flight.  ``status`` collapses
+    # this together with the current-session protection (``current`` wins), so
+    # the renderer could not tell a stopped current session from a running one.
+    # The transfer dialog needs that distinction: a copy of a stopped current
+    # session is safe, a copy of one that is mid-turn is not.
+    active: bool = False
     transferable: bool = True
     transfer_blocked_reason: str = ""
     model_provider: str = "unknown"
@@ -133,6 +139,7 @@ class SessionCleanupItem:
             "descendantCount": max(0, int(self.descendant_count)),
             "selectable": bool(self.selectable),
             "blockedReason": self.blocked_reason,
+            "active": bool(self.active),
             "transferable": bool(self.transferable),
             "transferBlockedReason": self.transfer_blocked_reason,
             "modelProvider": self.model_provider,
@@ -1534,6 +1541,7 @@ class SessionCleanupManager:
                     descendant_count=len(descendants),
                     selectable=not blocked_reason,
                     blocked_reason=blocked_reason,
+                    active=active,
                     transferable=not missing_history_source,
                     transfer_blocked_reason=(
                         "The paginated history source rollout could not be verified."

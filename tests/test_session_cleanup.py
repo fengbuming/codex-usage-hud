@@ -612,6 +612,36 @@ class SessionCleanupManagerTests(unittest.TestCase):
         self.assertFalse(rows["Root"]["selectable"])
         self.assertEqual(rows["Archived"]["status"], "current")
         self.assertFalse(rows["Archived"]["selectable"])
+        # ``status`` collapses two independent axes, and ``current`` wins over
+        # in-flight work.  The payload therefore also publishes ``active``:
+        # the transfer dialog may copy a *stopped* current session (a copy never
+        # deletes the source) but must never copy one that is still mid-turn.
+        self.assertTrue(rows["Root"]["active"])
+        self.assertFalse(rows["Archived"]["active"])
+
+    def test_current_session_that_is_still_working_reports_active(self) -> None:
+        fixture = self._fixture()
+        temporary, _root, state, index, _rollouts, _manager = fixture
+        self.addCleanup(temporary.cleanup)
+        manager = SessionCleanupManager(
+            state_db_path=state,
+            sessions_root=state.parent / "sessions",
+            session_index_path=index,
+            current_session_ids=lambda: (ROOT_ID,),
+            active_session_ids=lambda: (ROOT_ID,),
+            token_factory=iter(f"busy-{index}" for index in range(100)).__next__,
+        )
+
+        rows = {row["title"]: row for row in manager.scan()["sessions"]}
+
+        # ``current`` still wins for deletion protection, but the in-flight
+        # work must remain visible or a copy of a half-written transcript
+        # would look allowed.
+        self.assertEqual(rows["Root"]["status"], "current")
+        self.assertFalse(rows["Root"]["selectable"])
+        self.assertTrue(rows["Root"]["active"])
+        self.assertEqual(rows["Archived"]["status"], "archived")
+        self.assertFalse(rows["Archived"]["active"])
 
     def test_historical_open_spawn_edge_does_not_claim_runtime_activity(self) -> None:
         fixture = self._fixture(child_status="open")

@@ -4130,7 +4130,20 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
       }
 
       const sessionTransferPageSize = 50;
+      // The session inventory is a snapshot: its ``status``/``selectable`` flags
+      // were computed against whatever session the HUD was following at scan
+      // time.  Opening the dialog right after switching sessions used to reuse a
+      // minutes-old snapshot and keep rows disabled for a reason the user could
+      // not see, so a stale snapshot is refreshed on open instead of trusted.
+      const sessionTransferSnapshotStaleMs = 10000;
       let sessionTransferElapsedTimer = 0;
+
+      function sessionTransferSnapshotStale(data) {
+        if (!String(data?.revision || "").trim()) return true;
+        const generatedAt = sessionCleanupDateValue(data?.generatedAt);
+        if (generatedAt === null) return true;
+        return Date.now() - generatedAt > sessionTransferSnapshotStaleMs;
+      }
 
       function sessionTransferProviderTargets(settings, sourceProvider) {
         const draft = ensureSettingsProviderDraft(settings);
@@ -4188,6 +4201,38 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
         );
       }
 
+      // The checkbox used to be gated by ``selectable`` alone, but that flag is
+      // the *permanent deletion* protection.  It conflates two axes, and the
+      // session the HUD currently follows lands on the wrong side of it: a copy
+      // never deletes the source, so a stopped current session is a perfectly
+      // good copy source, while a migration (which does delete it) is not.
+      // ``active`` is the axis that must hold in both modes -- forking a
+      // transcript that is still being written stops mid-turn.
+      function sessionTransferRowEligible(item, mode = sessionTransferState.mode) {
+        if (item?.selectable === true) return true;
+        if (String(mode || "copy").toLowerCase() === "migrate") return false;
+        return String(item?.status || "") === "current" && item?.active !== true;
+      }
+
+      // The scan core's ``blockedReason`` is an internal English sentence and
+      // must never reach the screen; the user-visible reason is derived from
+      // the status published next to it.
+      function sessionTransferBlockedHint(item, mode = sessionTransferState.mode) {
+        const status = String(item?.status || "idle");
+        if (status === "current") {
+          if (String(mode || "copy").toLowerCase() === "migrate") {
+            return item?.active === true
+              ? "当前会话仍在运行中，请先停止任务后再迁移"
+              : "当前会话不能迁移（迁移会删除源会话），请先切换到其它会话后重新扫描";
+          }
+          return "当前会话仍在运行中，请先停止任务后重新扫描";
+        }
+        if (status === "running") return "会话仍在运行中，请先停止任务后重新扫描";
+        if (status === "unresolved") return "会话映射无法确认，暂不可复制或迁移";
+        if (status === "unavailable") return "本机当前无法执行该操作";
+        return "该会话暂不可复制或迁移";
+      }
+
       function sessionTransferRows(data = sessionCleanupFromPayload()) {
         const source = String(sessionTransferState.sourceProvider || "").trim().toLowerCase();
         if (!source) return [];
@@ -4211,13 +4256,21 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
           // (The source stays listed in storage management for deletion.)
           && item?.pendingSourceCleanup !== true
           && String(item?.modelProvider || "").trim().toLowerCase() === source
-        )).map((item) => item?.archived === true
-          ? {
+        )).map((item) => {
+          const archived = item?.archived === true;
+          const eligible = !archived && sessionTransferRowEligible(item);
+          return {
             ...item,
-            selectable: false,
-            transferBlockedReason: "会话已归档，请先解除归档后再复制或迁移。",
-          }
-          : item);
+            selectable: eligible,
+            // One source of truth for the row notice: the dialog renders this
+            // text for every blocked row, not only for archived ones.
+            transferBlockedReason: eligible
+              ? ""
+              : (archived
+                ? "会话已归档，请先解除归档后再复制或迁移。"
+                : sessionTransferBlockedHint(item)),
+          };
+        });
       }
 
       function sessionTransferView(data = sessionCleanupFromPayload()) {
@@ -4499,8 +4552,15 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
         if (!layer) return false;
         layer.querySelectorAll?.('[data-session-transfer-mode]').forEach((input) => {
           const apply = () => {
-            sessionTransferState.mode = sessionTransferModeValue(input);
-            syncSessionTransferSubmitButton(sessionTransferState.mode);
+            const next = sessionTransferModeValue(input);
+            const changed = next !== sessionTransferState.mode;
+            sessionTransferState.mode = next;
+            syncSessionTransferSubmitButton(next);
+            // Row eligibility depends on the mode (a copy may take the current
+            // session, a migration may not), so the list has to be rebuilt --
+            // otherwise switching to "迁移" leaves a row checked and enabled
+            // that the submit path would then have to reject.
+            if (changed) renderSessionTransferDialog();
           };
           input.addEventListener("input", apply);
           input.addEventListener("change", apply);
@@ -4669,10 +4729,13 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
             const selectable = item?.selectable === true;
             const checked = selected.has(id);
             const updated = String(item?.updatedAt || "").replace("T", " ").replace(/([+-]\d\d:\d\d|Z)$/, "");
-            const archivedNotice = item?.archived === true
-              ? '<small data-kind="warning">已归档，请先解除归档后再复制或迁移</small>'
-              : "";
-            return `<label class="codex-usage-hud-session-transfer-row" data-session-transfer-row="true"><input type="checkbox" data-session-transfer-id="${escapeHtml(id)}" ${checked ? "checked" : ""} ${selectable ? "" : "disabled"}><span class="codex-usage-hud-session-transfer-main"><strong>${escapeHtml(item?.title || "未命名会话")}</strong><small>${escapeHtml(item?.workdirName || "未记录工作目录")} · ${escapeHtml(providerDisplayName(settings, item?.modelProvider || "unknown"))}</small>${archivedNotice}</span><span class="codex-usage-hud-session-transfer-time">${escapeHtml(updated || "--")}</span></label>`;
+            const blockedReason = String(item?.transferBlockedReason || "").trim();
+            // A disabled checkbox with no explanation was the single most
+            // confusing part of this dialog: every blocked row now says why.
+            const blockedNotice = selectable || !blockedReason
+              ? ""
+              : `<small data-kind="warning">${escapeHtml(blockedReason)}</small>`;
+            return `<label class="codex-usage-hud-session-transfer-row" data-session-transfer-row="true"><input type="checkbox" data-session-transfer-id="${escapeHtml(id)}" ${checked ? "checked" : ""} ${selectable ? "" : "disabled"}><span class="codex-usage-hud-session-transfer-main"><strong>${escapeHtml(item?.title || "未命名会话")}</strong><small>${escapeHtml(item?.workdirName || "未记录工作目录")} · ${escapeHtml(providerDisplayName(settings, item?.modelProvider || "unknown"))}</small>${blockedNotice}</span><span class="codex-usage-hud-session-transfer-time">${escapeHtml(updated || "--")}</span></label>`;
           }).join("")
           : '<div class="codex-usage-hud-session-transfer-empty">没有找到可选的源 Provider 会话。请先扫描，或调整搜索条件。</div>';
         const targetOptions = targets.length
@@ -4799,7 +4862,7 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
         dialog.appendChild(layer);
         renderSessionTransferDialog();
         if (
-          !String(sessionTransferState.data?.revision || "").trim()
+          sessionTransferSnapshotStale(sessionTransferState.data)
           && !sharedScanRequestId
         ) requestSessionTransferScan();
         return true;
@@ -8043,6 +8106,8 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
       requestSessionTransferCancel,
       submitSessionTransfer,
       sessionTransferSelectableIds,
+      sessionTransferRows,
+      sessionTransferDialogHtml,
       syncSessionTransferSelection,
       syncSessionTransferSelectAll,
       moveSessionTransferPage,
@@ -8194,6 +8259,8 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
     requestSessionTransferScan,
     submitSessionTransfer,
     sessionTransferSelectableIds,
+    sessionTransferRows,
+    sessionTransferDialogHtml,
     syncSessionTransferSelection,
     syncSessionTransferSelectAll,
     moveSessionTransferPage,
