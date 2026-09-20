@@ -5348,6 +5348,10 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
           setSettingsStatus("无法提交设置命令：settings bridge 未连接", "error");
           return false;
         }
+        const dismissRestReminder = [
+          "restReminderAck", "restReminderStart", "restReminderCredit", "restReminderPostpone",
+        ].includes(String(command?.action || ""));
+        if (dismissRestReminder) restReminderDomain.dismiss();
         try {
           if (bindingAvailable) {
             try {
@@ -5426,6 +5430,9 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
       }
 
       function handleSettingsCommandSubmissionError(error, command = {}) {
+        if (["restReminderAck", "restReminderStart", "restReminderCredit", "restReminderPostpone"].includes(String(command?.action || ""))) {
+          restReminderDomain.restore();
+        }
         if (String(command?.action || "") === "fetchPricesPreview") {
           closePricingPreviewLoading({ requestId: command?.requestId || command?.id || "" });
         }

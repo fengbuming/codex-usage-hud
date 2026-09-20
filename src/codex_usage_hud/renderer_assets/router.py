@@ -1379,26 +1379,12 @@ TEXT = r"""
         event.preventDefault();
         event.stopPropagation();
         submitSettingsCommand({ action: "restReminderAck" }, "正在关闭提醒预览...");
-        const toast = document.querySelector(`#${rootId} [data-rest-reminder-toast="true"]`);
-        if (toast) toast.dataset.visible = "false";
-        const mask = document.querySelector(`#${rootId} [data-rest-reminder-mask="true"]`);
-        if (mask) {
-          mask.dataset.visible = "false";
-          mask.setAttribute("aria-hidden", "true");
-        }
         return;
       }
       if (action.dataset.action === "rest-reminder-start") {
         event.preventDefault();
         event.stopPropagation();
         submitSettingsCommand({ action: "restReminderStart" }, "正在开始休息计时...");
-        const toast = document.querySelector(`#${rootId} [data-rest-reminder-toast="true"]`);
-        if (toast) toast.dataset.visible = "false";
-        const mask = document.querySelector(`#${rootId} [data-rest-reminder-mask="true"]`);
-        if (mask) {
-          mask.dataset.visible = "false";
-          mask.setAttribute("aria-hidden", "true");
-        }
         return;
       }
       if (action.dataset.action === "rest-reminder-credit-more") {
@@ -1435,13 +1421,6 @@ TEXT = r"""
           { action: "restReminderCredit", minutes },
           `正在记录提前休息 ${minutes} 分钟...`,
         );
-        const toast = document.querySelector(`#${rootId} [data-rest-reminder-toast="true"]`);
-        if (toast) toast.dataset.visible = "false";
-        const mask = document.querySelector(`#${rootId} [data-rest-reminder-mask="true"]`);
-        if (mask) {
-          mask.dataset.visible = "false";
-          mask.setAttribute("aria-hidden", "true");
-        }
         return;
       }
       if (action.dataset.action === "rest-reminder-credit-custom-cancel") {
@@ -1463,13 +1442,6 @@ TEXT = r"""
           { action: "restReminderCredit", minutes },
           `正在记录提前休息 ${minutes} 分钟...`,
         );
-        const toast = document.querySelector(`#${rootId} [data-rest-reminder-toast="true"]`);
-        if (toast) toast.dataset.visible = "false";
-        const mask = document.querySelector(`#${rootId} [data-rest-reminder-mask="true"]`);
-        if (mask) {
-          mask.dataset.visible = "false";
-          mask.setAttribute("aria-hidden", "true");
-        }
         return;
       }
       if (action.dataset.action === "rest-reminder-finish") {
@@ -1482,13 +1454,6 @@ TEXT = r"""
         event.preventDefault();
         event.stopPropagation();
         submitSettingsCommand({ action: "restReminderPostpone" }, "正在安排稍后提醒...");
-        const toast = document.querySelector(`#${rootId} [data-rest-reminder-toast="true"]`);
-        if (toast) toast.dataset.visible = "false";
-        const mask = document.querySelector(`#${rootId} [data-rest-reminder-mask="true"]`);
-        if (mask) {
-          mask.dataset.visible = "false";
-          mask.setAttribute("aria-hidden", "true");
-        }
         return;
       }
       if (action.dataset.action === "rest-reminder-test-notification") {

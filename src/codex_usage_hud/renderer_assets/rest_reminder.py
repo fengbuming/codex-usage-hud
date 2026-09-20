@@ -2,6 +2,25 @@
 
 TEXT = r"""
   function createRestReminderDomain(ctx, shared) {
+  let dismissedReminderKey = "";
+
+  function reminderKey(reminder) {
+    const phase = String(reminder?.phase || "");
+    if (phase !== "prompt" && phase !== "preview") return "";
+    return `${phase}:${Number(reminder?.promptStartedAtMs) || 0}:${Number(reminder?.promptEndsAtMs) || 0}`;
+  }
+
+  function dismiss() {
+    // 后台确认前仍可能推送旧状态；只压住本轮提醒，下一轮使用新的时间戳。
+    dismissedReminderKey = reminderKey(currentPayload()?.restReminder);
+    renderRestReminderToast(null, currentPayload());
+  }
+
+  function restore() {
+    dismissedReminderKey = "";
+    renderRestReminderToast(null, currentPayload());
+  }
+
   function restReminderToastMarkup() {
     return `
       <div class="codex-usage-hud-rest-mask" data-rest-reminder-mask="true" data-visible="false" aria-hidden="true"></div>
@@ -296,6 +315,7 @@ TEXT = r"""
     const phase = String(reminder.phase || "");
     const promptEndsAtMs = Number(reminder.promptEndsAtMs);
     const visible = !!reminder.visible
+      && (!dismissedReminderKey || reminderKey(reminder) !== dismissedReminderKey)
       && (
         phase === "prompt"
           ? reminder.promptWaitInfinite === true
@@ -371,6 +391,8 @@ TEXT = r"""
       dispose,
       markup: restReminderToastMarkup,
       position: positionRestReminderBubble,
+      dismiss,
+      restore,
     };
   }
 
