@@ -2042,6 +2042,8 @@ class RendererHudPayloadTests(unittest.TestCase):
         self.assertIn('activeSessionScope.listen(document, "submit", submit, true)', script)
         self.assertIn('activeSessionScope.listen(document, "keydown", keydown, true)', script)
         self.assertIn("keepFollowup = report();", script)
+        self.assertIn("ref.newSession = true;", script)
+        self.assertIn("preserve the provisional handoff", script)
         self.assertIn("const delays = keepFollowup", script)
         self.assertIn(
             "? [32, 120, 320, 800, 1600, 3200, 5600, 9000]",

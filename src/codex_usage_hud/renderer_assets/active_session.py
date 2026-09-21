@@ -761,6 +761,21 @@ TEXT = r"""
         const expected = normalize(expectedSessionId);
         const report = () => {
           const ref = readActiveSessionRef();
+          // Codex clears/unmounts the composer and transient header before the
+          // first post-send DOM mutation. Preserve the provisional handoff for
+          // that gap so the existing draft bubble flips to "sending" now;
+          // later follow-ups replace it with the canonical thread id.
+          if (
+            /^(composer-send|composer-send-click|composer-enter|composer-submit)$/i.test(
+              String(reason || ""),
+            )
+            && !ref.sessionId
+            && !ref.title
+            && !ref.newSession
+            && !ref.pendingSession
+          ) {
+            ref.newSession = true;
+          }
           const current = normalize(ref.rendererSessionId || ref.rawSessionId || ref.sessionId || "");
           if (expected && current !== expected) return;
           postActiveSession(reason, ref);
