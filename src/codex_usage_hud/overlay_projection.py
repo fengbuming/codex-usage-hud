@@ -328,23 +328,6 @@ def _item_started_at(item: WorkStatusItem) -> datetime | None:
     return item.task_started_at or item.started_at or item.session_started_at
 
 
-def _item_started_after_runtime_start(
-    item: WorkStatusItem,
-    runtime_started_at: datetime | None,
-) -> bool:
-    if runtime_started_at is None:
-        return True
-    started_at = _item_started_at(item)
-    if started_at is None:
-        return False
-    try:
-        return started_at >= runtime_started_at
-    except TypeError:
-        return started_at.replace(tzinfo=None) >= runtime_started_at.replace(
-            tzinfo=None
-        )
-
-
 def select_visible_items(
     items: list[WorkStatusItem] | tuple[WorkStatusItem, ...],
     *,
@@ -354,7 +337,7 @@ def select_visible_items(
     stale_seconds: float,
     runtime_started_at: datetime | None = None,
 ) -> list[WorkStatusItem]:
-    del now, stale_seconds
+    del now, stale_seconds, runtime_started_at
     previously_seen = set(seen_task_keys)
     visible: list[WorkStatusItem] = []
     for item in items:
@@ -370,10 +353,8 @@ def select_visible_items(
                 seen_task_keys.add(task_key)
             continue
         visible.append(item)
-        if task_key and _item_started_after_runtime_start(
-            item,
-            runtime_started_at,
-        ):
+        # HUD 重启前开始的任务也可能仍在运行；以本次显示过进行态为准，不能按开始时间过滤。
+        if task_key:
             seen_task_keys.add(task_key)
     # The followed session is the primary user-facing item. A burst of newer
     # background/CLI sessions must not evict it solely because the overlay has
@@ -394,10 +375,7 @@ def select_visible_items(
         else:
             visible.append(current_item)
         current_key = runtime_task_key(current_item)
-        if current_key and _item_started_after_runtime_start(
-            current_item,
-            runtime_started_at,
-        ):
+        if current_key:
             seen_task_keys.add(current_key)
     return visible
 

@@ -908,6 +908,52 @@ def test_tick_sampler_publishes_only_sequence_matching_active_work() -> None:
     assert state.latest_snapshot.active_work_items == ["current"]
 
 
+def test_tick_sampler_reprojects_current_turn_before_publishing_old_scan() -> None:
+    from datetime import datetime, timedelta, timezone
+    from codex_usage_hud.active_work import _refresh_visible_current_work_item
+    from codex_usage_hud.core import Activity, RequestTokens, WorkStatusItem
+
+    now = datetime.now(timezone.utc)
+    stale = WorkStatusItem(
+        id="session-1", session_id="session-1", status="recent",
+        title="current", status_label="刚完成", detail="",
+    )
+    background = WorkStatusItem(
+        id="session-2", session_id="session-2", status="tool",
+        title="background", status_label="工具执行", detail="",
+    )
+    snapshot = ParsedSession(
+        selection_seq=3, session_id="session-1", task_started_at=now,
+        request=RequestTokens(status="running", started_at=now, updated_at=now),
+        activity=Activity(kind="user", detail="继续", timestamp=now),
+    )
+    published = []
+    context = SimpleNamespace()
+    state = RendererLoopState(latest_snapshot=snapshot)
+    ports = replace(
+        _sampler_ports(
+            event_bus=RuntimeEventBus(), update_state={},
+            take_active_work=lambda: (3, [stale, background]),
+            tracker=SimpleNamespace(selection_seq=3), published_work=published,
+        ),
+        refresh_current_work=lambda items, fresh: _refresh_visible_current_work_item(
+            context, items, fresh
+        ),
+    )
+    sampler = RendererTickSampler(state, ports)
+    sampler.sample()
+    assert [(item.id, item.status) for item in published[-1]] == [
+        ("session-1", "running"), ("session-2", "tool"),
+    ]
+
+    # A later completion must also survive an older running result.
+    stale.status = "running"
+    stale.task_started_at = now
+    snapshot.task_completed_at = now + timedelta(seconds=1)
+    sampler.sample()
+    assert published[-1][0].status == "recent"
+
+
 def test_tick_sampler_reduces_changed_update_and_budget_events() -> None:
     bus = RuntimeEventBus(clock=lambda: 20.0)
     state = RendererLoopState(

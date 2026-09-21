@@ -655,6 +655,20 @@ def _clear_terminal_item_task_for_new_segment(
     return False
 
 
+def _latest_work_activity_at(snapshot: ParsedSession, *, now: datetime) -> datetime:
+    # token 记账可能落后于继续输入；超时和气泡新鲜度必须使用最新活动时间。
+    candidates = (
+        snapshot.request.updated_at,
+        snapshot.activity.timestamp,
+        snapshot.last_event_time,
+    )
+    return min(
+        (value for value in candidates if value is not None),
+        key=lambda value: _datetime_age_seconds(value, now),
+        default=snapshot.refreshed_at,
+    )
+
+
 def _work_item_model_startup_timed_out(
     snapshot: ParsedSession,
     *,
@@ -685,12 +699,7 @@ def _work_item_model_startup_timed_out(
         draft_updated_at
         if _is_renderer_provisional_selection(snapshot) and draft_updated_at is not None
         else None
-    ) or (
-        snapshot.request.updated_at
-        or snapshot.activity.timestamp
-        or snapshot.last_event_time
-        or snapshot.refreshed_at
-    )
+    ) or _latest_work_activity_at(snapshot, now=now)
     return bool(
         updated_at is not None
         and _datetime_age_seconds(updated_at, now)
@@ -743,12 +752,7 @@ def _work_item_from_snapshot(
         draft_updated_at
         if _is_renderer_provisional_selection(snapshot) and draft_updated_at is not None
         else None
-    ) or (
-        snapshot.request.updated_at
-        or snapshot.activity.timestamp
-        or snapshot.last_event_time
-        or snapshot.refreshed_at
-    )
+    ) or _latest_work_activity_at(snapshot, now=current_time)
     if updated_at is not None:
         current_for_age = (
             current_time.astimezone(updated_at.tzinfo)
@@ -955,10 +959,11 @@ def _refresh_visible_current_work_item(
             updated = list(items)
             updated[provisional_index] = refreshed
             return updated
-        if refreshed is not None and refreshed.status == "recent":
+        if refreshed is not None:
             # The inherited terminal may already have removed the current item.
             # Replace it directly when a later real completion arrives, rather
             # than clearing the tombstone and allowing the old cache to return.
+            # 当前会话也可能首次出现在快速刷新中，必须立即补建进行态气泡。
             _work_overlay_terminal_item_tasks(context).pop(session_id, None)
             _terminal_completion_prompts(context).pop(session_id, None)
             return [*items, refreshed]

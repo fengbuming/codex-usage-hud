@@ -7741,7 +7741,7 @@ with tempfile.TemporaryDirectory() as temp_dir:
             [],
         )
 
-    def test_work_overlay_does_not_complete_task_started_before_runtime(self) -> None:
+    def test_work_overlay_completes_observed_task_started_before_runtime(self) -> None:
         now = datetime.now().astimezone()
         runtime_started_at = now - timedelta(seconds=10)
         task_started_at = runtime_started_at - timedelta(seconds=1)
@@ -7766,7 +7766,8 @@ with tempfile.TemporaryDirectory() as temp_dir:
         completed_items = active_work_items_for_snapshot(context, completed, None)
 
         self.assertEqual(running_items[0].status, "running")
-        self.assertEqual(completed_items, [])
+        self.assertEqual(len(completed_items), 1)
+        self.assertEqual(completed_items[0].status, "recent")
 
     def test_work_overlay_completed_transition_requires_runtime_active_state(self) -> None:
         now = datetime.now().astimezone()

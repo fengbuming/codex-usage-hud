@@ -488,8 +488,9 @@ def _activity_from_record(record: Mapping[str, Any]) -> "Activity | None":
     payload_type = payload.get("type")
     timestamp = record.get("_dt")
 
-    if record_type == "event_msg" and payload_type == "user_message":
-        return Activity("user", compact_text(payload.get("message"), 160), timestamp)
+    user_text = _user_message_text(record)
+    if user_text:
+        return Activity("user", compact_text(user_text, 160), timestamp)
     if record_type == "event_msg" and payload_type == "agent_message":
         return Activity("agent", compact_text(payload.get("message"), 160), timestamp)
     if record_type == "response_item" and payload_type in {
@@ -561,6 +562,24 @@ def is_turn_aborted_message(payload: Mapping[str, Any]) -> bool:
         return False
     text = " ".join(message_text(payload).split()).lower()
     return text.startswith("<turn_aborted>") or "<turn_aborted>" in text
+
+
+def _user_message_text(record: Mapping[str, Any]) -> str:
+    """Read user input from both Codex rollout formats."""
+    payload = record.get("payload") or {}
+    if not isinstance(payload, Mapping):
+        return ""
+    if record.get("type") == "event_msg" and payload.get("type") == "user_message":
+        return str(payload.get("message") or "").strip()
+    # 新版继续输入只有 response_item；中止标记是合成消息，不能重开任务。
+    if (
+        record.get("type") == "response_item"
+        and payload.get("type") == "message"
+        and response_message_role(payload) == "user"
+        and not is_turn_aborted_message(payload)
+    ):
+        return message_text(payload).strip()
+    return ""
 
 
 def extract_log_field(body: str, name: str) -> str:
@@ -1558,30 +1577,20 @@ class JsonlSessionParser:
         start_index = 0 if task_started_index is None else task_started_index
 
         for record in reversed(records[start_index:]):
-            payload = record.get("payload") or {}
-            if (
-                record.get("type") == "event_msg"
-                and isinstance(payload, Mapping)
-                and payload.get("type") == "user_message"
-            ):
-                text = compact_text(payload.get("message"), 260)
-                if text:
-                    return text
+            text = compact_text(_user_message_text(record), 260)
+            if text:
+                return text
 
         if task_started_index is None:
             return ""
 
         for record in reversed(records[:task_started_index]):
+            text = compact_text(_user_message_text(record), 260)
+            if text:
+                return text
             payload = record.get("payload") or {}
             if not isinstance(payload, Mapping):
                 continue
-            if (
-                record.get("type") == "event_msg"
-                and payload.get("type") == "user_message"
-            ):
-                text = compact_text(payload.get("message"), 260)
-                if text:
-                    return text
             if record.get("type") == "event_msg" and payload.get("type") in {
                 "task_complete",
                 "turn_aborted",
@@ -1945,13 +1954,11 @@ class JsonlSessionParser:
             payload = record.get("payload") or {}
             if record.get("type") == "compacted":
                 return index + 1
+            if _user_message_text(record):
+                return index + 1
             if record.get("type") == "event_msg" and isinstance(payload, Mapping):
                 payload_type = payload.get("type")
                 if payload_type == "context_compacted":
-                    return index + 1
-                if payload_type == "user_message" and compact_text(
-                    payload.get("message"), 8
-                ):
                     return index + 1
         return task_start
 
@@ -3052,6 +3059,9 @@ class JsonlSessionParser:
             ):
                 task_active = True
                 latest_task_start_index = len(active_after_record)
+            # 继续可能沿用 turn_id 且没有 task_started；收到真实输入即恢复等待态。
+            if _user_message_text(record):
+                task_active = True
             is_task_terminal = (
                 record.get("type") == "event_msg"
                 and isinstance(payload, Mapping)

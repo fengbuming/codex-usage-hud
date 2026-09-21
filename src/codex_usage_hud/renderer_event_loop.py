@@ -128,6 +128,9 @@ class RendererTickSamplerPorts:
     event_bus: object | None
     path_key: Callable[[Path | None], str]
     background_response_pending: Callable[[dict[str, object]], bool]
+    refresh_current_work: Callable[[list[object], ParsedSession], list[object]] = (
+        lambda items, snapshot: items
+    )
 
 
 class RendererTickSampler:
@@ -260,7 +263,11 @@ class RendererTickSampler:
             and result_seq == current_seq
             and result_seq == latest_seq
         ):
-            stable_items = self.ports.stabilize_active_work(result_items)
+            # 同一会话的 selection_seq 不随继续输入递增；后台旧快照不能覆盖当前进度。
+            current_items = self.ports.refresh_current_work(
+                list(result_items), self.state.latest_snapshot
+            )
+            stable_items = self.ports.stabilize_active_work(current_items)
             self.state.latest_snapshot.active_work_items = list(stable_items)
             self.ports.publish_active_work(stable_items)
             return
