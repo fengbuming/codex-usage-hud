@@ -113,8 +113,16 @@ def parse_openai_models_html(body: str | bytes) -> dict[str, OfficialPrice]:
         model_match = _MODEL.fullmatch(token)
         if not model_match or model_match.group(0) in records:
             continue
+        # An alias belongs to the preceding model card, not a new price row.
+        if index and parser.text[index - 1].casefold() in {"alias", "aliases"}:
+            continue
         segment = parser.text[index + 1:index + 100]
-        next_model = next((offset for offset, value in enumerate(segment) if _MODEL.fullmatch(value)), len(segment))
+        next_model = next(
+            (offset for offset, value in enumerate(segment)
+             if _MODEL.fullmatch(value)
+             and not (offset and segment[offset - 1].casefold() in {"alias", "aliases"})),
+            len(segment),
+        )
         segment = segment[:next_model]
         try:
             input_index = segment.index("Input price")

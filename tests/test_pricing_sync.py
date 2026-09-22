@@ -1,6 +1,7 @@
 from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import patch
+import pytest
 
 from codex_usage_hud.config import UserConfig
 from codex_usage_hud.pricing_sync import CODEX_MODEL_IDS, OfficialPrice, classify_price_changes, fetch_pricing_snapshot, merge_pricing_rows, parse_openai_models_html
@@ -66,6 +67,34 @@ def test_models_page_semantic_cards_are_parsed_without_tables():
     parsed = parse_openai_models_html(html)
     assert parsed["gpt-6-astra"].input == 10
     assert parsed["gpt-6-astra"].output == 50
+
+
+def test_models_card_alias_keeps_canonical_model_and_next_card_boundary():
+    html = (
+        "<div>Model ID</div><code>gpt-5.6-sol</code>"
+        "<div>Alias</div><code>gpt-5.6</code>"
+        "<div>Input price</div><span>$4 / Input MTok</span>"
+        "<div>Output price</div><span>$20 / Output MTok</span>"
+        "<div>Model ID</div><code>gpt-5.6-terra</code>"
+        "<div>Input price</div><span>$2 / Input MTok</span>"
+        "<div>Output price</div><span>$12 / Output MTok</span>"
+    )
+    prices = parse_openai_models_html(html)
+    assert set(prices) == {"gpt-5.6-sol", "gpt-5.6-terra"}
+    assert (prices["gpt-5.6-sol"].input, prices["gpt-5.6-sol"].output) == (4, 20)
+    assert (prices["gpt-5.6-terra"].input, prices["gpt-5.6-terra"].output) == (2, 12)
+    incomplete = html.replace("<div>Output price</div><span>$20 / Output MTok</span>", "")
+    assert "gpt-5.6-sol" not in parse_openai_models_html(incomplete)
+
+
+@pytest.mark.parametrize("source", ["Models", "Pricing"])
+def test_snapshot_requires_each_tracked_model_in_both_sources(source):
+    complete = {model: OfficialPrice(model=model, input=4, output=20) for model in CODEX_MODEL_IDS}
+    incomplete = dict(complete)
+    del incomplete["gpt-5.6-sol"]
+    with pytest.raises(ValueError, match=f"{source} page is missing Codex models: gpt-5.6-sol"):
+        validate_sources(incomplete if source == "Models" else complete,
+                         incomplete if source == "Pricing" else complete)
 
 
 def test_pricing_table_uses_short_context_columns_from_first_tier():
@@ -211,6 +240,8 @@ def test_snapshot_generation_rejects_disagreement_between_official_pages():
         "<div><span>gpt-6-astra</span><div>Input price</div><div>$10</div><div>Output price</div><div>$50</div>"
         "<span>gpt-5.6-terra</span><div>Input price</div><div>$2</div><div>Output price</div><div>$12</div></div>"
     )
+    for model in CODEX_MODEL_IDS - models.keys():
+        models[model] = OfficialPrice(model=model, input=4, output=20)
     pricing = dict(models)
     validate_sources(models, pricing)
     changed = dict(pricing)

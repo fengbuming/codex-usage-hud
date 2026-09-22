@@ -31,6 +31,10 @@ def fetch(url: str) -> bytes:
 
 
 def validate_sources(models: dict[str, object], pricing: dict[str, object]) -> None:
+    for source, rows in (("Models", models), ("Pricing", pricing)):
+        missing = sorted(CODEX_MODEL_IDS - rows.keys())
+        if missing:
+            raise ValueError(f"official {source} page is missing Codex models: " + ", ".join(missing))
     common = sorted(set(models) & set(pricing))
     if len(common) < 2:
         raise ValueError("official pricing sources have insufficient model overlap")
