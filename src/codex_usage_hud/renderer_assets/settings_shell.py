@@ -4988,9 +4988,12 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
         const previous = sessionTransferState.data && typeof sessionTransferState.data === "object"
           ? sessionTransferState.data
           : {};
+        const previousRevision = String(previous?.revision || "").trim();
+        const previousOperationSignature = JSON.stringify(sessionTransferOperation() || {});
         const data = Array.isArray(incoming.sessions) || !Array.isArray(previous.sessions)
           ? incoming
           : { ...previous, ...incoming, sessions: previous.sessions };
+        const revisionChanged = String(data?.revision || "").trim() !== previousRevision;
         sessionTransferState.data = data;
         const operation = data?.operation && typeof data.operation === "object" ? data.operation : {};
         const action = String(operation?.action || "").toLowerCase();
@@ -5046,9 +5049,14 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
         }
         if (!sessionTransferState.open) return;
         const layer = sessionTransferDialogLayer();
-        // Progress notifications update only the progress surface. Rebuild the
-        // list when the operation enters or leaves its active state.
-        if (layer && !terminal) {
+        const operationChanged = JSON.stringify(sessionTransferOperation() || {}) !== previousOperationSignature;
+        // Keep native controls mounted while repeated status payloads arrive.
+        // Replacing the dialog DOM closes an open Provider <select>; the
+        // control sync below can update progress/result state in place and
+        // already rebuilds when the list enters or leaves progress mode. A
+        // newly terminal operation still gets one rebuild because it can
+        // change row eligibility without changing the inventory revision.
+        if (layer && !revisionChanged && !(terminal && operationChanged)) {
           syncSessionTransferDialogControls(data);
         } else {
           renderSessionTransferDialog(data);

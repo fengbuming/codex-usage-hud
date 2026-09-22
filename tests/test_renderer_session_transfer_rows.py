@@ -70,7 +70,13 @@ function makeNode(extra = {}) {
 const root = makeNode();
 const modal = makeNode();
 const editor = makeNode();
+let transferLayerHtmlWrites = 0;
 const transferLayer = makeNode();
+Object.defineProperty(transferLayer, "innerHTML", {
+  configurable: true,
+  get: () => "",
+  set: () => { transferLayerHtmlWrites += 1; },
+});
 
 global.window = {};
 global.document = {
@@ -369,6 +375,50 @@ assert.equal(submittedCommands.length, 1,
   "陈旧清单必须重新扫描：切换会话后 status/selectable 会变，旧快照会让行一直灰着");
 assert.equal(submittedCommands[0].action, "sessionCleanupScan",
   "重新扫描要发出会话清单扫描命令");
+
+// ---- 重复 payload：不得替换目标 Provider 下拉框所在的 DOM --------------
+const terminal = makePayload();
+terminal.sessionCleanup.operation = {
+  action: "sessionTransfer",
+  state: "completed",
+  requestId: "transfer-1",
+  sourceProvider: SOURCE_PROVIDER,
+  targetProvider: TARGET_PROVIDER,
+};
+payload = terminal;
+sessionCleanupState.data = terminal.sessionCleanup;
+sessionTransferState.data = terminal.sessionCleanup;
+sessionTransferState.operation = terminal.sessionCleanup.operation;
+sessionTransferState.open = true;
+sessionTransferState.sourceProvider = SOURCE_PROVIDER;
+sessionTransferState.targetProvider = TARGET_PROVIDER;
+transferLayerHtmlWrites = 0;
+
+settingsShellDomain.applySessionTransferPayload(terminal);
+settingsShellDomain.applySessionTransferPayload(terminal);
+assert.equal(transferLayerHtmlWrites, 0,
+  "相同 revision 的终态 payload 不得重建对话框，否则打开的 Provider 下拉框会被收起");
+
+const nextTerminal = makePayload();
+nextTerminal.sessionCleanup.operation = {
+  ...terminal.sessionCleanup.operation,
+  requestId: "transfer-2",
+  state: "failed",
+};
+settingsShellDomain.applySessionTransferPayload(nextTerminal);
+settingsShellDomain.applySessionTransferPayload(nextTerminal);
+assert.equal(transferLayerHtmlWrites, 1,
+  "新的终态 operation 必须重建一次以更新结果和行状态，但重复下发不得再次重建");
+
+transferLayerHtmlWrites = 0;
+const refreshed = makePayload();
+refreshed.sessionCleanup.revision = "rev-2";
+settingsShellDomain.applySessionTransferPayload(refreshed);
+assert.equal(transferLayerHtmlWrites, 1,
+  "会话清单 revision 变化时仍须重建列表");
+settingsShellDomain.applySessionTransferPayload(refreshed);
+assert.equal(transferLayerHtmlWrites, 1,
+  "同一份新清单重复下发时不得再次重建对话框");
 
 console.log("session transfer row eligibility ok");
 """
