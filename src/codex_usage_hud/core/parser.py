@@ -984,6 +984,7 @@ class ParsedSession:
     model_provider: str = "unknown"
     profile_name: str = ""
     originator: str = ""
+    session_source: str = ""
     client_kind: str = "unknown"
     thread_source: str = ""
     parent_thread_id: str = ""
@@ -1394,8 +1395,12 @@ class JsonlSessionParser:
         parsed.model_provider = self.session_model_provider(records)
         parsed.profile_name = self.session_profile_name(records)
         parsed.originator = self.session_originator(records)
+        raw_session_source = self.session_source(records)
+        parsed.session_source = (
+            raw_session_source.strip() if isinstance(raw_session_source, str) else ""
+        )
         parsed.client_kind = classify_session_client(
-            parsed.originator, self.session_source(records)
+            parsed.originator, raw_session_source
         )
         (
             parsed.thread_source,

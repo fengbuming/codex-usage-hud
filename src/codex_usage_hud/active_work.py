@@ -459,8 +459,20 @@ def is_independent_desktop_delegation(snapshot: ParsedSession | object) -> bool:
     return True
 
 
+def is_internal_exec_session(snapshot: ParsedSession | object) -> bool:
+    """True for hidden Desktop threads created to execute an internal request."""
+    return (
+        str(getattr(snapshot, "client_kind", "") or "").strip().lower() == "app"
+        and str(getattr(snapshot, "session_source", "") or "").strip().lower()
+        == "exec"
+    )
+
+
 def _hide_from_work_overlay(snapshot: ParsedSession | object) -> bool:
-    return is_subagent_session(snapshot) and not is_independent_desktop_delegation(snapshot)
+    return is_internal_exec_session(snapshot) or (
+        is_subagent_session(snapshot)
+        and not is_independent_desktop_delegation(snapshot)
+    )
 
 
 def _work_status_from_snapshot(
@@ -1078,6 +1090,7 @@ def active_work_items_for_snapshot(
     current_key = _session_path_key(session_path)
     # Internal collaboration agents stay folded into their parent. Desktop can
     # promote a delegation to an independent visible thread; those do bubble.
+    # Desktop source=exec threads are internal request executors and never bubble.
     if not _hide_from_work_overlay(snapshot):
         current_segment_released = _clear_terminal_item_task_for_new_segment(
             context,
@@ -1143,6 +1156,8 @@ def active_work_items_for_snapshot(
             )
         elif _work_item_model_startup_timed_out(snapshot, now=now) and snapshot.session_id:
             expired_startup_item_ids.add(str(snapshot.session_id))
+    elif snapshot.session_id:
+        visible_item_cache.pop(str(snapshot.session_id), None)
 
     if scan_candidates:
         for path in _recent_session_files(
@@ -1158,6 +1173,8 @@ def active_work_items_for_snapshot(
             except Exception:
                 continue
             if _hide_from_work_overlay(parsed):
+                if parsed.session_id:
+                    visible_item_cache.pop(str(parsed.session_id), None)
                 continue
             parsed_segment_released = _clear_terminal_item_task_for_new_segment(
                 context,

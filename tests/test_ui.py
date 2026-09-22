@@ -2768,6 +2768,150 @@ class BudgetHelperTests(unittest.TestCase):
         self.assertTrue(is_subagent_session(snapshot))
         self.assertFalse(is_independent_desktop_delegation(snapshot))
 
+    def test_active_work_items_hide_internal_exec_sessions_in_all_states(self) -> None:
+        parser = JsonlSessionParser()
+        now = datetime.now().astimezone()
+
+        def write_session(
+            path: Path,
+            session_id: str,
+            *,
+            source: str,
+            completed: bool,
+            offset: int,
+            originator: str = "Codex Desktop",
+        ) -> None:
+            timestamp = (now + timedelta(seconds=offset)).isoformat()
+            rows = [
+                {
+                    "timestamp": timestamp,
+                    "type": "session_meta",
+                    "payload": {
+                        "id": session_id,
+                        "cwd": "E:/Project/demo",
+                        "originator": originator,
+                        "source": source,
+                        "thread_source": "user",
+                    },
+                },
+                {
+                    "timestamp": timestamp,
+                    "type": "event_msg",
+                    "payload": {"type": "task_started"},
+                },
+                {
+                    "timestamp": timestamp,
+                    "type": "event_msg",
+                    "payload": {
+                        "type": "user_message",
+                        "message": f"work {session_id}",
+                    },
+                },
+            ]
+            if completed:
+                rows.append(
+                    {
+                        "timestamp": (now + timedelta(seconds=offset + 1)).isoformat(),
+                        "type": "event_msg",
+                        "payload": {"type": "task_complete"},
+                    }
+                )
+            else:
+                rows.append(
+                    {
+                        "timestamp": (now + timedelta(seconds=offset + 1)).isoformat(),
+                        "type": "event_msg",
+                        "payload": {"type": "agent_message", "message": "working"},
+                    }
+                )
+            path.write_text(
+                "\n".join(json.dumps(row) for row in rows) + "\n",
+                encoding="utf-8",
+            )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            current = root / "current.jsonl"
+            exec_running = root / "exec-running.jsonl"
+            exec_completed = root / "exec-completed.jsonl"
+            cli_exec = root / "cli-exec.jsonl"
+            write_session(
+                current,
+                "session-current",
+                source="vscode",
+                completed=False,
+                offset=-3,
+            )
+            write_session(
+                exec_running,
+                "session-exec-running",
+                source="exec",
+                completed=False,
+                offset=-2,
+            )
+            write_session(
+                exec_completed,
+                "session-exec-completed",
+                source="exec",
+                completed=True,
+                offset=-1,
+            )
+            write_session(
+                cli_exec,
+                "session-cli-exec",
+                source="exec",
+                completed=False,
+                offset=0,
+                originator="codex_exec",
+            )
+            snapshot = parser.parse_file(current)
+            context = SimpleNamespace(
+                sessions_root=root,
+                parser=parser,
+                active_session_tracker=None,
+            )
+
+            items = active_work_items_for_snapshot(context, snapshot, current)
+
+            self.assertEqual(
+                [item.id for item in items],
+                ["session-cli-exec", "session-current"],
+            )
+            self.assertEqual(parser.parse_file(exec_running).session_source, "exec")
+            self.assertEqual(parser.parse_file(exec_completed).session_source, "exec")
+
+            # Simulate a bubble cached by the old projection, then verify that
+            # the first source-aware refresh removes it from both output/cache.
+            legacy_snapshot = parser.parse_file(exec_running)
+            legacy_snapshot.session_source = ""
+            legacy_context = SimpleNamespace(
+                sessions_root=root,
+                parser=parser,
+                active_session_tracker=None,
+            )
+            legacy_items = active_work_items_for_snapshot(
+                legacy_context,
+                legacy_snapshot,
+                exec_running,
+                scan_candidates=False,
+            )
+            self.assertEqual(
+                [item.id for item in legacy_items],
+                ["session-exec-running"],
+            )
+
+            refreshed_items = active_work_items_for_snapshot(
+                legacy_context,
+                parser.parse_file(exec_running),
+                exec_running,
+                scan_candidates=False,
+            )
+            self.assertEqual(refreshed_items, [])
+            self.assertNotIn(
+                "session-exec-running",
+                legacy_context._work_overlay_visible_item_cache,
+            )
+
     def test_active_work_items_follow_session_creation_order_desc(self) -> None:
         parser = JsonlSessionParser()
         now = datetime.now().astimezone()

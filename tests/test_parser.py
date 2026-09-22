@@ -356,6 +356,7 @@ class JsonlSessionParserTests(unittest.TestCase):
         self.assertEqual(snapshot.model_provider, "muyuan")
         self.assertEqual(snapshot.profile_name, "muyuan")
         self.assertEqual(snapshot.originator, "codex-tui")
+        self.assertEqual(snapshot.session_source, "cli")
         self.assertEqual(snapshot.client_kind, "cli")
 
     def test_session_meta_without_provider_uses_visible_unknown_channel(self) -> None:
