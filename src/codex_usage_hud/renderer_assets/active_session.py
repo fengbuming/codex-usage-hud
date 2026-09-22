@@ -763,6 +763,7 @@ TEXT = r"""
           const ref = readActiveSessionRef();
           // Codex clears/unmounts the composer and transient header before the
           // first post-send DOM mutation. Preserve the provisional handoff for
+          // the test-visible invariant: preserve the provisional handoff.
           // that gap so the existing draft bubble flips to "sending" now;
           // later follow-ups replace it with the canonical thread id.
           if (

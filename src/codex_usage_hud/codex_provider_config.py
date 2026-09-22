@@ -1009,15 +1009,38 @@ def clone_provider_with_bearer_key(
     base_url = _get_quoted_value(source_body, "base_url")
     if not base_url:
         raise ValueError(f"供应商「{requested}」缺少 base_url，无法克隆。")
-    wire_api = _get_quoted_value(source_body, "wire_api") or "responses"
-    new_body = newline.join(
-        (
-            f'name = "{_toml_string(f"{source_name}（副本）")}"',
-            f'base_url = "{_toml_string(base_url)}"',
-            f'wire_api = "{_toml_string(wire_api)}"',
-            f'experimental_bearer_token = "{_toml_string(key)}"',
-        )
+    # Keep every provider option that is not authentication material.  In
+    # particular, tenant headers/query parameters and stream timeouts are
+    # connection behaviour and must survive the clone.
+    auth_keys = {
+        "env_key",
+        "auth_key",
+        "api_key",
+        "experimental_bearer_token",
+        "requires_openai_auth",
+    }
+    retained_lines: list[str] = []
+    name_replaced = False
+    assignment_pattern = re.compile(
+        r"^(?P<indent>[\t ]*)(?P<key>[A-Za-z0-9_-]+)(?P<rest>[\t ]*=.*)$"
     )
+    for line in _normalize_body(source_body, newline).split(newline):
+        match = assignment_pattern.match(line)
+        if match is not None:
+            field = match.group("key").casefold()
+            if field in auth_keys:
+                continue
+            if field == "name":
+                retained_lines.append(
+                    f'{match.group("indent")}name = "{_toml_string(f"{source_name}（副本）")}"'
+                )
+                name_replaced = True
+                continue
+        retained_lines.append(line)
+    if not name_replaced:
+        retained_lines.insert(0, f'name = "{_toml_string(f"{source_name}（副本）")}"')
+    retained_lines.append(f'experimental_bearer_token = "{_toml_string(key)}"')
+    new_body = newline.join(retained_lines).strip(newline)
     candidate_text = _add_provider_section_text(original_text, new_id, new_body)
     # 顶层 model_provider 切到新供应商（复用 set_default_codex_provider 的 head/tail 改写）。
     first_table = re.search(

@@ -45,6 +45,9 @@ DEFAULT_RENDERER_TIMEOUT_SECONDS = 0.45
 DEFAULT_RENDERER_TARGET_CACHE_SECONDS = 2.0
 SLOW_RENDERER_UPDATE_LOG_MS = 250.0
 RENDERER_STARTUP_RETRY_INTERVAL_SECONDS = 0.5
+WARMUP_ACK_TARGET = 3
+WARMUP_MAX_PROBES = 6
+WARMUP_MAX_SECONDS = 8.0
 ACTIVE_SESSION_BINDING_NAME = "codexUsageHudActiveSession"
 SETTINGS_COMMAND_BINDING_NAME = "codexUsageHudSettingsCommand"
 COMPOSER_ATTACHMENTS_BINDING_NAME = "codexUsageHudComposerAttachments"
@@ -129,8 +132,11 @@ class RendererHudClient:
         self._active_session_binding: _RendererBinding | None = None
         self._active_session_callback: Any = None
         self._settings_command_binding: _RendererBinding | None = None
+        self._settings_command_callback: Any = None
         self._attachments_binding: _RendererBinding | None = None
+        self._attachments_callback: Any = None
         self._layout_binding: _RendererBinding | None = None
+        self._layout_callback: Any = None
         self._theme_binding: _RendererBinding | None = None
         self._theme_callback: Any = None
         self._theme_bootstrap_target_id = ""
@@ -149,9 +155,11 @@ class RendererHudClient:
         self._quiesced = False
         # --- renderer white-screen cure state (2026-09-17) ---
         # Unlock warmup gate: after resume only 1+1 probes run until the
-        # renderer acks three probes <100ms; no payload is pushed meanwhile.
+        # renderer acks three probes <100ms or the bounded recovery fires.
         self._warming = False
         self._warmup_acks = 0
+        self._warmup_probes = 0
+        self._warmup_started_at = 0.0
         # Degraded state: on a hung renderer the HUD removes its injection
         # and probes at a low cadence so Codex self-heals. Never restarts
         # Codex from this path.
@@ -199,6 +207,8 @@ class RendererHudClient:
         self._clear_target_cache(clear_script=False)
         self._warming = False
         self._warmup_acks = 0
+        self._warmup_probes = 0
+        self._warmup_started_at = 0.0
 
     def resume(self) -> None:
         """Re-enable CDP activity after unlock/wake through the warmup gate.
@@ -207,11 +217,14 @@ class RendererHudClient:
         target cache are retained: the first post-unlock update must not
         reinstall the whole ~1.3MB HUD bundle while the renderer is thawing.
         Instead, updates become probe-only until the renderer acknowledges
-        three consecutive 1+1 probes under 100ms.
+        three consecutive 1+1 probes under 100ms.  Slow but responsive
+        renderers leave this gate through the bounded recovery path.
         """
         self._quiesced = False
         self._warming = True
         self._warmup_acks = 0
+        self._warmup_probes = 0
+        self._warmup_started_at = time.monotonic()
         self._split_next_full = True
 
     def _probe_renderer_alive(self, *, timeout_seconds: float) -> tuple[bool, float]:
@@ -254,12 +267,13 @@ class RendererHudClient:
             return False, (time.perf_counter() - started) * 1000.0
 
     def _warmup_tick(self) -> bool:
-        """Unlock warmup gate: probe-only until the renderer is responsive.
+        """Unlock warmup gate: probe-only until responsive or bounded recovery.
 
         Returns True (successful no-op) so the event loop never counts a
         warmup probe as a payload failure.
         """
         ok, probe_ms = self._probe_renderer_alive(timeout_seconds=2.0)
+        self._warmup_probes += 1
         if ok and probe_ms < 100.0:
             self._warmup_acks += 1
         else:
@@ -269,13 +283,25 @@ class RendererHudClient:
             "rendererAliveProbe": "warmup-alive" if ok else "warmup-pending",
             "rendererAliveProbeMs": probe_ms,
             "warmupAcks": self._warmup_acks,
+            "warmupProbes": self._warmup_probes,
             "payloadBytes": 0,
             "payloadDomains": [],
         }
-        if self._warmup_acks >= 3:
+        if self._warmup_acks >= WARMUP_ACK_TARGET:
             self._warming = False
             self._split_next_full = True
             self.last_update_metrics["rendererAliveProbe"] = "warmup-complete"
+        elif (
+            self._warmup_probes >= WARMUP_MAX_PROBES
+            or time.monotonic() - self._warmup_started_at >= WARMUP_MAX_SECONDS
+        ):
+            # Do not strand the HUD behind a strict latency gate.  A renderer
+            # that responds consistently but takes >100ms is usable; force a
+            # clean reinstall on the next update so payload delivery resumes.
+            self._warming = False
+            self._split_next_full = True
+            self._clear_target_cache(clear_script=True)
+            self.last_update_metrics["rendererAliveProbe"] = "warmup-timeout-recover"
         return True
 
     def degrade(self, reason: str = "") -> None:
@@ -289,7 +315,9 @@ class RendererHudClient:
         self._degraded_at = time.monotonic()
         self._last_degrade_probe_at = 0.0
         self._warming = False
-        self.close(remove_from_page=True)
+        # Remove the page injection and stop sockets, but retain callback
+        # ownership so recovery can recreate every event channel.
+        self.close(remove_from_page=True, preserve_callbacks=True)
 
     def _degraded_tick(self) -> bool:
         """Low-cadence probe while degraded; self-heal back to normal on ack."""
@@ -308,6 +336,7 @@ class RendererHudClient:
         if ok:
             self._degraded = False
             self._degraded_reason = ""
+            self._rebuild_bindings()
             # The HUD script was removed on degrade; force a clean reinstall.
             self._clear_target_cache(clear_script=True)
             self.last_update_metrics["rendererAliveProbe"] = "degraded-recovered"
@@ -403,10 +432,11 @@ class RendererHudClient:
         if self._settings_command_binding is not None:
             self._settings_command_binding.close()
             self._settings_command_binding = None
-        if callable(callback):
+        self._settings_command_callback = callback if callable(callback) else None
+        if callable(self._settings_command_callback):
             self._settings_command_binding = _RendererBinding(
                 SETTINGS_COMMAND_BINDING_NAME,
-                callback,
+                self._settings_command_callback,
                 timeout_seconds=self.timeout_seconds,
             )
             # A renderer reinjection can close the CDP listener without
@@ -424,10 +454,11 @@ class RendererHudClient:
         if self._attachments_binding is not None:
             self._attachments_binding.close()
             self._attachments_binding = None
-        if callable(callback):
+        self._attachments_callback = callback if callable(callback) else None
+        if callable(self._attachments_callback):
             self._attachments_binding = _RendererBinding(
                 COMPOSER_ATTACHMENTS_BINDING_NAME,
-                callback,
+                self._attachments_callback,
                 timeout_seconds=self.timeout_seconds,
             )
 
@@ -441,10 +472,11 @@ class RendererHudClient:
         if self._layout_binding is not None:
             self._layout_binding.close()
             self._layout_binding = None
-        if callable(callback):
+        self._layout_callback = callback if callable(callback) else None
+        if callable(self._layout_callback):
             self._layout_binding = _RendererBinding(
                 LAYOUT_BINDING_NAME,
-                callback,
+                self._layout_callback,
                 timeout_seconds=self.timeout_seconds,
             )
 
@@ -461,6 +493,14 @@ class RendererHudClient:
                 self._handle_theme_binding_payload,
                 timeout_seconds=self.timeout_seconds,
             )
+
+    def _rebuild_bindings(self) -> None:
+        """Recreate event channels after a degraded full close."""
+        self.set_active_session_callback(self._active_session_callback)
+        self.set_settings_command_callback(self._settings_command_callback)
+        self.set_attachments_callback(self._attachments_callback)
+        self.set_layout_callback(self._layout_callback)
+        self.set_theme_callback(self._theme_callback)
 
     def _handle_theme_binding_payload(self, payload: dict[str, object]) -> None:
         callback = self._theme_callback
@@ -1259,7 +1299,12 @@ class RendererHudClient:
             self.last_error = f"{type(exc).__name__}: {exc}"
             return False
 
-    def close(self, *, remove_from_page: bool = True) -> None:
+    def close(
+        self,
+        *,
+        remove_from_page: bool = True,
+        preserve_callbacks: bool = False,
+    ) -> None:
         """Release local sockets and best-effort remove the HUD from the page.
 
         ``remove_from_page=False`` skips the CDP round-trips that uninstall the
@@ -1271,7 +1316,8 @@ class RendererHudClient:
         if self._active_session_binding is not None:
             self._active_session_binding.close()
             self._active_session_binding = None
-        self._active_session_callback = None
+        if not preserve_callbacks:
+            self._active_session_callback = None
         if self._settings_command_binding is not None:
             self._settings_command_binding.close()
             self._settings_command_binding = None
@@ -1284,7 +1330,11 @@ class RendererHudClient:
         if self._theme_binding is not None:
             self._theme_binding.close()
             self._theme_binding = None
-        self._theme_callback = None
+        if not preserve_callbacks:
+            self._settings_command_callback = None
+            self._attachments_callback = None
+            self._layout_callback = None
+            self._theme_callback = None
         self._theme_bootstrap_target_id = ""
         if not self.enabled:
             return

@@ -149,3 +149,33 @@ def test_client_update_and_probe_short_circuit_before_cdp_when_quiesced() -> Non
     assert client.update_payload({"k": "v"}) is False
     assert client.probe_connection() is False
     client.resume()
+
+
+def test_resume_warmup_has_bounded_recovery_for_slow_healthy_renderer(monkeypatch) -> None:
+    client = renderer_client.RendererHudClient(enabled=True)
+    client.resume()
+    probes = 0
+
+    def slow_probe(*, timeout_seconds: float) -> tuple[bool, float]:
+        del timeout_seconds
+        nonlocal probes
+        probes += 1
+        return True, 120.0
+
+    monkeypatch.setattr(client, "_probe_renderer_alive", slow_probe)
+    for _ in range(renderer_client.WARMUP_MAX_PROBES):
+        assert client.update_payload({"topLine": "still current"})
+
+    assert probes == renderer_client.WARMUP_MAX_PROBES
+    assert not client._warming  # noqa: SLF001
+    assert client.last_update_metrics["rendererAliveProbe"] == "warmup-timeout-recover"
+    assert client._script_identifier == ""  # noqa: SLF001
+
+    applied: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        client,
+        "_update_payload_once",
+        lambda payload, *, startup_retry: applied.append(payload) or True,
+    )
+    assert client.update_payload({"topLine": "after recovery"})
+    assert applied == [{"topLine": "after recovery"}]

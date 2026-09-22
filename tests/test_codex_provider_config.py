@@ -1415,6 +1415,37 @@ class SendCliChatProbeTests(unittest.TestCase):
 
 
 class CloneProviderWithBearerKeyTests(unittest.TestCase):
+    def test_clone_preserves_non_auth_connection_options(self) -> None:
+        config_text = (
+            'model_provider = "custom"\n\n'
+            "[model_providers.custom]\n"
+            'name = "Tenant API"\n'
+            'base_url = "https://gateway.example/v1"\n'
+            'wire_api = "responses"\n'
+            'http_headers = { "X-Tenant" = "acme" }\n'
+            'query_params = { "api-version" = "2025-04-01" }\n'
+            'stream_idle_timeout_ms = 45000\n'
+            'env_key = "TENANT_API_KEY"\n'
+            'requires_openai_auth = true\n'
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "config.toml"
+            path.write_text(config_text, encoding="utf-8")
+            clone_provider_with_bearer_key(
+                "custom", "sk-clone-key-789", config_path=path
+            )
+            updated = path.read_text(encoding="utf-8")
+
+        copy_section = updated.split("[model_providers.custom-copy]", 1)[1]
+        self.assertIn('http_headers = { "X-Tenant" = "acme" }', copy_section)
+        self.assertIn(
+            'query_params = { "api-version" = "2025-04-01" }', copy_section
+        )
+        self.assertIn("stream_idle_timeout_ms = 45000", copy_section)
+        self.assertIn('experimental_bearer_token = "sk-clone-key-789"', copy_section)
+        self.assertNotIn('env_key = "TENANT_API_KEY"', copy_section)
+        self.assertNotIn("requires_openai_auth", copy_section)
+
     def test_clone_creates_new_section_and_switches_default(self) -> None:
         config_text = (
             'model_provider = "custom"\n\n'

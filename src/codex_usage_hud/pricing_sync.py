@@ -225,7 +225,8 @@ def fetch_pricing_snapshot(
         }
         if prices:
             return prices, {"snapshot_url": str(bundled), "checked_at": str(payload.get("checked_at") or ""),
-                            "sources": list(payload.get("sources") or []), "source_hash": source_hash(body), "bundled": True}
+                            "sources": list(payload.get("sources") or []), "source_hash": source_hash(body),
+                            "bundled": True, "download_error": "; ".join(errors)[:1000]}
     except (OSError, ValueError, KeyError, json.JSONDecodeError) as exc:
         errors.append(f"{bundled}: {exc}")
     raise ValueError("unable to fetch pricing snapshot: " + "; ".join(errors))

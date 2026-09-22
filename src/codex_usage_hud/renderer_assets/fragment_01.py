@@ -264,6 +264,7 @@ searchDraft: String(_sessionCleanupFilterSnapshot.search || ""),
       resumeSessionId: "",
       resumeState: "",
       resumeMessage: "",
+      providerForkTask: null,
       page: 0,
     };
   sessionTransferState.open = sessionTransferState.open === true;
@@ -281,6 +282,9 @@ searchDraft: String(_sessionCleanupFilterSnapshot.search || ""),
   sessionTransferState.startedAt = Math.max(0, Number(sessionTransferState.startedAt || 0));
   sessionTransferState.cancelledRequestId = String(sessionTransferState.cancelledRequestId || "");
   sessionTransferState.page = Math.max(0, Number(sessionTransferState.page || 0));
+  if (!sessionTransferState.providerForkTask || typeof sessionTransferState.providerForkTask !== "object") {
+    sessionTransferState.providerForkTask = null;
+  }
   window[sessionTransferStateName] = sessionTransferState;
   let backgroundUsageFetchSeq = 0;
   let backgroundUsageDetailSeq = 0;

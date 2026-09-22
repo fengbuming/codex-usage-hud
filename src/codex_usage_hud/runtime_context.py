@@ -239,12 +239,15 @@ def _initialize_runtime_context_resources(context: RuntimeContext) -> None:
                 current = context.settings_store.load(); sync = dict(current.pricing_sync)
                 metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
                 checked_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-                sync.update({"last_checked_at": checked_at, "snapshot_checked_at": str(metadata.get("checked_at") or ""), "last_result": "success" if payload.get("ok") else "error", "last_error": str(payload.get("error") or "")[:500]})
+                used_fallback = bool(metadata.get("bundled"))
+                sync.update({"last_checked_at": checked_at, "snapshot_checked_at": str(metadata.get("checked_at") or ""), "last_result": "fallback" if used_fallback else ("success" if payload.get("ok") else "error"), "last_error": str(metadata.get("download_error") or payload.get("error") or "")[:500]})
                 if payload.get("ok"):
                     change_count = payload.get("changeCount")
                     if not isinstance(change_count, int):
                         change_count = len(payload.get("changes") or [])
-                    sync.update({"last_success_at": sync["last_checked_at"], "scope_provider": context.app_provider, "source_hash": str(metadata.get("source_hash") or ""), "pending_changes": list(payload.get("changes") or []), "pending_prices": list(payload.get("prices") or []), "unread_change_count": change_count})
+                    if not used_fallback:
+                        sync["last_success_at"] = sync["last_checked_at"]
+                    sync.update({"scope_provider": context.app_provider, "source_hash": str(metadata.get("source_hash") or ""), "pending_changes": list(payload.get("changes") or []), "pending_prices": list(payload.get("prices") or []), "unread_change_count": change_count})
                 context.settings_store.save(replace(current, pricing_sync=sync)); context.user_config = replace(current, pricing_sync=sync)
             except Exception:
                 _LOGGER.exception("pricing_sync_status_persist_failed")

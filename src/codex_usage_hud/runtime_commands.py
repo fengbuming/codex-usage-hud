@@ -1648,6 +1648,8 @@ def handle_general_command(
                 ),
             )
             checked_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+            used_fallback = bool(metadata.get("bundled"))
+            download_error = str(metadata.get("download_error") or "").strip()
             preview_payload = preview.to_dict()
             official_rows = [
                 {**row, "officialMissing": False}
@@ -1666,9 +1668,9 @@ def handle_general_command(
             sync.update(
                 {
                     "last_checked_at": checked_at,
-                    "last_success_at": checked_at,
-                    "last_result": "success",
-                    "last_error": "",
+                    "last_success_at": "" if used_fallback else checked_at,
+                    "last_result": "fallback" if used_fallback else "success",
+                    "last_error": download_error if used_fallback else "",
                     "snapshot_checked_at": str(metadata.get("checked_at") or ""),
                     "scope_provider": provider,
                     "source_hash": str(metadata.get("source_hash") or ""),

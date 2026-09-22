@@ -6,6 +6,7 @@ from datetime import datetime
 import json
 from pathlib import Path
 import queue
+import re
 import sys
 import socket
 import threading
@@ -2042,8 +2043,21 @@ class RendererHudPayloadTests(unittest.TestCase):
         self.assertIn('activeSessionScope.listen(document, "submit", submit, true)', script)
         self.assertIn('activeSessionScope.listen(document, "keydown", keydown, true)', script)
         self.assertIn("keepFollowup = report();", script)
-        self.assertIn("ref.newSession = true;", script)
-        self.assertIn("preserve the provisional handoff", script)
+        self.assertRegex(
+            script,
+            re.compile(
+                r"if \(\s*\n"
+                r"\s*/\^\(composer-send\|composer-send-click\|composer-enter\|composer-submit\)\$\/i\.test\(\s*\n"
+                r"\s*String\(reason \|\| \"\"\),\s*\n"
+                r"\s*\)\s*\n"
+                r"\s*&& !ref\.sessionId\s*\n"
+                r"\s*&& !ref\.title\s*\n"
+                r"\s*&& !ref\.newSession\s*\n"
+                r"\s*&& !ref\.pendingSession\s*\n"
+                r"\s*\)\s*\{\s*\n"
+                r"\s*ref\.newSession = true;",
+            ),
+        )
         self.assertIn("const delays = keepFollowup", script)
         self.assertIn(
             "? [32, 120, 320, 800, 1600, 3200, 5600, 9000]",
@@ -3315,6 +3329,39 @@ class RendererHudPayloadTests(unittest.TestCase):
 
 
 class RendererHudClientTests(unittest.TestCase):
+    def test_degrade_recovery_rebuilds_all_event_bindings(self) -> None:
+        client = RendererHudClient(enabled=False)
+        callbacks = {
+            "active": lambda _payload: None,
+            "settings": lambda _payload: None,
+            "attachments": lambda _payload: None,
+            "layout": lambda _payload: None,
+            "theme": lambda _payload: None,
+        }
+        client.set_active_session_callback(callbacks["active"])
+        client.set_settings_command_callback(callbacks["settings"])
+        client.set_attachments_callback(callbacks["attachments"])
+        client.set_layout_callback(callbacks["layout"])
+        client.set_theme_callback(callbacks["theme"])
+
+        client.degrade("renderer stalled")
+        self.assertIsNone(client._active_session_binding)
+        self.assertIsNone(client._settings_command_binding)
+        self.assertIsNone(client._attachments_binding)
+        self.assertIsNone(client._layout_binding)
+        self.assertIsNone(client._theme_binding)
+
+        client._last_degrade_probe_at = -100.0
+        client._probe_renderer_alive = MagicMock(return_value=(True, 1.0))  # type: ignore[method-assign]
+        self.assertTrue(client._degraded_tick())
+        self.assertFalse(client._degraded)
+        self.assertIsNotNone(client._active_session_binding)
+        self.assertIsNotNone(client._settings_command_binding)
+        self.assertIsNotNone(client._attachments_binding)
+        self.assertIsNotNone(client._layout_binding)
+        self.assertIsNotNone(client._theme_binding)
+        client.close()
+
     def test_wait_for_renderer_reports_startup_progress_stages(self) -> None:
         client = RendererHudClient(enabled=False)
         observed_stages: list[str] = []

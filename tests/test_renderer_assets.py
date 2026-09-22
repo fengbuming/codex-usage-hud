@@ -365,6 +365,20 @@ def test_session_transfer_reuses_session_management_scan_state_and_controls() ->
     assert "sessionCleanupScanWatchdogTimer" in script
 
 
+def test_slow_provider_copy_hands_off_shared_task_without_second_submit() -> None:
+    script = renderer_script._RENDERER_HUD_SCRIPT_TEMPLATE
+    assert "providerForkTask" in script
+    assert "if (sessionTransferState.providerForkTask?.active === true) return true;" in script
+    assert "两个界面共享同一复制任务" in script
+    # The timeout only changes the visible surface; the original fork request
+    # remains the sole operation until its completion callback updates both views.
+    migrate_start = script.index("function startCodexProviderMigrate()")
+    migrate_end = script.index("function bindCodexProviderMigrateDialogClicks()", migrate_start)
+    migrate = script[migrate_start:migrate_end]
+    assert migrate.count('codexBridgeRequest("thread/fork"') == 1
+    assert "openSessionTransferDialog(source, targetProvider);" in migrate
+
+
 def test_codex_cli_dialog_is_compact_and_persists_profile_scoped_launches() -> None:
     form_start = SETTINGS_SHELL.index("function codexCliFormHtml()")
     form_end = SETTINGS_SHELL.index("function renderCodexCliDialog()", form_start)

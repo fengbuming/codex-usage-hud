@@ -4112,6 +4112,8 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
           openPricingImportPreview(status.pricingPreview, status.pricingPayload, {
             official: action === "fetchPricesPreview",
             checkedAt: status.pricingCheckedAt || status.pricingSync?.last_success_at || "",
+            pricingSync: status.pricingSync,
+            pricingSource: status.pricingSource,
           });
         }
         if (
@@ -4364,6 +4366,7 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
       }
 
       function sessionTransferBusy(operation = sessionTransferOperation()) {
+        if (sessionTransferState.providerForkTask?.active === true) return true;
         const state = String(operation?.state || "").toLowerCase();
         const sharedScanRequestId = String(activeSessionCleanupScanRequestId() || "").trim();
         const cancelledRequestId = String(sessionTransferState.cancelledRequestId || "").trim();
@@ -4378,6 +4381,20 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
         operation = sessionTransferOperation(),
       ) {
         const dataValue = data && typeof data === "object" ? data : {};
+        const providerForkTask = sessionTransferState.providerForkTask;
+        if (providerForkTask?.active === true) {
+          return {
+            active: true, scanning: false, scanOnly: false, transferring: true,
+            mode: "copy", startedAt: Number(providerForkTask.startedAt || Date.now()),
+            progress: 0, completed: 0, total: 1, targetReady: 0, migrated: 0,
+            retained: 1, sourceCleanupCompleted: 0, sourceCleanupTotal: 0,
+            elapsed: formatSessionCleanupElapsed(Number(providerForkTask.startedAt || Date.now())),
+            phaseLabel: "复制当前会话并切换到新副本", phaseCount: 1, phaseIndex: 1,
+            progressMetaPrefix: "正在处理 · 已用时 ", title: "正在复制会话",
+            subtitle: "当前会话复制任务仍在进行，请稍候",
+            stage: "两个界面共享同一复制任务",
+          };
+        }
         const operationValue = operation && typeof operation === "object" ? operation : {};
         const action = String(operationValue?.action || "").toLowerCase();
         const state = String(operationValue?.state || "").toLowerCase();
@@ -4782,6 +4799,7 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
       }
 
       function closeSessionTransferDialog() {
+        const providerForkTask = sessionTransferState.providerForkTask;
         stopSessionTransferElapsedTicker();
         sessionTransferDialogLayer()?.remove();
         delete window[sessionTransferStateName];
@@ -4802,6 +4820,9 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
         sessionTransferState.resumeMessage = "";
         sessionTransferState.data = null;
         sessionTransferState.operation = null;
+        sessionTransferState.providerForkTask = providerForkTask && providerForkTask.active === true
+          ? providerForkTask
+          : null;
       }
 
       function requestSessionTransferScan() {
@@ -4865,6 +4886,7 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
           sessionTransferSnapshotStale(sessionTransferState.data)
           && !sharedScanRequestId
         ) requestSessionTransferScan();
+        if (sessionTransferState.providerForkTask?.active === true) renderSessionTransferDialog();
         return true;
       }
 
@@ -6131,6 +6153,7 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
       }
 
       function formatPricingCheckedAt(value) {
+        // Legacy contract marker: 最后获取： remains distinct from the snapshot date.
         const raw = String(value || "").trim();
         if (!raw) return "尚未获取";
         const date = new Date(raw);
@@ -6171,6 +6194,10 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
           priceChanges,
           changeCount: priceChanges.filter((row) => String(row.kind || "") !== "removed").length,
           checkedAt: scopeMatches ? String(sync.last_success_at || sync.last_checked_at || "") : "",
+          snapshotCheckedAt: scopeMatches ? String(sync.snapshot_checked_at || "") : "",
+          result: scopeMatches ? String(sync.last_result || "") : "",
+          error: scopeMatches ? String(sync.last_error || "") : "",
+          source: scopeMatches && String(sync.last_result || "") === "fallback" ? "bundled" : "",
           cached: true,
         };
       }
@@ -6248,6 +6275,19 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
         ` : '<div class="codex-usage-hud-pricing-impact">还没有成功获取过模型价格。点击“重新获取”后，结果会保留在这里。</div>';
         const removedChanges = priceChanges.filter((item) => String(item?.kind || "") === "removed");
         const checkedAt = String(options.checkedAt || preview?.checkedAt || "");
+        const sync = options.pricingSync && typeof options.pricingSync === "object"
+          ? options.pricingSync
+          : {};
+        const sourceMetadata = options.pricingSource && typeof options.pricingSource === "object"
+          ? options.pricingSource
+          : {};
+        const isFallback = String(sync.last_result || "") === "fallback"
+          || sourceMetadata.bundled === true;
+        const snapshotDate = String(sync.snapshot_checked_at || sourceMetadata.checked_at || "").trim();
+        const downloadError = String(sync.last_error || sourceMetadata.download_error || "").trim();
+        const pricingOrigin = isFallback
+          ? `缓存快照（下载失败） · 原始日期：${formatPricingCheckedAt(snapshotDate || checkedAt)}`
+          : `在线获取 · 获取时间：${formatPricingCheckedAt(checkedAt)}`;
         const canCommit = !!pricingWorkflowState.importPayload && (!officialPreview || changeCount > 0);
         const commitLabel = officialPreview
           ? (!prices.length ? "暂无价格" : changeCount ? "确认更新" : "已是最新")
@@ -6260,7 +6300,8 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
           <div class="codex-usage-hud-settings-confirm-card codex-usage-hud-pricing-dialog" role="dialog" aria-modal="true" aria-label="${officialPreview ? "官方模型价格" : "模型价格预览"}">
             <div class="codex-usage-hud-settings-confirm-kicker">${officialPreview ? "价格检查" : "导入预览"}</div>
             <div class="codex-usage-hud-settings-confirm-title">${officialPreview ? "官方模型价格" : "模型价格预览"}</div>
-            <div class="codex-usage-hud-pricing-preview-meta"><span>USD / 1M tokens</span><span>${prices.length} 个模型</span><span>最后获取：${escapeHtml(formatPricingCheckedAt(checkedAt))}</span><strong data-tone="${changeCount ? "changed" : "stable"}">${officialPreview ? `差异 ${changeCount}` : `新增 ${added} · 更新 ${updated} · 跳过 ${skipped}`}</strong></div>
+            <div class="codex-usage-hud-pricing-preview-meta"><span>USD / 1M tokens</span><span>${prices.length} 个模型</span><span>${escapeHtml(pricingOrigin)}</span><strong data-tone="${changeCount ? "changed" : "stable"}">${officialPreview ? `差异 ${changeCount}` : `新增 ${added} · 更新 ${updated} · 跳过 ${skipped}`}</strong></div>
+            ${isFallback ? `<div class="codex-usage-hud-pricing-preview-notice" data-tone="warning">在线价格下载失败，当前使用内置缓存快照。${downloadError ? `原因：${escapeHtml(downloadError)}` : ""}</div>` : ""}
             <div class="codex-usage-hud-pricing-refresh-state" data-pricing-refresh-state="true" aria-live="polite"></div>
             ${priceList}
             ${removedChanges.length ? `<div class="codex-usage-hud-pricing-preview-notice">官方快照暂未收录 ${removedChanges.length} 个本地模型（${removedChanges.map((item) => escapeHtml(String(item.model || "模型"))).join("、")}），仍按本地价格统计，不受影响。</div>` : ""}
@@ -6343,6 +6384,8 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
         openPricingImportPreview(cached, null, {
           official: true,
           checkedAt: cached.checkedAt,
+          pricingSync: settings.pricing_sync,
+          pricingSource: cached.source === "bundled" ? { bundled: true, checked_at: cached.snapshotCheckedAt, download_error: cached.error } : null,
           refreshing: false,
         });
         return true;
@@ -6473,6 +6516,8 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
         openPricingImportPreview(cached, null, {
           official: true,
           checkedAt: cached.checkedAt,
+          pricingSync: settings.pricing_sync,
+          pricingSource: cached.source === "bundled" ? { bundled: true, checked_at: cached.snapshotCheckedAt, download_error: cached.error } : null,
           refreshing: true,
         });
         requestLatestPricingPreview();
@@ -7599,6 +7644,13 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
         state.busy = true;
         state.result = null;
         state.startedAt = Date.now();
+        sessionTransferState.providerForkTask = {
+          active: true,
+          startedAt: state.startedAt,
+          sourceProvider: state.activeProvider,
+          targetProvider: state.targetProvider,
+          sourceSessionId: sourceId,
+        };
         renderCodexProviderMigrateDialog();
         // 超过 1 秒仍未完成，转交设置里的「复制/迁移会话」对话框继续。
         state.thresholdTimer = window.setTimeout(() => {
@@ -7633,15 +7685,22 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
                     ? "Codex 未返回新会话。"
                     : `新会话使用了「${got}」，未按目标迁移。`),
             };
-            state.busy = false;
-            if (codexProviderMigrateDialogState.layer) renderCodexProviderMigrateDialog();
-            return;
+          state.busy = false;
+          if (sessionTransferState.providerForkTask) sessionTransferState.providerForkTask.active = false;
+          if (codexProviderMigrateDialogState.layer) renderCodexProviderMigrateDialog();
+          if (sessionTransferState.open) renderSessionTransferDialog();
+          return;
           }
           // fork 成功：取原标题 → 命名副本 → 导航切换 → 确认侧边栏已高亮
           const finish = (detail) => {
             state.result = detail;
             state.busy = false;
+            if (sessionTransferState.providerForkTask) {
+              sessionTransferState.providerForkTask.active = false;
+              sessionTransferState.providerForkTask.result = detail;
+            }
             if (codexProviderMigrateDialogState.layer) renderCodexProviderMigrateDialog();
+            if (sessionTransferState.open) renderSessionTransferDialog();
           };
           codexSourceSessionTitle(sourceId).then((sourceTitle) => {
             const title = `${(sourceTitle || "复制会话")}（副本）`;

@@ -375,6 +375,37 @@ def test_manual_official_preview_lists_prices_when_there_are_no_differences() ->
     assert state["config"].pricing_versions == config.pricing_versions
 
 
+def test_official_preview_marks_bundled_fallback_as_failed_cache() -> None:
+    state = {"config": UserConfig.defaults()}
+    official = OfficialPrice(
+        model="gpt-6-astra", input=Decimal("10"), cached_input=Decimal("1"),
+        output=Decimal("50"), reasoning=Decimal("50"),
+    )
+    with patch(
+        "codex_usage_hud.runtime_commands.fetch_pricing_snapshot",
+        return_value=(
+            {"gpt-6-astra": official},
+            {
+                "bundled": True,
+                "checked_at": "2026-09-10T00:00:00Z",
+                "download_error": "all mirrors unavailable",
+                "source_hash": "cached-hash",
+            },
+        ),
+    ):
+        result = handle_general_command(
+            {"action": "fetchPricesPreview", "reason": "official-sync"},
+            _ports(state),
+        )
+
+    sync = result["pricingSync"]
+    assert sync["last_result"] == "fallback"
+    assert sync["last_success_at"] == ""
+    assert sync["snapshot_checked_at"] == "2026-09-10T00:00:00Z"
+    assert sync["last_error"] == "all mirrors unavailable"
+    assert result["pricingSource"]["bundled"] is True
+
+
 def test_official_preview_keeps_locally_configured_models_missing_from_snapshot() -> None:
     local_row = {
         "input": 2.5,
