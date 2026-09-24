@@ -6191,7 +6191,8 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
         // that also carries an official row for it predates the provider-scope
         // collapse, so that stale entry must not be reported.
         const officialModels = new Set(
-          prices.filter((row) => !row.officialMissing).map((row) => normalizePriceModel(row.model)),
+          prices.filter((row) => String(row.catalog_status || "active") === "active")
+            .map((row) => normalizePriceModel(row.model)),
         );
         const priceChanges = cachedChanges.filter(
           (row) => String(row.kind || "") !== "removed"
@@ -6232,9 +6233,19 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
         const officialPreview = options.official === true || Number.isFinite(Number(preview?.changeCount));
         pricingWorkflowState.pendingMode = officialPreview ? "fetch" : "import";
         pricingWorkflowState.importPreview = preview;
-        if (payload) {
-          pricingWorkflowState.importSourcePayload = payload;
-          pricingWorkflowState.importPayload = payload;
+        const importPayload = officialPreview && payload && typeof payload === "object"
+          ? {
+            ...payload,
+            prices: Array.isArray(payload.prices)
+              ? payload.prices.filter(
+                (row) => String(row?.catalog_status || "active") === "active" && !row?.officialMissing,
+              )
+              : [],
+          }
+          : payload;
+        if (importPayload) {
+          pricingWorkflowState.importSourcePayload = importPayload;
+          pricingWorkflowState.importPayload = importPayload;
         }
         const added = Number(preview?.addedCount ?? preview?.added ?? 0);
         const updated = Number(preview?.updatedCount ?? preview?.updated ?? 0);
@@ -6243,6 +6254,9 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
         const conflicts = Array.isArray(preview?.conflicts) ? preview.conflicts : [];
         const warnings = Array.isArray(preview?.warnings) ? preview.warnings : [];
         const prices = Array.isArray(preview?.prices) ? preview.prices : [];
+        const historicalCount = prices.filter(
+          (row) => String(row?.catalog_status || "active") === "historical",
+        ).length;
         const priceChanges = Array.isArray(preview?.priceChanges) ? preview.priceChanges : [];
         const changesByModel = new Map();
         priceChanges.forEach((change) => {
@@ -6269,14 +6283,18 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
               </div>
               ${prices.map((item) => {
                 const model = String(item.model || item.model_pattern || "模型");
-                const officialMissing = item.officialMissing === true;
-                const modelChanges = officialMissing ? [] : changesByModel.get(model) || [];
+                const catalogStatus = String(item.catalog_status || "active").toLowerCase();
+                const officialMissing = item.officialMissing === true || catalogStatus === "local_only";
+                const historical = catalogStatus === "historical";
+                const modelChanges = catalogStatus === "active" ? changesByModel.get(model) || [] : [];
                 const addedChange = modelChanges.find((entry) => String(entry?.kind || "") === "added");
-                const changeLabel = officialMissing
+                const changeLabel = historical
+                  ? "历史型号"
+                  : officialMissing
                   ? "官方未收录"
                   : addedChange ? "新增" : modelChanges.length ? `${modelChanges.length} 项变更` : "";
-                const badgeTone = officialMissing ? "muted" : "changed";
-                return `<div class="codex-usage-hud-pricing-model-row" role="row" data-changed="${modelChanges.length ? "true" : "false"}" data-official-missing="${officialMissing ? "true" : "false"}"><strong role="cell" title="${escapeHtml(model)}"><span>${escapeHtml(model)}</span>${changeLabel ? `<em data-tone="${badgeTone}">${escapeHtml(changeLabel)}</em>` : ""}</strong>${fieldCell(item, modelChanges, "input")}${fieldCell(item, modelChanges, "cached_input")}${fieldCell(item, modelChanges, "cache_write")}${fieldCell(item, modelChanges, "output")}${fieldCell(item, modelChanges, "reasoning")}</div>`;
+                const badgeTone = historical || officialMissing ? "muted" : "changed";
+                return `<div class="codex-usage-hud-pricing-model-row" role="row" data-changed="${modelChanges.length ? "true" : "false"}" data-official-missing="${officialMissing ? "true" : "false"}" data-catalog-status="${escapeHtml(catalogStatus)}"><strong role="cell" title="${escapeHtml(model)}"><span>${escapeHtml(model)}</span>${changeLabel ? `<em data-tone="${badgeTone}">${escapeHtml(changeLabel)}</em>` : ""}</strong>${fieldCell(item, modelChanges, "input")}${fieldCell(item, modelChanges, "cached_input")}${fieldCell(item, modelChanges, "cache_write")}${fieldCell(item, modelChanges, "output")}${fieldCell(item, modelChanges, "reasoning")}</div>`;
               }).join("")}
             </div>
           </div>
@@ -6312,6 +6330,7 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
             ${isFallback ? `<div class="codex-usage-hud-pricing-preview-notice" data-tone="warning">在线价格下载失败，当前使用内置缓存快照。${downloadError ? `原因：${escapeHtml(downloadError)}` : ""}</div>` : ""}
             <div class="codex-usage-hud-pricing-refresh-state" data-pricing-refresh-state="true" aria-live="polite"></div>
             ${priceList}
+            ${historicalCount ? `<div class="codex-usage-hud-pricing-preview-notice">已保留 ${historicalCount} 个历史型号的最近一次官方价格；历史型号不会触发更新提醒或自动覆盖本地价格。</div>` : ""}
             ${removedChanges.length ? `<div class="codex-usage-hud-pricing-preview-notice">官方快照暂未收录 ${removedChanges.length} 个本地模型（${removedChanges.map((item) => escapeHtml(String(item.model || "模型"))).join("、")}），仍按本地价格统计，不受影响。</div>` : ""}
             ${conflicts.length ? `<div class="codex-usage-hud-pricing-preview-notice" data-tone="warning">${conflicts.length} 项价格版本冲突，确认后将覆盖冲突版本。</div>` : ""}
             ${warnings.length ? `<div class="codex-usage-hud-pricing-preview-notice">${warnings.map((item) => escapeHtml(String(item))).join("<br>")}</div>` : ""}
@@ -6380,13 +6399,16 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
         ).trim().toLowerCase();
         const cached = pricingCachedPreview(settings, activeProvider);
         const committablePrices = cached.prices.filter((row) => !row.officialMissing);
+        const activeCommittablePrices = committablePrices.filter(
+          (row) => String(row.catalog_status || "active") === "active",
+        );
         pricingWorkflowState.pendingMode = "fetch";
         pricingWorkflowState.pendingProvider = activeProvider;
         pricingWorkflowState.pendingUrl = String(
           settings?.provider_settings?.[activeProvider]?.pricing_url || settings.pricing_url || "",
         ).trim();
-        pricingWorkflowState.importSourcePayload = committablePrices.length
-          ? { schema_version: 1, unit: "USD_per_1M_tokens", prices: committablePrices }
+        pricingWorkflowState.importSourcePayload = activeCommittablePrices.length
+          ? { schema_version: 1, unit: "USD_per_1M_tokens", prices: activeCommittablePrices }
           : null;
         pricingWorkflowState.importPayload = pricingWorkflowState.importSourcePayload;
         openPricingImportPreview(cached, null, {
@@ -6513,11 +6535,14 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
         pricingWorkflowState.importPayload = null;
         const cached = pricingCachedPreview(settings, provider);
         const committablePrices = cached.prices.filter((row) => !row.officialMissing);
-        if (committablePrices.length) {
+        const activeCommittablePrices = committablePrices.filter(
+          (row) => String(row.catalog_status || "active") === "active",
+        );
+        if (activeCommittablePrices.length) {
           pricingWorkflowState.importSourcePayload = {
             schema_version: 1,
             unit: "USD_per_1M_tokens",
-            prices: committablePrices,
+            prices: activeCommittablePrices,
           };
           pricingWorkflowState.importPayload = pricingWorkflowState.importSourcePayload;
         }

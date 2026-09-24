@@ -1527,6 +1527,14 @@ def handle_general_command(
                 command.get("payload"),
                 default_effective_at,
             )
+            if action == "pricingImportCommit" and isinstance(payload.get("prices"), list):
+                payload["prices"] = [
+                    row
+                    for row in payload["prices"]
+                    if isinstance(row, Mapping)
+                    and str(row.get("catalog_status") or "active").strip().lower()
+                    not in {"historical", "local_only"}
+                ]
             config = ports.load_config()
             preview = config.preview_pricing_import(payload)
             if action == "pricingImportPreview":
@@ -1597,6 +1605,7 @@ def handle_general_command(
                 else config.model_prices
             )
             metadata: dict[str, object] = {}
+            official_prices: dict[str, OfficialPrice] = {}
             if official:
                 official_prices, metadata = fetch_pricing_snapshot()
                 fetched = {
@@ -1609,16 +1618,24 @@ def handle_general_command(
                 }
             else:
                 fetched = ports.fetch_prices(url)
-            legacy_payload = {
-                "model_prices": {
-                    key: (
-                        value.to_dict()
-                        if isinstance(value, ModelPrice)
-                        else dict(value)
-                    )
-                    for key, value in fetched.items()
+            if official:
+                legacy_payload = {
+                    "prices": [
+                        {**price.to_dict(), "provider": provider}
+                        for price in official_prices.values()
+                    ],
                 }
-            }
+            else:
+                legacy_payload = {
+                    "model_prices": {
+                        key: (
+                            value.to_dict()
+                            if isinstance(value, ModelPrice)
+                            else dict(value)
+                        )
+                        for key, value in fetched.items()
+                    }
+                }
             payload = _pricing_payload_with_default_effective_at(
                 legacy_payload,
                 _current_pricing_effective_at(),
@@ -1632,7 +1649,7 @@ def handle_general_command(
             preview = config.preview_pricing_import(payload)
             price_changes = classify_price_changes(
                 local_prices,
-                (
+                official_prices.values() if official else (
                     OfficialPrice(
                         model=key,
                         input=Decimal(str(value.input)),
@@ -1650,6 +1667,9 @@ def handle_general_command(
             download_error = str(metadata.get("download_error") or "").strip()
             preview_payload = preview.to_dict()
             official_rows = [
+                {**price.to_dict(), "provider": provider, "officialMissing": False}
+                for price in official_prices.values()
+            ] if official else [
                 {**row, "officialMissing": False}
                 for row in preview_payload.get("prices", [])
                 if isinstance(row, Mapping)
@@ -1716,6 +1736,12 @@ def handle_general_command(
             config = ports.load_config()
             sync = dict(config.pricing_sync)
             rows = sync.get("pending_prices") if isinstance(sync.get("pending_prices"), list) else []
+            rows = [
+                row
+                for row in rows
+                if isinstance(row, Mapping)
+                and str(row.get("catalog_status") or "active").strip().lower() == "active"
+            ]
             if not rows:
                 return _status("没有可应用的官方价格更新。", kind="error")
             payload = _pricing_payload_with_default_effective_at({"prices": rows}, _current_pricing_effective_at())
@@ -1728,8 +1754,7 @@ def handle_general_command(
                 latest_prices = {
                     str(row.get("model") or "").strip(): price
                     for row in rows
-                    if isinstance(row, Mapping)
-                    and str(row.get("model") or "").strip()
+                    if str(row.get("model") or "").strip()
                     and (price := ModelPrice.from_mapping(row, str(row.get("model") or "").strip())) is not None
                 }
                 next_settings = dict(updated.provider_settings)

@@ -488,6 +488,33 @@ def test_official_preview_keeps_locally_configured_models_missing_from_snapshot(
     ]
 
 
+def test_official_preview_keeps_historical_models_without_counting_them_as_changes() -> None:
+    state = {"config": UserConfig.defaults()}
+    active = OfficialPrice(
+        model="gpt-6-sol", input=Decimal("2"), cached_input=Decimal("0.2"),
+        cache_write=Decimal("2.5"), output=Decimal("10"), reasoning=Decimal("10"),
+    )
+    historical = OfficialPrice(
+        model="gpt-5.6-sol", input=Decimal("4"), cached_input=Decimal("0.4"),
+        cache_write=Decimal("5"), output=Decimal("20"), reasoning=Decimal("20"),
+        catalog_status="historical", last_seen_at="2026-09-20T00:00:00Z",
+    )
+    with patch(
+        "codex_usage_hud.runtime_commands.fetch_pricing_snapshot",
+        return_value=({active.model: active, historical.model: historical}, {"checked_at": "2026-09-24T00:00:00Z"}),
+    ):
+        result = handle_general_command(
+            {"action": "fetchPricesPreview", "reason": "official-sync"}, _ports(state)
+        )
+
+    rows = {str(row["model"]): row for row in result["pricingPreview"]["prices"]}
+    assert rows["gpt-5.6-sol"]["catalog_status"] == "historical"
+    assert result["pricingPreview"]["changeCount"] == 1
+    assert result["pricingSync"]["unread_change_count"] == 1
+    assert any(row["model"] == "gpt-5.6-sol" and row["catalog_status"] == "historical"
+               for row in result["pricingSync"]["pending_prices"])
+
+
 def test_export_price_file_uses_current_prices_or_builtin_template(tmp_path: Path) -> None:
     state = {"config": UserConfig.defaults()}
     opened: list[Path] = []

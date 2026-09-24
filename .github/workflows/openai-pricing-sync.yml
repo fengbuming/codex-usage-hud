@@ -26,7 +26,12 @@ jobs:
         run: |
           revision=$(git ls-remote --heads origin refs/heads/pricing-snapshot)
           echo "revision=${revision%%$'\t'*}" >> "$GITHUB_OUTPUT"
-      - run: python tools/sync_openai_pricing.py
+      - name: Fetch previous pricing catalog
+        shell: bash
+        run: |
+          git fetch --no-tags --depth=1 origin refs/heads/pricing-snapshot:refs/remotes/origin/pricing-snapshot || true
+          git show refs/remotes/origin/pricing-snapshot:docs/openai-pricing-snapshot.json > .previous-openai-pricing-snapshot.json || true
+      - run: python tools/sync_openai_pricing.py --previous-snapshot .previous-openai-pricing-snapshot.json
       - name: Commit changed snapshot
         env:
           SNAPSHOT_BASE: ${{ steps.snapshot-base.outputs.revision }}

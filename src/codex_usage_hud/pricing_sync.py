@@ -29,11 +29,18 @@ class OfficialPrice:
     cache_write: Decimal = Decimal("0")
     currency: str = "USD"
     unit: str = "USD_per_1M_tokens"
+    catalog_status: str = "active"
+    last_seen_at: str = ""
 
     def to_dict(self) -> dict[str, object]:
-        return {"model": self.model, "input": float(self.input), "cached_input": float(self.cached_input),
+        payload = {"model": self.model, "input": float(self.input), "cached_input": float(self.cached_input),
                 "cache_write": float(self.cache_write), "output": float(self.output),
                 "reasoning": float(self.reasoning), "currency": self.currency, "unit": self.unit}
+        if self.catalog_status != "active":
+            payload["catalog_status"] = self.catalog_status
+        if self.last_seen_at:
+            payload["last_seen_at"] = self.last_seen_at
+        return payload
 
 
 class _TableParser(HTMLParser):
@@ -234,7 +241,15 @@ def _parse_snapshot_prices(payload: Mapping[str, object]) -> dict[str, OfficialP
             raise ValueError(f"pricing snapshot contains an invalid price: {model}") from exc
         if any(not value.is_finite() or value < 0 for value in values.values()) or values["input"] == 0 or values["output"] == 0:
             raise ValueError(f"pricing snapshot contains an invalid price: {model}")
-        prices[model] = OfficialPrice(model=model, **values)
+        catalog_status = str(row.get("catalog_status") or "active").strip().lower()
+        if catalog_status not in {"active", "historical"}:
+            raise ValueError(f"pricing snapshot contains an unsupported catalog status: {model}")
+        prices[model] = OfficialPrice(
+            model=model,
+            **values,
+            catalog_status=catalog_status,
+            last_seen_at=str(row.get("last_seen_at") or ""),
+        )
     if not prices:
         raise ValueError("pricing snapshot contains no prices")
     return prices
@@ -308,10 +323,11 @@ def merge_pricing_rows(
 ) -> list[dict[str, object]]:
     """Union of official rows and locally configured models, deduped by model id.
 
-    The official snapshot only tracks a curated allowlist, so models the user
-    prices locally (and that are still on sale) would otherwise vanish from the
-    comparison table. Local-only rows are flagged with ``officialMissing`` so
-    the UI can mark them instead of silently dropping them.
+    The official snapshot contains active models plus a bounded historical
+    catalog. Locally priced models outside that catalog are flagged with
+    ``officialMissing`` so the UI can mark them instead of silently dropping
+    them. Historical rows retain ``catalog_status=historical`` and remain
+    available for display and billing without participating in change alerts.
     """
     merged: list[dict[str, object]] = []
     seen: set[str] = set()
@@ -321,7 +337,15 @@ def merge_pricing_rows(
         if not key or key in seen:
             continue
         seen.add(key)
-        merged.append({**row, "model": model, "officialMissing": False})
+        status = str(row.get("catalog_status") or "active").strip().lower()
+        if status not in {"active", "historical"}:
+            status = "active"
+        merged.append({
+            **row,
+            "model": model,
+            "catalog_status": status,
+            "officialMissing": False,
+        })
     extra: list[dict[str, object]] = []
     for model, price in local_prices.items():
         key = str(model).strip()
@@ -336,7 +360,13 @@ def merge_pricing_rows(
             base = dict(price)
         else:
             continue
-        extra.append({**base, "model": key, "provider": provider, "officialMissing": True})
+        extra.append({
+            **base,
+            "model": key,
+            "provider": provider,
+            "catalog_status": "local_only",
+            "officialMissing": True,
+        })
     extra.sort(key=lambda row: str(row.get("model") or "").casefold())
     merged.extend(extra)
     return merged
@@ -350,6 +380,8 @@ def classify_price_changes(local: dict[str, object], official: Iterable[Official
     local_lookup = {str(model).casefold(): value for model, value in local.items()}
     incoming_keys = {model.casefold() for model in incoming}
     for model, item in incoming.items():
+        if str(getattr(item, "catalog_status", "active") or "active").casefold() != "active":
+            continue
         old = local_lookup.get(model.casefold())
         if old is None:
             result.append({"model": model, "kind": "added", "official": item.to_dict()}); continue
