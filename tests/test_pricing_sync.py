@@ -255,6 +255,7 @@ def test_merge_pricing_rows_unions_local_models_and_dedupes_by_model_id():
 def test_bundled_snapshot_preserves_cache_write_and_compares_it():
     prices, _metadata = fetch_pricing_snapshot(timeout_seconds=0.01)
     assert "gpt-6-astra" in prices
+    assert "gpt-6-sol" in prices
     price = prices["gpt-6-astra"]
     assert price.cache_write == 12.5
     changes = classify_price_changes(
