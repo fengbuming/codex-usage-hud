@@ -7,13 +7,46 @@ and this repository follows Semantic Versioning for release tags.
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-09-24
+
+Renderer Recovery, Provider Pricing, and Configuration Edition.
+
+### Added
+
+- Added official OpenAI pricing snapshot synchronization with cached previews,
+  historical model retention, provider-aware comparisons, and confirmation
+  before applying updates.
+- Added provider names, base URL normalization, provider cloning, no-restart
+  default-provider switching, and provider-specific continuation settings.
+- Added session search by title and session ID, source-aware phrase matching,
+  and improved search result navigation and preview positioning.
+
+### Changed
+
+- Renderer recovery now schedules unlock warmup and degraded-mode probes while
+  idle, then retries the pending HUD payload after recovery.
+- Usage summary and session snapshot caches invalidate when pricing changes and
+  preserve locally configured models missing from the official catalog.
+- Installer update actions, provider settings synchronization, and work-bubble
+  transitions now preserve state across repeated renderer payloads.
+
 ### Fixed
 
-- Checkboxes, radios, and select dropdown arrows in the Renderer HUD could
-  become invisible after Codex Desktop ships a global form-control reset
-  (`input/select { appearance: none }`) on its app page; the HUD stylesheet now
-  re-asserts native `appearance: auto` for these controls so the boxes,
-  checkmarks, and arrows paint again.
+- Fixed Renderer white-screen recovery, HUD overlap with the Codex search box,
+  invisible form controls, duplicate rest-reminder overlays, and stale session
+  selection during copy/migration.
+- Fixed active-work bubbles for new sessions, internal Desktop `exec` sessions,
+  historical sessions, and repeated terminal transitions.
+- Fixed official pricing parsing for new GPT model aliases and retained recent
+  historical model prices.
+- Fixed Renderer checkboxes, radios, and select arrows becoming invisible
+  after Codex Desktop applies a global form-control reset.
+
+### Security
+
+- Atomic provider configuration writes now use private temporary files and
+  restrict cloned bearer-token configurations to owner-only permissions.
+- Removed tracked cross-project internal WorkBuddy notes from the repository.
 
 ## [1.2.0] - 2026-09-08
 

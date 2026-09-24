@@ -293,7 +293,7 @@ class RendererHudPayloadTests(unittest.TestCase):
         self.assertEqual(payload["theme"]["variant"], "dark")
         self.assertEqual(payload["theme"]["tokens"]["accent"], "#339cff")
         self.assertIn("updateState", payload)
-        self.assertEqual(payload["appVersion"], "1.2.0")
+        self.assertEqual(payload["appVersion"], "1.3.0")
         self.assertIn("本会话用量", renderer_hud.RENDERER_HUD_SCRIPT)
         self.assertNotIn("实时请求", renderer_hud.RENDERER_HUD_SCRIPT)
         self.assertNotIn("符号说明", renderer_hud.RENDERER_HUD_SCRIPT)
