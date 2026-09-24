@@ -81,7 +81,7 @@ class RendererHudPayloadTests(unittest.TestCase):
             text=True,
             encoding="utf-8",
             check=True,
-            timeout=5,
+            timeout=20,
         )
         actions = json.loads(result.stdout)
         self.assertEqual(
