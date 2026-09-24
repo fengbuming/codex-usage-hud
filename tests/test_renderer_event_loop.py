@@ -235,6 +235,16 @@ def test_scheduled_deadlines_leave_base_delay_unchanged_without_events() -> None
     ) == 1.25
 
 
+def test_scheduled_deadlines_wake_for_renderer_recovery() -> None:
+    assert scheduled_wait_delay(
+        30.0,
+        now=50.0,
+        deadlines=ScheduledDeadlines(recovery_in=0.25),
+        idle_wait_enabled=True,
+        idle_wait_seconds=60.0,
+    ) == 0.25
+
+
 def test_runtime_event_normalization_coalesces_file_and_wake_signals() -> None:
     existing = _event("settings_changed", source="bridge")
     batch = normalize_runtime_events(
@@ -353,6 +363,58 @@ def test_event_loop_idle_iteration_does_not_build_scan_or_push() -> None:
         "cdp_push": 0,
         "keepalive": 1,
     }
+
+
+def test_event_loop_advances_idle_renderer_recovery_and_retries_payload() -> None:
+    class StopLoop(Exception):
+        pass
+
+    state = RendererLoopState(latest_snapshot=SimpleNamespace())
+    inputs = _minimal_inputs()
+    calls = {"advance": 0, "refresh": 0}
+    recovered = False
+
+    def advance_recovery() -> bool:
+        nonlocal recovered
+        calls["advance"] += 1
+        recovered = True
+        return True
+
+    def recovery_refresh_pending() -> bool:
+        return recovered
+
+    def apply_refresh(_inputs: RendererTickInputs, _force_fast: bool) -> object:
+        calls["refresh"] += 1
+        raise StopLoop()
+
+    loop = RendererEventLoop(
+        state,
+        RendererLoopExecutorPorts(
+            sample_inputs=lambda: inputs,
+            apply_inputs=lambda value: None,
+            exit_requested=lambda: False,
+            restart_requested=lambda: False,
+            restart_result=lambda: 10,
+            daemon_tick=lambda: None,
+            compute_force_fast=lambda value: False,
+            apply_refresh=apply_refresh,
+            current_snapshot=lambda: state.latest_snapshot,
+            apply_domain_update=lambda value: False,
+            keep_alive=lambda: None,
+            after_iteration=lambda snapshot: None,
+            compute_wait_delay=lambda snapshot, value, force_fast: 30.0,
+            wait=lambda delay: (_ for _ in ()).throw(
+                AssertionError("recovery should refresh before waiting")
+            ),
+            advance_recovery=advance_recovery,
+            recovery_refresh_pending=recovery_refresh_pending,
+        ),
+    )
+
+    with pytest.raises(StopLoop):
+        loop.run()
+
+    assert calls == {"advance": 1, "refresh": 1}
 
 
 def test_event_loop_refreshes_local_overlay_during_cdp_backoff_for_file_event() -> None:

@@ -1751,12 +1751,19 @@ def handle_general_command(
             target_provider = str(rows[0].get("provider") or "").strip().lower() if rows and isinstance(rows[0], Mapping) else ""
             if target_provider:
                 current_settings = updated.provider_settings.get(target_provider, ProviderSettings())
-                latest_prices = {
+                official_prices = {
                     str(row.get("model") or "").strip(): price
                     for row in rows
                     if str(row.get("model") or "").strip()
                     and (price := ModelPrice.from_mapping(row, str(row.get("model") or "").strip())) is not None
                 }
+                official_models = {model.casefold() for model in official_prices}
+                latest_prices = {
+                    model: price
+                    for model, price in current_settings.model_prices.items()
+                    if model.casefold() not in official_models
+                }
+                latest_prices.update(official_prices)
                 next_settings = dict(updated.provider_settings)
                 next_settings[target_provider] = replace(current_settings, model_prices=latest_prices)
                 updated = replace(updated, provider_settings=next_settings)

@@ -160,13 +160,15 @@ class RendererHudClient:
         self._warmup_acks = 0
         self._warmup_probes = 0
         self._warmup_started_at = 0.0
+        self._last_warmup_probe_at: float | None = None
+        self._recovery_refresh_pending = False
         # Degraded state: on a hung renderer the HUD removes its injection
         # and probes at a low cadence so Codex self-heals. Never restarts
         # Codex from this path.
         self._degraded = False
         self._degraded_reason = ""
         self._degraded_at = 0.0
-        self._last_degrade_probe_at = 0.0
+        self._last_degrade_probe_at: float | None = None
         # First full update after warmup: send small domains first, heavy
         # domains immediately after (never one ~1MB Runtime.evaluate).
         self._split_next_full = False
@@ -209,6 +211,7 @@ class RendererHudClient:
         self._warmup_acks = 0
         self._warmup_probes = 0
         self._warmup_started_at = 0.0
+        self._last_warmup_probe_at = None
 
     def resume(self) -> None:
         """Re-enable CDP activity after unlock/wake through the warmup gate.
@@ -225,7 +228,42 @@ class RendererHudClient:
         self._warmup_acks = 0
         self._warmup_probes = 0
         self._warmup_started_at = time.monotonic()
+        self._last_warmup_probe_at = None
+        self._recovery_refresh_pending = True
         self._split_next_full = True
+
+    def recovery_seconds_until_probe(self) -> float | None:
+        """Return the next recovery probe deadline without touching CDP."""
+        if self._quiesced or not self.enabled:
+            return None
+        now = time.monotonic()
+        if self._degraded:
+            last = self._last_degrade_probe_at
+            return 0.0 if last is None else max(0.0, last + 10.0 - now)
+        if self._warming:
+            last = self._last_warmup_probe_at
+            return 0.0 if last is None else max(0.0, last + 0.25 - now)
+        return None
+
+    def advance_recovery(self) -> bool:
+        """Run one due recovery probe; return whether CDP was contacted."""
+        remaining = self.recovery_seconds_until_probe()
+        if remaining is None or remaining > 0.0:
+            return False
+        if self._degraded:
+            self._degraded_tick()
+        elif self._warming:
+            self._warmup_tick()
+        return True
+
+    def recovery_refresh_pending(self) -> bool:
+        """Whether recovery has completed and needs one normal payload push."""
+        return bool(
+            self._recovery_refresh_pending
+            and not self._quiesced
+            and not self._warming
+            and not self._degraded
+        )
 
     def _probe_renderer_alive(self, *, timeout_seconds: float) -> tuple[bool, float]:
         """Best-effort 1+1 Runtime.evaluate against the current page target."""
@@ -272,6 +310,7 @@ class RendererHudClient:
         Returns True (successful no-op) so the event loop never counts a
         warmup probe as a payload failure.
         """
+        self._last_warmup_probe_at = time.monotonic()
         ok, probe_ms = self._probe_renderer_alive(timeout_seconds=2.0)
         self._warmup_probes += 1
         if ok and probe_ms < 100.0:
@@ -313,7 +352,8 @@ class RendererHudClient:
         self._degraded = True
         self._degraded_reason = str(reason or "")
         self._degraded_at = time.monotonic()
-        self._last_degrade_probe_at = 0.0
+        self._last_degrade_probe_at = None
+        self._recovery_refresh_pending = True
         self._warming = False
         # Remove the page injection and stop sockets, but retain callback
         # ownership so recovery can recreate every event channel.
@@ -322,7 +362,10 @@ class RendererHudClient:
     def _degraded_tick(self) -> bool:
         """Low-cadence probe while degraded; self-heal back to normal on ack."""
         now = time.monotonic()
-        if now - self._last_degrade_probe_at < 10.0:
+        if (
+            self._last_degrade_probe_at is not None
+            and now - self._last_degrade_probe_at < 10.0
+        ):
             return True
         self._last_degrade_probe_at = now
         ok, probe_ms = self._probe_renderer_alive(timeout_seconds=2.0)
@@ -339,6 +382,7 @@ class RendererHudClient:
             self._rebuild_bindings()
             # The HUD script was removed on degrade; force a clean reinstall.
             self._clear_target_cache(clear_script=True)
+            self._reset_update_retry_state()
             self.last_update_metrics["rendererAliveProbe"] = "degraded-recovered"
         return True
 
@@ -961,6 +1005,7 @@ class RendererHudClient:
         self.last_status = "ok"
         self.last_error = ""
         self._record_update_success()
+        self._recovery_refresh_pending = False
         self._payload_domain_digests.update(pending_domain_digests)
         if pending_extras_digest is not None:
             self._payload_extras_digest = pending_extras_digest
@@ -1060,6 +1105,11 @@ class RendererHudClient:
         """Inspect the local update gate without issuing a CDP command."""
         if not self.enabled:
             return False, "disabled", 5.0
+        if self._quiesced:
+            return False, "quiesced", 5.0
+        recovery_in = self.recovery_seconds_until_probe()
+        if recovery_in is not None:
+            return False, "degraded" if self._degraded else "warming", recovery_in
         lock = getattr(self, "_update_lock", None)
         if lock is not None and lock.locked():
             return False, "busy", 0.05

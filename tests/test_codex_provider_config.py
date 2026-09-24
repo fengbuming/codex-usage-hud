@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
+import stat
 import sys
 import tempfile
 import unittest
@@ -32,6 +34,38 @@ from codex_usage_hud.codex_provider_config import (
 
 
 class CodexProviderConfigTests(unittest.TestCase):
+    def test_atomic_provider_write_preserves_existing_mode(self) -> None:
+        config_text = (
+            'model_provider = "custom"\n\n'
+            "[model_providers.custom]\n"
+            'name = "OpenAI"\n\n'
+            "[model_providers.hiyo]\n"
+            'name = "Hiyo"\n'
+            'base_url = "https://hiyo.example/v1"\n'
+            'env_key = "HIYO_API_KEY"\n'
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "config.toml"
+            path.write_text(config_text, encoding="utf-8")
+            if os.name != "nt":
+                path.chmod(0o600)
+            original_mode = stat.S_IMODE(path.stat().st_mode)
+            with patch.object(
+                provider_config_module.os,
+                "chmod",
+                wraps=provider_config_module.os.chmod,
+            ) as chmod:
+                set_default_codex_provider("hiyo", config_path=path)
+
+            self.assertTrue(
+                any(
+                    int(call.args[1]) == original_mode
+                    for call in chmod.call_args_list
+                )
+            )
+            if os.name != "nt":
+                self.assertEqual(stat.S_IMODE(path.stat().st_mode), original_mode)
+
     def test_delete_user_environment_value_uses_winreg_signature(self) -> None:
         fake_winreg = MagicMock()
         handle = object()
@@ -1415,6 +1449,49 @@ class SendCliChatProbeTests(unittest.TestCase):
 
 
 class CloneProviderWithBearerKeyTests(unittest.TestCase):
+    def test_clone_matches_mixed_case_source_id_and_restricts_config_mode(self) -> None:
+        config_text = (
+            'model_provider = "MuYuan"\n\n'
+            "[model_providers.MuYuan]\n"
+            'name = "Tenant API"\n'
+            'base_url = "https://gateway.example/v1"\n'
+            'wire_api = "responses"\n'
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "config.toml"
+            path.write_text(config_text, encoding="utf-8")
+            if os.name != "nt":
+                path.chmod(0o644)
+            replace_modes: list[int] = []
+            real_replace = provider_config_module.os.replace
+
+            def inspect_replace(source: str | Path, destination: str | Path) -> None:
+                replace_modes.append(stat.S_IMODE(Path(source).stat().st_mode))
+                real_replace(source, destination)
+
+            with patch.object(
+                provider_config_module.os,
+                "replace",
+                side_effect=inspect_replace,
+            ):
+                result = clone_provider_with_bearer_key(
+                    "mUyUaN", "sk-mixed-case", config_path=path
+                )
+
+            self.assertEqual(result["newProviderId"], "muyuan-copy")
+            updated = path.read_text(encoding="utf-8")
+            self.assertIn("[model_providers.muyuan-copy]", updated)
+            self.assertIn(
+                'experimental_bearer_token = "sk-mixed-case"',
+                updated,
+            )
+            self.assertEqual(
+                updated.splitlines()[0], 'model_provider = "muyuan-copy"'
+            )
+            if os.name != "nt":
+                self.assertEqual(replace_modes, [0o600])
+                self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
+
     def test_clone_preserves_non_auth_connection_options(self) -> None:
         config_text = (
             'model_provider = "custom"\n\n'

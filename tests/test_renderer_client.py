@@ -179,3 +179,23 @@ def test_resume_warmup_has_bounded_recovery_for_slow_healthy_renderer(monkeypatc
     )
     assert client.update_payload({"topLine": "after recovery"})
     assert applied == [{"topLine": "after recovery"}]
+
+
+def test_degraded_renderer_probe_recovers_while_idle(monkeypatch) -> None:
+    client = renderer_client.RendererHudClient(enabled=True)
+    monkeypatch.setattr(client, "close", lambda **kwargs: None)
+    monkeypatch.setattr(client, "_rebuild_bindings", lambda: None)
+    monkeypatch.setattr(client, "_clear_target_cache", lambda **kwargs: None)
+    monkeypatch.setattr(
+        client,
+        "_probe_renderer_alive",
+        lambda *, timeout_seconds: (True, 12.0),
+    )
+
+    client.degrade("renderer hung")
+
+    assert client.recovery_seconds_until_probe() == 0.0
+    assert client.advance_recovery()
+    assert not client._degraded  # noqa: SLF001
+    assert client.recovery_refresh_pending()
+    assert client.recovery_seconds_until_probe() is None

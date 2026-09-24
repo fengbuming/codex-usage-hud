@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import re
+import stat
 from typing import Any
 from urllib.error import URLError, HTTPError
 from urllib.parse import urlsplit
@@ -128,7 +129,7 @@ def _write_codex_auth_api_key(
     candidate = _json_with_preserved_newline(payload, original_text)
     try:
         if existed:
-            _write_text_atomically(path, candidate, original_text)
+            _write_text_atomically(path, candidate, original_text, private=True)
         else:
             path.parent.mkdir(parents=True, exist_ok=True)
             if not _write_new_text_atomically(path, candidate):
@@ -160,7 +161,7 @@ def _restore_codex_auth_text(
         except FileNotFoundError:
             return
         return
-    _write_text_atomically(path, original_text, expected_text)
+    _write_text_atomically(path, original_text, expected_text, private=True)
 
 
 def _user_environment_value(name: str) -> str:
@@ -258,6 +259,25 @@ def _read_text_exact(path: Path) -> str:
 def _write_text_exact(path: Path, text: str) -> None:
     with path.open("w", encoding="utf-8", newline="") as handle:
         handle.write(text)
+
+
+def _write_text_new_file(path: Path, text: str, *, mode: int = 0o600) -> None:
+    """Create a text file with its requested mode before writing any content."""
+    descriptor = os.open(
+        path,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+        mode,
+    )
+    try:
+        handle = os.fdopen(descriptor, "w", encoding="utf-8", newline="")
+        descriptor = -1
+        try:
+            handle.write(text)
+        finally:
+            handle.close()
+    finally:
+        if descriptor != -1:
+            os.close(descriptor)
 
 
 def _section_range(text: str, provider_id: str) -> tuple[int, int, str] | None:
@@ -492,13 +512,28 @@ def _parse_toml_mapping(text: str) -> Mapping[str, Any]:
     return candidate if isinstance(candidate, Mapping) else {}
 
 
-def _write_text_atomically(path: Path, text: str, expected: str) -> None:
+def _write_text_atomically(
+    path: Path,
+    text: str,
+    expected: str,
+    *,
+    private: bool = False,
+) -> None:
+    """Replace a file atomically while preserving or tightening its mode.
+
+    Temporary files start private so credentials are never exposed through the
+    process umask. Ordinary writes retain the existing file mode; writes that
+    add an inline bearer token force the resulting file to owner-only mode.
+    """
+    original_mode = stat.S_IMODE(path.stat().st_mode)
     temporary = path.with_name(f".{path.name}.tmp-{os.getpid()}-{id(text)}")
     try:
-        _write_text_exact(temporary, text)
+        _write_text_new_file(temporary, text)
         current = _read_text_exact(path)
         if current != expected:
             raise RuntimeError("config.toml 在保存前发生了变化，请重新打开设置后再试。")
+        target_mode = 0o600 if private else original_mode
+        os.chmod(temporary, target_mode)
         os.replace(temporary, path)
     finally:
         try:
@@ -512,7 +547,7 @@ def _write_new_text_atomically(path: Path, text: str) -> bool:
         return False
     temporary = path.with_name(f".{path.name}.tmp-{os.getpid()}-{id(text)}")
     try:
-        _write_text_exact(temporary, text)
+        _write_text_new_file(temporary, text)
         try:
             # ``os.replace`` would overwrite a profile created by another
             # process.  ``os.rename`` keeps the create-only contract on both
@@ -988,7 +1023,14 @@ def clone_provider_with_bearer_key(
         if isinstance(raw_model_providers, Mapping)
         else {}
     )
-    source_entry = definitions.get(normalized_source)
+    source_entry = next(
+        (
+            entry
+            for raw_id, entry in definitions.items()
+            if str(raw_id or "").strip().casefold() == normalized_source
+        ),
+        None,
+    )
     if not isinstance(source_entry, Mapping):
         raise ValueError(f"供应商「{requested}」未在 config.toml 的 [model_providers] 中定义，无法克隆。")
     existing_ids = {str(pid or "").strip().casefold() for pid in definitions}
@@ -1065,7 +1107,7 @@ def clone_provider_with_bearer_key(
         raise ValueError("克隆后的供应商段写入校验失败。")
     if str(candidate_parsed.get("model_provider") or "").strip().casefold() != new_id:
         raise ValueError("config.toml 顶层 model_provider 写入后校验失败。")
-    _write_text_atomically(path, candidate_text, original_text)
+    _write_text_atomically(path, candidate_text, original_text, private=True)
     return {
         "changed": True,
         "providerId": requested,

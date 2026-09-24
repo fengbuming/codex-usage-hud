@@ -89,6 +89,10 @@ class RendererLoopExecutorPorts:
     compute_wait_delay: Callable[[object, RendererTickInputs, bool], float]
     wait: Callable[[float], object]
     update_gate: Callable[[], tuple[bool, str, float]] = lambda: (True, "", 0.0)
+    # Recovery probes are scheduled by the loop so warmup/degraded healing
+    # progresses even when no business event arrives.
+    advance_recovery: Callable[[], bool] = lambda: False
+    recovery_refresh_pending: Callable[[], bool] = lambda: False
     record_refresh_merge: Callable[[], None] = lambda: None
     # Session-lock quiesce: while active, the loop does no snapshot/CDP/probe
     # work at all so the renderer can freeze/resume cleanly. Default off.
@@ -800,6 +804,9 @@ class RendererEventLoop:
                 return 0
             if self.ports.restart_requested():
                 return self.ports.restart_result()
+            self.ports.advance_recovery()
+            if self.ports.recovery_refresh_pending():
+                self.state.soft_reinstall_pending = True
             force_fast = self.ports.compute_force_fast(inputs)
             plan = inputs.event_refresh_request
             if self.state.pending_refresh_plan.has_work:

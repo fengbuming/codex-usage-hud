@@ -289,11 +289,14 @@ def test_historical_repricing_commands_are_removed() -> None:
     assert impact["kind"] == "error"
 
 
-def test_apply_pricing_sync_replaces_provider_prices_and_clears_unread_state() -> None:
+def test_apply_pricing_sync_preserves_local_prices_and_clears_unread_state() -> None:
     config = UserConfig.from_dict(
         {
             "provider_settings": {
-                "custom": {"model_prices": {"obsolete": {"input": 1, "output": 2}}}
+                "custom": {"model_prices": {
+                    "obsolete": {"input": 1, "output": 2},
+                    "OFFICIAL": {"input": 1, "output": 2},
+                }}
             },
             "pricing_sync": {
                 "unread_change_count": 2,
@@ -318,8 +321,12 @@ def test_apply_pricing_sync_replaces_provider_prices_and_clears_unread_state() -
 
     assert not result["kind"]
     prices = state["config"].provider_settings["custom"].model_prices
-    assert set(prices) == {"official"}
+    assert {"official", "obsolete"} <= set(prices)
+    assert "OFFICIAL" not in prices
+    assert prices["official"].input == 3
     assert prices["official"].cache_write == 4
+    assert prices["obsolete"].input == 1
+    assert prices["obsolete"].output == 2
     assert state["config"].pricing_sync["unread_change_count"] == 0
     assert state["config"].pricing_sync["pending_prices"] == []
     assert state["config"].pricing_versions
@@ -486,6 +493,14 @@ def test_official_preview_keeps_locally_configured_models_missing_from_snapshot(
         "gpt-6-astra",
         "gpt-5.4",
     ]
+
+    applied = handle_general_command({"action": "applyPricingSync"}, _ports(state))
+    assert not applied["kind"]
+    prices = state["config"].provider_settings["custom"].model_prices
+    assert prices["gpt-6-astra"].input == 10
+    assert prices["gpt-5.4"].to_dict()["input"] == local_row["input"]
+    assert prices["gpt-5.4"].to_dict()["output"] == local_row["output"]
+    assert state["config"].pricing_sync["pending_prices"] == []
 
 
 def test_official_preview_keeps_historical_models_without_counting_them_as_changes() -> None:

@@ -30,6 +30,7 @@ class RendererWaitPorts:
     probe_in: Callable[[], float | None]
     heal_in: Callable[[], float | None]
     idle_wait_seconds: float
+    recovery_in: Callable[[], float | None] = lambda: None
 
 
 class RendererWaitPlanner:
@@ -85,6 +86,7 @@ class RendererWaitPlanner:
                 ),
                 probe_in=self.ports.probe_in(),
                 heal_in=self.ports.heal_in(),
+                recovery_in=self.ports.recovery_in(),
             ),
             idle_wait_enabled=self.ports.idle_wait_enabled(
                 snapshot,
@@ -110,6 +112,7 @@ class ScheduledDeadlines:
     retry_at: float | None = None
     probe_in: float | None = None
     heal_in: float | None = None
+    recovery_in: float | None = None
 
 
 def scheduled_wait_delay(
@@ -147,6 +150,8 @@ def scheduled_wait_delay(
         delay = min(delay, max(0.05, float(deadlines.probe_in)))
     if deadlines.heal_in is not None and deadlines.heal_in > 0:
         delay = min(delay, max(0.05, float(deadlines.heal_in)))
+    if deadlines.recovery_in is not None:
+        delay = min(delay, max(0.05, float(deadlines.recovery_in)))
     return delay
 
 
