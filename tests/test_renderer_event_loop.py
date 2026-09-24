@@ -70,6 +70,7 @@ def test_renderer_event_loop_reexports_event_normalization_owner() -> None:
         ("active_work_refresh_requested", True, True, set()),
         ("update_state_changed", False, True, {"settings"}),
         ("rest_reminder_due", False, True, {"settings"}),
+        ("pricing_sync", False, True, {"settings"}),
         ("usage_cache_hydrated", True, True, set()),
         (
             "usage_insights_changed",

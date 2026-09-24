@@ -1598,9 +1598,7 @@ def handle_general_command(
             )
             metadata: dict[str, object] = {}
             if official:
-                official_prices, metadata = fetch_pricing_snapshot(
-                    extra_model_ids=[str(model) for model in local_prices]
-                )
+                official_prices, metadata = fetch_pricing_snapshot()
                 fetched = {
                     model: ModelPrice(
                         input=float(price.input), cached_input=float(price.cached_input),

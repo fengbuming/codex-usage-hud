@@ -11,7 +11,6 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from codex_usage_hud.pricing_sync import (  # noqa: E402
-    CODEX_MODEL_IDS,
     OPENAI_MODELS_URL,
     parse_openai_models_html,
     source_hash,
@@ -31,13 +30,14 @@ def fetch(url: str) -> bytes:
 
 
 def validate_sources(models: dict[str, object], pricing: dict[str, object]) -> None:
-    for source, rows in (("Models", models), ("Pricing", pricing)):
-        missing = sorted(CODEX_MODEL_IDS - rows.keys())
-        if missing:
-            raise ValueError(f"official {source} page is missing Codex models: " + ", ".join(missing))
-    common = sorted(set(models) & set(pricing))
-    if len(common) < 2:
-        raise ValueError("official pricing sources have insufficient model overlap")
+    # The Models page defines the current Codex catalog. A fixed list would
+    # reject retired models and silently omit newly released ones.
+    if len(models) < 2:
+        raise ValueError("official Models page has insufficient Codex models")
+    missing = sorted(models.keys() - pricing.keys())
+    if missing:
+        raise ValueError("official Pricing page is missing Codex models: " + ", ".join(missing))
+    common = sorted(models)
     mismatches = [
         model
         for model in common
@@ -56,10 +56,7 @@ def main() -> int:
     models = parse_openai_models_html(models_body)
     prices = parse_openai_models_html(pricing_body)
     validate_sources(models, prices)
-    prices = {model: price for model, price in prices.items() if model in CODEX_MODEL_IDS}
-    if set(prices) != set(CODEX_MODEL_IDS):
-        missing = sorted(set(CODEX_MODEL_IDS) - set(prices))
-        raise ValueError("official pricing page is missing Codex models: " + ", ".join(missing))
+    prices = {model: prices[model] for model in models}
     payload = {
         "schema_version": 2,
         "provider": "openai",

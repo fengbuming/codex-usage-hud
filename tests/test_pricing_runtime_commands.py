@@ -375,6 +375,28 @@ def test_manual_official_preview_lists_prices_when_there_are_no_differences() ->
     assert state["config"].pricing_versions == config.pricing_versions
 
 
+def test_manual_official_preview_detects_new_gpt_6_sol_without_local_price() -> None:
+    state = {"config": UserConfig.defaults()}
+    official = OfficialPrice(
+        model="gpt-6-sol", input=Decimal("2"), cached_input=Decimal("0.2"),
+        cache_write=Decimal("2.5"), output=Decimal("10"), reasoning=Decimal("10"),
+    )
+    with patch(
+        "codex_usage_hud.runtime_commands.fetch_pricing_snapshot",
+        return_value=({"gpt-6-sol": official}, {"checked_at": "2026-09-23T00:00:00Z"}),
+    ):
+        result = handle_general_command(
+            {"action": "fetchPricesPreview", "reason": "official-sync"}, _ports(state)
+        )
+
+    assert result["pricingPreview"]["changeCount"] >= 1
+    assert {row["model"] for row in result["pricingPreview"]["prices"]} >= {"gpt-6-sol"}
+    assert any(change["model"] == "gpt-6-sol" and change["kind"] == "added"
+               for change in result["pricingSync"]["pending_changes"])
+    assert state["config"].pricing_sync["unread_change_count"] >= 1
+    assert "gpt-6-sol" not in state["config"].model_prices
+
+
 def test_official_preview_marks_bundled_fallback_as_failed_cache() -> None:
     state = {"config": UserConfig.defaults()}
     official = OfficialPrice(

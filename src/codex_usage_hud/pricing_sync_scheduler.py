@@ -4,7 +4,6 @@ from __future__ import annotations
 from threading import Event, Thread
 import time
 from typing import Callable, Mapping
-from datetime import datetime
 
 
 class PricingSyncScheduler:
@@ -18,9 +17,12 @@ class PricingSyncScheduler:
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive(): return
+        # Always check once on HUD startup so a newly published snapshot can
+        # light the unread indicator without waiting for the previous interval.
+        self._next_at = self._clock()
         self._stop.clear(); self._thread = Thread(target=self._run, name="codex-pricing-sync", daemon=True); self._thread.start()
 
-    def trigger(self) -> None: self._next_at = 0.0; self._wake.set()
+    def trigger(self) -> None: self._next_at = self._clock(); self._wake.set()
 
     def close(self) -> None:
         self._stop.set(); self._wake.set()
@@ -33,12 +35,7 @@ class PricingSyncScheduler:
                 self._wake.wait(3600); self._wake.clear(); continue
             interval = max(1, int(sync.get("interval_hours", 4))) * 3600
             if self._next_at <= 0:
-                last_checked = str(sync.get("last_checked_at") or "").replace("Z", "+00:00")
-                try:
-                    last_timestamp = datetime.fromisoformat(last_checked).timestamp()
-                except (TypeError, ValueError):
-                    last_timestamp = 0.0
-                self._next_at = last_timestamp + interval if last_timestamp else self._clock()
+                self._next_at = self._clock()
             wait = max(0.0, self._next_at - self._clock())
             if self._wake.wait(wait): self._wake.clear(); continue
             if self._stop.is_set(): break
