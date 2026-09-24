@@ -17,9 +17,6 @@ from urllib.request import Request, urlopen
 OPENAI_MODELS_URL = "https://developers.openai.com/api/docs/models"
 OPENAI_PRICING_SNAPSHOT_URL = "https://raw.githubusercontent.com/fengbuming/codex-usage-hud/pricing-snapshot/docs/openai-pricing-snapshot.json"
 SNAPSHOT_MIRROR_URL_TEMPLATES = ("https://ghproxy.net/{url}", "https://gh-proxy.com/{url}")
-CODEX_MODEL_IDS = frozenset(
-    {"gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"}
-)
 
 
 @dataclass(frozen=True)
@@ -155,7 +152,6 @@ def pricing_snapshot_urls(url: str = OPENAI_PRICING_SNAPSHOT_URL) -> tuple[str, 
 def _download_pricing_snapshot(
     url: str,
     timeout_seconds: float,
-    allowed_models: frozenset[str] | set[str],
 ) -> tuple[dict[str, OfficialPrice], dict[str, object]]:
     separator = "&" if "?" in url else "?"
     request_url = f"{url}{separator}v={int(time.time() // 300)}"
@@ -165,19 +161,9 @@ def _download_pricing_snapshot(
     if len(body) > 2 * 1024 * 1024:
         raise ValueError("pricing snapshot is too large")
     payload = json.loads(body.decode("utf-8"))
-    if payload.get("schema_version") != 2 or payload.get("provider") != "openai":
+    if not isinstance(payload, dict) or payload.get("schema_version") != 2 or payload.get("provider") != "openai":
         raise ValueError("unsupported pricing snapshot")
-    prices: dict[str, OfficialPrice] = {}
-    for row in payload.get("prices", []):
-        model = str(row.get("model") or "").strip()
-        if model not in allowed_models:
-            continue
-        prices[model] = OfficialPrice(model=model, input=Decimal(str(row["input"])),
-            cached_input=Decimal(str(row.get("cached_input", row["input"]))),
-            cache_write=Decimal(str(row.get("cache_write", 0))),
-            output=Decimal(str(row["output"])), reasoning=Decimal(str(row.get("reasoning", row["output"]))))
-    if not prices:
-        raise ValueError("pricing snapshot contains no supported prices")
+    prices = _parse_snapshot_prices(payload)
     return prices, {"snapshot_url": request_url, "checked_at": str(payload.get("checked_at") or ""),
                     "sources": list(payload.get("sources") or []), "source_hash": source_hash(body)}
 
@@ -185,21 +171,13 @@ def _download_pricing_snapshot(
 def fetch_pricing_snapshot(
     *,
     timeout_seconds: float = 8.0,
-    extra_model_ids: Iterable[str] = (),
 ) -> tuple[dict[str, OfficialPrice], dict[str, object]]:
-    """Fetch the official snapshot.
-
-    ``extra_model_ids`` extends the built-in allowlist with models the user has
-    configured locally, so a snapshot that publishes them is not filtered out.
-    """
+    """Fetch the project-hosted official snapshot, including newly released models."""
     errors: list[str] = []
-    allowed_models = CODEX_MODEL_IDS | {
-        str(model).strip() for model in extra_model_ids if str(model).strip()
-    }
     urls = pricing_snapshot_urls()
     executor = ThreadPoolExecutor(max_workers=len(urls), thread_name_prefix="pricing-fetch")
     futures = {
-        executor.submit(_download_pricing_snapshot, url, timeout_seconds, allowed_models): url
+        executor.submit(_download_pricing_snapshot, url, timeout_seconds): url
         for url in urls
     }
     try:
@@ -220,24 +198,46 @@ def fetch_pricing_snapshot(
     try:
         body = bundled.read_bytes()
         payload = json.loads(body.decode("utf-8"))
-        if payload.get("schema_version") != 2:
+        if not isinstance(payload, dict) or payload.get("schema_version") != 2 or payload.get("provider") != "openai":
             raise ValueError("unsupported bundled pricing snapshot")
-        prices = {
-            str(row["model"]): OfficialPrice(model=str(row["model"]), input=Decimal(str(row["input"])),
-                cached_input=Decimal(str(row.get("cached_input", row["input"]))), output=Decimal(str(row["output"])),
-                reasoning=Decimal(str(row.get("reasoning", row["output"]))),
-                cache_write=Decimal(str(row.get("cache_write", 0))))
-            for row in payload.get("prices", [])
-            if isinstance(row, dict)
-            and str(row.get("model") or "") in allowed_models
-        }
-        if prices:
-            return prices, {"snapshot_url": str(bundled), "checked_at": str(payload.get("checked_at") or ""),
-                            "sources": list(payload.get("sources") or []), "source_hash": source_hash(body),
-                            "bundled": True, "download_error": "; ".join(errors)[:1000]}
+        prices = _parse_snapshot_prices(payload)
+        return prices, {"snapshot_url": str(bundled), "checked_at": str(payload.get("checked_at") or ""),
+                        "sources": list(payload.get("sources") or []), "source_hash": source_hash(body),
+                        "bundled": True, "download_error": "; ".join(errors)[:1000]}
     except (OSError, ValueError, KeyError, json.JSONDecodeError) as exc:
         errors.append(f"{bundled}: {exc}")
     raise ValueError("unable to fetch pricing snapshot: " + "; ".join(errors))
+
+
+def _parse_snapshot_prices(payload: Mapping[str, object]) -> dict[str, OfficialPrice]:
+    rows = payload.get("prices")
+    if not isinstance(rows, list):
+        raise ValueError("pricing snapshot has no price rows")
+    prices: dict[str, OfficialPrice] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            raise ValueError("pricing snapshot contains an invalid price row")
+        model = str(row.get("model") or "").strip()
+        if not _MODEL.fullmatch(model) or model in prices:
+            raise ValueError(f"pricing snapshot contains an invalid model id: {model}")
+        if row.get("currency", "USD") != "USD" or row.get("unit", "USD_per_1M_tokens") != "USD_per_1M_tokens":
+            raise ValueError(f"pricing snapshot contains an unsupported unit: {model}")
+        try:
+            values = {
+                field: Decimal(str(row.get(field, default)))
+                for field, default in (
+                    ("input", None), ("cached_input", row.get("input")),
+                    ("cache_write", 0), ("output", None), ("reasoning", row.get("output")),
+                )
+            }
+        except InvalidOperation as exc:
+            raise ValueError(f"pricing snapshot contains an invalid price: {model}") from exc
+        if any(not value.is_finite() or value < 0 for value in values.values()) or values["input"] == 0 or values["output"] == 0:
+            raise ValueError(f"pricing snapshot contains an invalid price: {model}")
+        prices[model] = OfficialPrice(model=model, **values)
+    if not prices:
+        raise ValueError("pricing snapshot contains no prices")
+    return prices
 
 
 def _bare_model_id(value: str) -> str:

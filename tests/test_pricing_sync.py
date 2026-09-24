@@ -1,12 +1,15 @@
 from decimal import Decimal
+from io import BytesIO
+import json
 from types import SimpleNamespace
 from unittest.mock import patch
 import pytest
 
 from codex_usage_hud.config import UserConfig
-from codex_usage_hud.pricing_sync import CODEX_MODEL_IDS, OfficialPrice, classify_price_changes, fetch_pricing_snapshot, merge_pricing_rows, parse_openai_models_html
+from codex_usage_hud.pricing_sync import OfficialPrice, classify_price_changes, fetch_pricing_snapshot, merge_pricing_rows, parse_openai_models_html
 from codex_usage_hud.pricing_sync import normalize_local_price_scope, pricing_snapshot_urls
 from codex_usage_hud.pricing_sync_scheduler import PricingSyncScheduler
+from tools import sync_openai_pricing
 from tools.sync_openai_pricing import validate_sources
 
 
@@ -39,27 +42,21 @@ def test_pricing_snapshot_uses_github_then_existing_regional_transports():
 
 def test_pricing_snapshot_races_regional_transports_instead_of_waiting_serially():
     calls = []
-    price = OfficialPrice(model="gpt-6-astra", input=10, output=50)
+    price = OfficialPrice(model="gpt-6-sol", input=2, output=10)
 
-    def download(url, timeout_seconds, allowed_models):
-        calls.append((url, timeout_seconds, frozenset(allowed_models)))
+    def download(url, timeout_seconds):
+        calls.append((url, timeout_seconds))
         if "ghproxy.net" in url:
             return {price.model: price}, {"snapshot_url": url, "checked_at": "2026-09-10T08:00:00Z"}
         raise TimeoutError(url)
 
     with patch("codex_usage_hud.pricing_sync._download_pricing_snapshot", side_effect=download):
-        prices, metadata = fetch_pricing_snapshot(
-            timeout_seconds=2.5, extra_model_ids=["gpt-5.4", " gpt-5.4-mini ", ""]
-        )
+        prices, metadata = fetch_pricing_snapshot(timeout_seconds=2.5)
 
-    assert prices["gpt-6-astra"].output == 50
+    assert prices["gpt-6-sol"].output == 10
     assert "ghproxy.net" in str(metadata["snapshot_url"])
-    assert {url for url, _timeout, _allowed in calls} == set(pricing_snapshot_urls())
-    assert all(timeout == 2.5 for _url, timeout, _allowed in calls)
-    assert all(
-        allowed == CODEX_MODEL_IDS | {"gpt-5.4", "gpt-5.4-mini"}
-        for _url, _timeout, allowed in calls
-    )
+    assert {url for url, _timeout in calls} == set(pricing_snapshot_urls())
+    assert all(timeout == 2.5 for _url, timeout in calls)
 
 
 def test_models_page_semantic_cards_are_parsed_without_tables():
@@ -87,14 +84,54 @@ def test_models_card_alias_keeps_canonical_model_and_next_card_boundary():
     assert "gpt-5.6-sol" not in parse_openai_models_html(incomplete)
 
 
-@pytest.mark.parametrize("source", ["Models", "Pricing"])
-def test_snapshot_requires_each_tracked_model_in_both_sources(source):
-    complete = {model: OfficialPrice(model=model, input=4, output=20) for model in CODEX_MODEL_IDS}
-    incomplete = dict(complete)
-    del incomplete["gpt-5.6-sol"]
-    with pytest.raises(ValueError, match=f"{source} page is missing Codex models: gpt-5.6-sol"):
-        validate_sources(incomplete if source == "Models" else complete,
-                         incomplete if source == "Pricing" else complete)
+def test_snapshot_follows_current_models_and_requires_matching_pricing():
+    models = {
+        model: OfficialPrice(model=model, input=2, output=10)
+        for model in ("gpt-6-astra", "gpt-6-sol", "gpt-6-luna")
+    }
+    pricing = dict(models)
+    validate_sources(models, pricing)
+    pricing.pop("gpt-6-sol")
+    with pytest.raises(ValueError, match="Pricing page is missing Codex models: gpt-6-sol"):
+        validate_sources(models, pricing)
+    with pytest.raises(ValueError, match="Models page has insufficient Codex models"):
+        validate_sources({"gpt-6-astra": models["gpt-6-astra"]}, models)
+
+
+def test_snapshot_generator_publishes_new_models_without_old_allowlist(tmp_path, monkeypatch):
+    models_html = (
+        "<span>gpt-6-astra</span><div>Input price</div><div>$10</div><div>Output price</div><div>$50</div>"
+        "<span>gpt-6-sol</span><div>Input price</div><div>$2</div><div>Output price</div><div>$10</div>"
+        "<span>gpt-6-luna</span><div>Input price</div><div>$0.10</div><div>Output price</div><div>$0.50</div>"
+    )
+    pricing_html = (
+        "<table><tr><th>Model</th><th>Input</th><th>Cached input</th><th>Cache writes</th><th>Output</th></tr>"
+        "<tr><td>gpt-6-astra</td><td>$10</td><td>$1</td><td>$12.50</td><td>$50</td></tr>"
+        "<tr><td>gpt-6-sol</td><td>$2</td><td>$0.20</td><td>$2.50</td><td>$10</td></tr>"
+        "<tr><td>gpt-6-luna</td><td>$0.10</td><td>$0.01</td><td>$0.125</td><td>$0.50</td></tr></table>"
+    )
+    monkeypatch.setattr(sync_openai_pricing, "fetch", lambda url: (models_html if url == sync_openai_pricing.OPENAI_MODELS_URL else pricing_html).encode())
+    output = tmp_path / "snapshot.json"
+    monkeypatch.setattr(sync_openai_pricing, "OUTPUTS", (output,))
+
+    assert sync_openai_pricing.main() == 0
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    assert [row["model"] for row in payload["prices"]] == ["gpt-6-astra", "gpt-6-sol", "gpt-6-luna"]
+    assert payload["prices"][1]["cached_input"] == 0.2
+    assert payload["prices"][1]["cache_write"] == 2.5
+
+
+def test_snapshot_client_accepts_new_model_from_published_payload():
+    payload = {
+        "schema_version": 2, "provider": "openai", "checked_at": "2026-09-23T00:00:00Z",
+        "prices": [{"model": "gpt-6-sol", "input": 2, "cached_input": 0.2,
+                    "cache_write": 2.5, "output": 10, "currency": "USD",
+                    "unit": "USD_per_1M_tokens"}],
+    }
+    with patch("codex_usage_hud.pricing_sync.urlopen", return_value=BytesIO(json.dumps(payload).encode())):
+        from codex_usage_hud.pricing_sync import _download_pricing_snapshot
+        prices, _metadata = _download_pricing_snapshot("https://example.test/snapshot.json", 1)
+    assert prices["gpt-6-sol"].cached_input == Decimal("0.2")
 
 
 def test_pricing_table_uses_short_context_columns_from_first_tier():
@@ -217,7 +254,7 @@ def test_merge_pricing_rows_unions_local_models_and_dedupes_by_model_id():
 
 def test_bundled_snapshot_preserves_cache_write_and_compares_it():
     prices, _metadata = fetch_pricing_snapshot(timeout_seconds=0.01)
-    assert set(prices) == set(CODEX_MODEL_IDS)
+    assert "gpt-6-astra" in prices
     price = prices["gpt-6-astra"]
     assert price.cache_write == 12.5
     changes = classify_price_changes(
@@ -238,10 +275,8 @@ def test_bundled_snapshot_preserves_cache_write_and_compares_it():
 def test_snapshot_generation_rejects_disagreement_between_official_pages():
     models = parse_openai_models_html(
         "<div><span>gpt-6-astra</span><div>Input price</div><div>$10</div><div>Output price</div><div>$50</div>"
-        "<span>gpt-5.6-terra</span><div>Input price</div><div>$2</div><div>Output price</div><div>$12</div></div>"
+        "<span>gpt-6-sol</span><div>Input price</div><div>$2</div><div>Output price</div><div>$10</div></div>"
     )
-    for model in CODEX_MODEL_IDS - models.keys():
-        models[model] = OfficialPrice(model=model, input=4, output=20)
     pricing = dict(models)
     validate_sources(models, pricing)
     changed = dict(pricing)

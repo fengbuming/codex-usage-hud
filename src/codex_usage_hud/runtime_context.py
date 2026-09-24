@@ -225,9 +225,7 @@ def _initialize_runtime_context_resources(context: RuntimeContext) -> None:
             local = normalize_local_price_scope(
                 context.user_config.provider_price_table(context.app_provider)
             )
-            prices, metadata = fetch_pricing_snapshot(
-                extra_model_ids=[str(model) for model in local]
-            )
+            prices, metadata = fetch_pricing_snapshot()
             changes = classify_price_changes(local, prices.values())
             official_rows = [{**price.to_dict(), "provider": context.app_provider} for price in prices.values()]
             merged = merge_pricing_rows(official_rows, local, context.app_provider)
