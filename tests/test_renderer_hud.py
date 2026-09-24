@@ -7,6 +7,8 @@ import json
 from pathlib import Path
 import queue
 import re
+import shutil
+import subprocess
 import sys
 import socket
 import threading
@@ -44,6 +46,52 @@ from codex_usage_hud.renderer_payload_builder import (
 
 
 class RendererHudPayloadTests(unittest.TestCase):
+    def test_about_install_button_requires_available_update(self) -> None:
+        script = renderer_hud.RENDERER_HUD_SCRIPT
+        self.assertIn(
+            'data-action="settings-install-update" data-primary="true" disabled',
+            script,
+        )
+        node = shutil.which("node")
+        if node is None:
+            self.skipTest("Node.js is needed to execute the renderer button state function")
+        start = script.index("function canInstallUpdate(state) {")
+        end = script.index("function showSettingsRestartPrompt", start)
+        source = script[start:end]
+        self.assertIn("if (!canInstallUpdate(currentUpdateState())) return;", script)
+        probe = (
+            "const actions = {};\n"
+            "function setSettingsActionState(name, state) { actions[name] = state; }\n"
+            + source
+            + "\nconst states = ["
+            + '{}, {phase: "idle"}, {phase: "up_to_date"}, '
+            + '{phase: "checking"}, {phase: "downloading"}, '
+            + '{phase: "error"}, {phase: "error", visible: true}, '
+            + '{phase: "error", visible: true, assetName: "setup.exe"}, '
+            + '{phase: "available"}, {phase: "paused"}, {phase: "ready"}'
+            + "];\n"
+            + 'console.log(JSON.stringify(states.map(state => { '
+            + 'updateAboutActionButtons(state); '
+            + 'return {check: actions["settings-check-update"], '
+            + 'install: actions["settings-install-update"]}; })));'
+        )
+        result = subprocess.run(
+            [node, "-e", probe],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            check=True,
+            timeout=5,
+        )
+        actions = json.loads(result.stdout)
+        self.assertEqual(
+            [entry["install"]["disabled"] for entry in actions],
+            [True, True, True, True, True, True, True, False, False, False, False],
+        )
+        self.assertEqual(actions[-1]["install"]["label"], "打开安装器")
+        self.assertFalse(actions[2]["check"]["disabled"])
+        self.assertTrue(actions[3]["check"]["disabled"])
+
     def test_partial_budget_cost_is_not_presented_as_zero_or_complete(self) -> None:
         snapshot = ParsedSession(status="parsed")
         snapshot.today_tokens = 1200

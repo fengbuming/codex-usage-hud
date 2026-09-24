@@ -43,6 +43,8 @@ SolidCompression=yes
 WizardStyle=modern
 UninstallDisplayIcon={app}\{#AppExeName}
 SetupLogging=yes
+CloseApplications=force
+RestartApplications=no
 
 [Languages]
 Name: "chinesesimp"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
@@ -54,6 +56,7 @@ Name: "startup"; Description: "开机自动启动 HUD daemon"; GroupDescription:
 
 [Files]
 Source: "{#SourceExe}"; DestDir: "{app}"; DestName: "{#AppExeName}"; Flags: ignoreversion
+Source: "{#SourceExe}"; DestDir: "{tmp}"; DestName: "codex-hud-stop.exe"; Flags: dontcopy
 Source: "{#ProjectRoot}\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#ProjectRoot}\README.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#ProjectRoot}\README_EN.md"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
@@ -77,13 +80,30 @@ Filename: "{app}\{#AppExeName}"; Parameters: "--stop"; Flags: runhidden waitunti
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 var
   ResultCode: Integer;
-  ExePath: String;
+  Attempt: Integer;
+  StopExePath: String;
 begin
-  ExePath := ExpandConstant('{app}\{#AppExeName}');
-  if FileExists(ExePath) then
-  begin
-    Exec(ExePath, '--stop', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
-    Sleep(800);
-  end;
   Result := '';
+  if not CheckForMutexes('Local\codex_usage_hud_single_instance') then
+    Exit;
+
+  ExtractTemporaryFile('codex-hud-stop.exe');
+  StopExePath := ExpandConstant('{tmp}\codex-hud-stop.exe');
+  if not Exec(StopExePath, '--stop', '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+  begin
+    Result := '无法启动旧 HUD 进程的停止程序。';
+    Exit;
+  end;
+  if ResultCode <> 0 then
+  begin
+    Result := '停止旧 HUD 进程失败。';
+    Exit;
+  end;
+  for Attempt := 1 to 50 do
+  begin
+    if not CheckForMutexes('Local\codex_usage_hud_single_instance') then
+      Exit;
+    Sleep(200);
+  end;
+  Result := '旧 HUD 进程仍在运行，请先退出后重试安装。';
 end;

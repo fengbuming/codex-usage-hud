@@ -3541,7 +3541,7 @@ _TEXT_PREFIX = r"""
             <div class="codex-usage-hud-settings-actions">
               <div class="codex-usage-hud-settings-status" data-settings-status="true">${escapeHtml(status || defaultStatus)}</div>
               <div>
-                ${activeTab === "settings" ? '<button type="button" class="codex-usage-hud-settings-action" data-action="settings-restart" hidden>立即重启 HUD</button>' : activeTab === "backgroundUsage" ? '<button type="button" class="codex-usage-hud-settings-action" data-action="background-usage-refresh">刷新</button> <button type="button" class="codex-usage-hud-settings-action" data-action="settings-close" data-primary="true">关闭</button>' : activeTab === "about" ? '<button type="button" class="codex-usage-hud-settings-action" data-action="settings-check-update">检查更新</button> <button type="button" class="codex-usage-hud-settings-action" data-action="settings-install-update" data-primary="true">安装更新</button>' : '<button type="button" class="codex-usage-hud-settings-action" data-action="settings-close" data-primary="true">关闭</button>'}
+                ${activeTab === "settings" ? '<button type="button" class="codex-usage-hud-settings-action" data-action="settings-restart" hidden>立即重启 HUD</button>' : activeTab === "backgroundUsage" ? '<button type="button" class="codex-usage-hud-settings-action" data-action="background-usage-refresh">刷新</button> <button type="button" class="codex-usage-hud-settings-action" data-action="settings-close" data-primary="true">关闭</button>' : activeTab === "about" ? '<button type="button" class="codex-usage-hud-settings-action" data-action="settings-check-update">检查更新</button> <button type="button" class="codex-usage-hud-settings-action" data-action="settings-install-update" data-primary="true" disabled>安装更新</button>' : '<button type="button" class="codex-usage-hud-settings-action" data-action="settings-close" data-primary="true">关闭</button>'}
               </div>
             </div>
           </div>
@@ -3862,13 +3862,19 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
         }
       }
 
+      function canInstallUpdate(state) {
+        const phase = String(state?.phase || "");
+        return ["available", "paused", "ready"].includes(phase)
+          || (phase === "error" && !!state?.visible && !!state?.assetName);
+      }
+
       function updateAboutActionButtons(state) {
         const phase = String(state?.phase || "");
         const progressText = String(state?.progressText || "").trim();
         let checkLabel = "检查更新";
         let installLabel = "安装更新";
         let disableCheck = false;
-        let disableInstall = false;
+        let disableInstall = !canInstallUpdate(state);
         if (phase === "checking") {
           checkLabel = "检查中...";
           installLabel = "请稍候";
@@ -6624,6 +6630,7 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
       }
 
       function installUpdateFromModal() {
+        if (!canInstallUpdate(currentUpdateState())) return;
         openSettingsLoading({
           kicker: "正在准备",
           title: "正在检查并准备安装更新",

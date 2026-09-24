@@ -16,6 +16,18 @@ import build_installer  # noqa: E402
 
 
 class InstallerBuildHelperTests(unittest.TestCase):
+    def test_installer_stops_any_running_hud_before_replacing_files(self) -> None:
+        script = build_installer.DEFAULT_INNO_SCRIPT.read_text(encoding="utf-8")
+
+        self.assertIn('DestName: "codex-hud-stop.exe"; Flags: dontcopy', script)
+        self.assertIn("ExtractTemporaryFile('codex-hud-stop.exe')", script)
+        self.assertIn("CheckForMutexes('Local\\codex_usage_hud_single_instance')", script)
+        self.assertIn("ewWaitUntilTerminated, ResultCode", script)
+        self.assertIn("ResultCode <> 0", script)
+        self.assertIn("旧 HUD 进程仍在运行", script)
+        self.assertIn("CloseApplications=force", script)
+        self.assertIn("RestartApplications=no", script)
+
     def test_setup_base_filename_uses_versioned_windows_setup_convention(self) -> None:
         self.assertEqual(
             build_installer.setup_base_filename("1.0.0"),
