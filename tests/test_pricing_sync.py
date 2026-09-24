@@ -122,6 +122,34 @@ def test_snapshot_follows_current_models_and_requires_matching_pricing():
         validate_sources({"gpt-6-astra": models["gpt-6-astra"]}, models)
 
 
+def test_snapshot_retains_the_two_previous_numeric_model_series():
+    models = {
+        model: OfficialPrice(model=model, input=2, output=10)
+        for model in ("gpt-6-astra", "gpt-6-sol", "gpt-6-luna")
+    }
+    previous = {
+        "checked_at": "2026-09-20T00:00:00Z",
+        "prices": [
+            {"model": "gpt-5.6-sol", "input": 4, "output": 20},
+            {"model": "gpt-5.5", "input": 5, "output": 30},
+            {"model": "gpt-5.4", "input": 2.5, "output": 15},
+        ],
+    }
+    payload = sync_openai_pricing.build_snapshot_payload(
+        models,
+        dict(models),
+        models_body="models",
+        pricing_body="pricing",
+        previous_payloads=(previous,),
+        checked_at="2026-09-24T00:00:00Z",
+    )
+    rows = {row["model"]: row for row in payload["prices"]}
+    assert set(rows) == {"gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.5"}
+    assert rows["gpt-5.6-sol"]["catalog_status"] == "historical"
+    assert rows["gpt-5.6-sol"]["last_seen_at"] == "2026-09-20T00:00:00Z"
+    assert "gpt-5.4" not in rows
+
+
 def test_snapshot_generator_publishes_new_models_without_old_allowlist(tmp_path, monkeypatch):
     models_html = (
         "<span>gpt-6-astra</span><div>Input price</div><div>$10</div><div>Output price</div><div>$50</div>"
@@ -140,7 +168,18 @@ def test_snapshot_generator_publishes_new_models_without_old_allowlist(tmp_path,
 
     assert sync_openai_pricing.main() == 0
     payload = json.loads(output.read_text(encoding="utf-8"))
-    assert [row["model"] for row in payload["prices"]] == ["gpt-6-astra", "gpt-6-sol", "gpt-6-luna"]
+    models = {row["model"] for row in payload["prices"]}
+    assert {"gpt-6-astra", "gpt-6-sol", "gpt-6-luna"}.issubset(models)
+    assert all(
+        row.get("catalog_status") == "active"
+        for row in payload["prices"]
+        if row["model"] in {"gpt-6-astra", "gpt-6-sol", "gpt-6-luna"}
+    )
+    assert all(
+        row.get("catalog_status") == "historical"
+        for row in payload["prices"]
+        if row["model"] not in {"gpt-6-astra", "gpt-6-sol", "gpt-6-luna"}
+    )
     assert payload["prices"][1]["cached_input"] == 0.2
     assert payload["prices"][1]["cache_write"] == 2.5
 
@@ -156,6 +195,24 @@ def test_snapshot_client_accepts_new_model_from_published_payload():
         from codex_usage_hud.pricing_sync import _download_pricing_snapshot
         prices, _metadata = _download_pricing_snapshot("https://example.test/snapshot.json", 1)
     assert prices["gpt-6-sol"].cached_input == Decimal("0.2")
+
+
+def test_snapshot_client_preserves_historical_catalog_status_and_ignores_it_for_alerts():
+    payload = {
+        "schema_version": 2, "provider": "openai",
+        "prices": [
+            {"model": "gpt-6-sol", "input": 2, "output": 10},
+            {"model": "gpt-5.6-sol", "input": 4, "output": 20,
+             "catalog_status": "historical", "last_seen_at": "2026-09-20T00:00:00Z"},
+        ],
+    }
+    with patch("codex_usage_hud.pricing_sync.urlopen", return_value=BytesIO(json.dumps(payload).encode())):
+        from codex_usage_hud.pricing_sync import _download_pricing_snapshot
+        prices, _metadata = _download_pricing_snapshot("https://example.test/snapshot.json", 1)
+    assert prices["gpt-5.6-sol"].catalog_status == "historical"
+    assert classify_price_changes({"gpt-5.6-sol": {"input": 99}}, prices.values()) == [
+        {"model": "gpt-6-sol", "kind": "added", "official": prices["gpt-6-sol"].to_dict()}
+    ]
 
 
 def test_pricing_table_uses_short_context_columns_from_first_tier():
@@ -274,6 +331,22 @@ def test_merge_pricing_rows_unions_local_models_and_dedupes_by_model_id():
     assert merged[1]["officialMissing"] is True
     assert merged[1]["input"] == 2.5
     assert merged[1]["provider"] == "custom"
+
+
+def test_merge_pricing_rows_preserves_historical_catalog_status():
+    official = {
+        "model": "gpt-5.6-sol",
+        "input": 4,
+        "output": 20,
+        "catalog_status": "historical",
+        "last_seen_at": "2026-09-20T00:00:00Z",
+    }
+    merged = merge_pricing_rows([official], {}, "openai")
+    assert merged == [{
+        **official,
+        "catalog_status": "historical",
+        "officialMissing": False,
+    }]
 
 
 def test_bundled_snapshot_preserves_cache_write_and_compares_it():

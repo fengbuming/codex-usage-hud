@@ -63,3 +63,5 @@ Phase 1：抽取 `OpenAIModelsParser`、标准 schema、fixture 单测。Phase 2
 OpenAI 未提供可作为权威来源的中国大陆价格镜像。项目使用 GitHub Actions 每 4 小时抓取 OpenAI Models 与 Pricing 官方页面：Models 页校验默认输入/输出价格，Pricing 页补齐 cached-input 与 cache-write；同名模型价格不一致时停止生成，不发布新快照。
 
 HUD 依次读取项目 `pricing-snapshot` 数据分支的 GitHub raw 快照、现有 GitHub 区域传输线路和安装包内最近一次快照。数据分支由 GitHub Actions 独占更新，避免绕过 `main` 的 PR 保护。区域线路仅传输项目生成的结构化快照，不作为 OpenAI 官方来源；快照保留两份官方 URL、抓取时间和页面 SHA-256。所有远端线路失败时继续使用安装包内快照并保留当前价格，用户不需要配置本机代理。
+
+快照保留当前官方型号，并从上一份快照滚动保留最近两个数字版本系列的最后一次官方价格。历史型号标记为 `catalog_status=historical`：继续用于展示和本地计费，不触发官方价格差异提醒，也不会被官方同步自动覆盖。只存在于用户本地、且快照没有历史价格的模型才标记为 `officialMissing`。
