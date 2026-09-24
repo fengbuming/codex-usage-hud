@@ -1,6 +1,7 @@
 from decimal import Decimal
 from io import BytesIO
 import json
+from threading import Event
 from types import SimpleNamespace
 from unittest.mock import patch
 import pytest
@@ -31,6 +32,29 @@ def test_scheduler_does_not_poll_until_due_and_uses_failure_backoff():
     scheduler._failure_count = 1
     scheduler._next_at = now[0] + 3600
     assert scheduler.next_run_at == 3600
+
+
+def test_scheduler_checks_on_start_even_when_last_check_is_recent():
+    checked = Event()
+    config = SimpleNamespace(pricing_sync={
+        "enabled": True, "interval_hours": 24,
+        "last_checked_at": "2099-01-01T00:00:00Z",
+    })
+    scheduler = PricingSyncScheduler(
+        lambda: config,
+        lambda: checked.set() or {"ok": True},
+        lambda _result: None,
+    )
+    try:
+        scheduler.start()
+        assert checked.wait(2)
+    finally:
+        scheduler.close()
+
+
+def test_partial_pricing_sync_settings_keep_four_hour_default():
+    config = UserConfig.from_dict({"pricing_sync": {"enabled": True}})
+    assert config.pricing_sync["interval_hours"] == 4
 
 
 def test_pricing_snapshot_uses_github_then_existing_regional_transports():

@@ -261,3 +261,45 @@ def test_settings_payload_price_change_repaints_provider_price_table(tmp_path) -
     )
     assert completed.returncode == 0, f"{completed.stdout}\n{completed.stderr}"
     assert "settings pricing draft reconciliation ok" in completed.stdout
+
+
+def test_pricing_unread_indicators_follow_settings_payload(tmp_path) -> None:
+    body = r"""
+const topDot = makeNode({ hidden: true });
+const checkDot = makeNode({ hidden: true });
+function pricingButton(dot) {
+  const attributes = new Map();
+  return makeNode({
+    querySelector: () => dot,
+    getAttribute: (name) => attributes.get(name) ?? null,
+    setAttribute: (name, value) => attributes.set(name, value),
+  });
+}
+const topButton = pricingButton(topDot);
+const checkButton = pricingButton(checkDot);
+root.querySelectorAll = (selector) => {
+  if (selector === '[data-action="settings-open"]') return [topButton];
+  if (selector === '[data-action="settings-fetch-prices"]') return [checkButton];
+  return [];
+};
+payload = { settings: { pricing_sync: { unread_change_count: 2 } } };
+settingsShellDomain.syncPricingUnreadIndicators(root);
+assert.equal(topDot.hidden, false, "top HUD settings dot must appear for unread prices");
+assert.equal(checkDot.hidden, false, "settings check button dot must appear");
+assert.match(topButton.getAttribute("aria-label"), /2 项官方价格差异/);
+assert.match(checkButton.getAttribute("aria-label"), /2 项未读差异/);
+
+payload = { settings: { pricing_sync: { unread_change_count: 0 } } };
+settingsShellDomain.syncPricingUnreadIndicators(root);
+assert.equal(topDot.hidden, true, "top HUD settings dot must clear after acknowledgment");
+assert.equal(checkDot.hidden, true, "settings check button dot must clear");
+console.log("pricing unread indicators ok");
+"""
+    script_path = tmp_path / "pricing_unread_indicators.js"
+    script_path.write_text("\n".join([_HOST_STUBS, SETTINGS_SHELL, body]), encoding="utf-8")
+    completed = subprocess.run(
+        ["node", str(script_path)], capture_output=True, text=True,
+        encoding="utf-8", check=False,
+    )
+    assert completed.returncode == 0, f"{completed.stdout}\n{completed.stderr}"
+    assert "pricing unread indicators ok" in completed.stdout

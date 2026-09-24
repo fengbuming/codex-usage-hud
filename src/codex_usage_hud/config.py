@@ -87,7 +87,7 @@ def _normalize_pricing_sync(value: Any) -> dict[str, Any]:
     result = dict(defaults)
     result["enabled"] = bool(value.get("enabled", True))
     try:
-        result["interval_hours"] = max(1, min(168, int(value.get("interval_hours", 24))))
+        result["interval_hours"] = max(1, min(168, int(value.get("interval_hours", defaults["interval_hours"]))))
     except (TypeError, ValueError):
         pass
     for key in (

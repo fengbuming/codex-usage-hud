@@ -113,7 +113,7 @@ def reduce_event(
         plan.request_active_session()
     elif event_type == "runtime_error":
         plan.request_diagnostics()
-    elif event_type in {"update_state_changed", "rest_reminder_due"}:
+    elif event_type in {"update_state_changed", "rest_reminder_due", "pricing_sync"}:
         plan.request_domains("settings", force_fast=True)
     elif event_type == "usage_cache_hydrated":
         plan.request_snapshot(force_fast=True)
