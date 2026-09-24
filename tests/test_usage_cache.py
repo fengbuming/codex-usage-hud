@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import json
+import shutil
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from codex_usage_hud.core import JsonlSessionParser
+from codex_usage_hud.core.calculator import UsageCalculator
+from codex_usage_hud.core.deleted_usage import DeletedUsageLedger
+from codex_usage_hud.core.parser import CostEstimator
 from codex_usage_hud.usage_cache import UsageSummaryCache
 from codex_usage_hud.usage_summary_store import UsageSummaryStore
 
@@ -353,3 +357,165 @@ def test_persisted_session_summaries_only_reparse_changed_jsonl(
 
     assert changed_total.tokens == 45
     assert changed_parser.read_paths == [paths[0].resolve()]
+
+
+def test_usage_cache_reprices_unchanged_session_after_price_update(
+    tmp_path: Path,
+) -> None:
+    sessions = tmp_path / "sessions"
+    sessions.mkdir()
+    path = sessions / "current.jsonl"
+    path.write_text(
+        "\n".join(
+            json.dumps(record)
+            for record in (
+                _record(
+                    "2026-07-30T00:00:00Z",
+                    "session_meta",
+                    {"id": "s1", "model_provider": "custom"},
+                ),
+                _record(
+                    "2026-07-30T00:00:01Z",
+                    "turn_context",
+                    {"model": "gpt-6-sol"},
+                ),
+                _token_count("2026-07-30T00:00:02Z", 1_000_000),
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    unchanged_stat = path.stat()
+    day = datetime(2026, 7, 30, tzinfo=timezone.utc)
+    week = datetime(2026, 7, 27, tzinfo=timezone.utc)
+    database = tmp_path / "usage-summary.sqlite3"
+    parser = JsonlSessionParser(cost_estimator=CostEstimator(UsageCalculator({})))
+    cache = UsageSummaryCache(
+        parser,
+        min_rescan_seconds=3600,
+        summary_store=UsageSummaryStore(database),
+    )
+
+    unpriced_day, unpriced_week = cache.summarize(sessions, day, week)
+    for summary in (unpriced_day, unpriced_week):
+        assert summary.total_event_count == 1
+        assert summary.priced_event_count == 0
+        assert summary.cost_usd == 0
+
+    restart_database = tmp_path / "usage-summary-before-restart.sqlite3"
+    shutil.copyfile(database, restart_database)
+    updated_estimator = CostEstimator(
+        UsageCalculator(
+            {
+                "gpt-6-sol": {
+                    "model": "gpt-6-sol",
+                    "provider": "custom",
+                    "input": 2,
+                    "cached_input": 2,
+                    "output": 2,
+                    "reasoning": 2,
+                }
+            }
+        )
+    )
+    parser.cost_estimator = updated_estimator
+
+    updated_day, updated_week = cache.summarize(
+        sessions, day, week, allow_stale=True
+    )
+    restarted_cache = UsageSummaryCache(
+        JsonlSessionParser(cost_estimator=updated_estimator),
+        summary_store=UsageSummaryStore(restart_database),
+    )
+    restarted_day, restarted_week = restarted_cache.summarize(sessions, day, week)
+
+    for summary in (updated_day, updated_week, restarted_day, restarted_week):
+        assert summary.total_event_count == 1
+        assert summary.priced_event_count == 1
+        assert summary.cost_usd == 2
+    assert path.stat().st_mtime_ns == unchanged_stat.st_mtime_ns
+    assert path.stat().st_size == unchanged_stat.st_size
+
+
+def test_deleted_unpriced_usage_can_use_new_unscoped_price(tmp_path: Path) -> None:
+    now = datetime.now(timezone.utc)
+    day = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    week = day - timedelta(days=6)
+    timestamp = now.isoformat()
+    session_id = "00000000-0000-0000-0000-000000000001"
+    sessions = tmp_path / "sessions"
+    sessions.mkdir()
+    path = sessions / "deleted.jsonl"
+    path.write_text(
+        "\n".join(
+            json.dumps(record)
+            for record in (
+                _record(
+                    timestamp,
+                    "session_meta",
+                    {"id": session_id, "model_provider": "custom"},
+                ),
+                _record(timestamp, "turn_context", {"model": "gpt-6-sol"}),
+                _token_count(timestamp, 1_000_000),
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    parser = JsonlSessionParser(cost_estimator=CostEstimator(UsageCalculator({})))
+    ledger = DeletedUsageLedger(tmp_path / "deleted-usage.json")
+    receipt = ledger.prepare(
+        session_id=session_id,
+        family_session_ids=(session_id,),
+        title="",
+        workdir_name="",
+        rollout_paths=(path,),
+        parser=parser,
+        now=now,
+    )
+    ledger.commit(receipt, now=now)
+    path.unlink()
+    cache = UsageSummaryCache(
+        parser,
+        min_rescan_seconds=3600,
+        deleted_usage_ledger=ledger,
+    )
+
+    unpriced, _ = cache.summarize(sessions, day, week)
+    assert (unpriced.priced_event_count, unpriced.total_event_count) == (0, 1)
+
+    parser.cost_estimator = CostEstimator(
+        UsageCalculator(
+            {
+                "gpt-6-sol": {
+                    "model": "gpt-6-sol",
+                    "provider": "custom",
+                    "base_url": "https://scoped.example/v1",
+                    "input": 2,
+                    "cached_input": 2,
+                    "output": 2,
+                }
+            }
+        )
+    )
+    scoped, _ = cache.summarize(sessions, day, week, allow_stale=True)
+    assert (scoped.priced_event_count, scoped.total_event_count) == (0, 1)
+
+    parser.cost_estimator = CostEstimator(
+        UsageCalculator(
+            {
+                "gpt-6-sol": {
+                    "model": "gpt-6-sol",
+                    "provider": "custom",
+                    "input": 2,
+                    "cached_input": 2,
+                    "output": 2,
+                }
+            }
+        )
+    )
+    priced, _ = cache.summarize(sessions, day, week, allow_stale=True)
+    assert (priced.priced_event_count, priced.total_event_count) == (1, 1)
+    assert priced.cost_usd == 2

@@ -1,7 +1,10 @@
-from codex_usage_hud.config import UserConfig
+from dataclasses import replace
+
+from codex_usage_hud.config import ModelPrice, UserConfig
 from codex_usage_hud.runtime_settings import (
     background_usage_response_status,
     changed_config_keys,
+    partial_domains_for_changed_config,
     partial_domains_for_command,
 )
 
@@ -92,3 +95,22 @@ def test_pricing_sync_status_change_only_refreshes_settings_domain() -> None:
     assert partial_domains_for_command(
         {"action": "save"}, previous_config=previous, current_config=current
     ) == {"settings"}
+
+
+def test_changed_model_price_rebuilds_budget_snapshot() -> None:
+    previous = UserConfig.defaults()
+    current = replace(
+        previous,
+        model_prices={
+            **previous.model_prices,
+            "gpt-6-sol": ModelPrice(2.0, 0.2, 10.0, 10.0),
+        },
+    )
+
+    assert partial_domains_for_changed_config({"model_prices"}) is None
+    for action in ("save", "savePricing", "applyPricingSync"):
+        assert partial_domains_for_command(
+            {"action": action},
+            previous_config=previous,
+            current_config=current,
+        ) is None

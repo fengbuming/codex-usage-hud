@@ -83,6 +83,8 @@ def changed_config_keys(previous: UserConfig, current: UserConfig) -> set[str]:
 
 
 def partial_domains_for_changed_config(changed_keys: set[str]) -> set[str] | None:
+    if changed_keys & {"model_prices", "pricing_versions", "provider_settings"}:
+        return None
     if changed_keys and not changed_keys.issubset(_SAFE_PARTIAL_KEYS):
         return None
     domains = {"settings"}
@@ -102,6 +104,11 @@ def partial_domains_for_command(
     current_config: UserConfig,
 ) -> set[str] | None:
     action = str(command.get("action") or "").strip()
+    if (
+        previous_config.price_table() != current_config.price_table()
+        or previous_config.pricing_versions != current_config.pricing_versions
+    ):
+        return None
     if action in SESSION_CLEANUP_COMMANDS:
         return {"settings", "sessionCleanup"}
     if action in SESSION_INDEX_COMMANDS:

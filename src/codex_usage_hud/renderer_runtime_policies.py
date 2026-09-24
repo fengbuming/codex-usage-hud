@@ -193,10 +193,12 @@ def _renderer_budget_window_keys(context: "RuntimeContext") -> tuple[str, str]:
 
 def _renderer_budget_signature(context: "RuntimeContext") -> tuple[object, ...]:
     day_key, week_key = _renderer_budget_window_keys(context)
+    estimator = getattr(getattr(context, "parser", None), "cost_estimator", None)
     return (
         session_snapshots.session_path_key(getattr(context, "sessions_root", None)),
         day_key,
         week_key,
+        str(getattr(estimator, "pricing_fingerprint", "") or ""),
     )
 
 

@@ -153,7 +153,15 @@ def path_under_usage_roots(path: Path, scan_roots: Sequence[Path]) -> bool:
 
 def usage_parser_version(parser: object) -> str:
     custom = str(getattr(parser, "usage_contribution_version", "") or "").strip()
-    return custom or USAGE_CONTRIBUTION_PARSER_VERSION
+    if custom:
+        return custom
+    estimator = getattr(parser, "cost_estimator", None)
+    pricing_fingerprint = str(
+        getattr(estimator, "pricing_fingerprint", "") or ""
+    ).strip()
+    if pricing_fingerprint:
+        return f"{USAGE_CONTRIBUTION_PARSER_VERSION}:{pricing_fingerprint}"
+    return USAGE_CONTRIBUTION_PARSER_VERSION
 
 
 T = TypeVar("T")

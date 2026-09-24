@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from fnmatch import fnmatchcase
+import hashlib
+import json
 import math
 import re
 from typing import Any, Iterable, Mapping
@@ -221,6 +223,35 @@ class UsageCalculator:
         self._version_profiles = [
             _price_profile_from_version(version) for version in versions
         ]
+        profiles = [
+            (
+                profile.key,
+                profile.model_pattern,
+                profile.provider,
+                profile.base_url,
+                profile.prices,
+                profile.version_id,
+                datetime_to_json(profile.effective_at)
+                if profile.effective_at is not None
+                else None,
+                datetime_to_json(profile.created_at)
+                if profile.created_at is not None
+                else None,
+            )
+            for profile in (
+                *self._price_profiles,
+                *self._builtin_profiles,
+                *self._version_profiles,
+            )
+        ]
+        pricing_key = json.dumps(
+            (self._has_version_catalog, len(self._price_profiles), profiles),
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        self.pricing_fingerprint = hashlib.sha256(
+            pricing_key.encode("utf-8")
+        ).hexdigest()[:20]
 
     def normalize_model_name(self, model_name: str) -> str:
         """Resolve a model name to the closest supported price entry."""

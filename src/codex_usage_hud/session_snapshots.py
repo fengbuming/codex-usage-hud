@@ -13,6 +13,7 @@ import time
 from .core import JsonlSessionParser, JsonlTailState, ParsedSession, SseRequestStateMachine
 from .core.runtime_events import RuntimeEventBus
 from .platforms import is_new_session_source, is_pending_session_source
+from .usage_contributions import usage_parser_version
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -100,6 +101,7 @@ class _CacheEntry:
     file_size: int
     mtime: float
     accessed_at: float
+    parser_version: str
 
 
 def clone_cached_snapshot(snapshot: ParsedSession) -> ParsedSession:
@@ -155,6 +157,7 @@ class SessionSnapshotCache:
 
     def snapshot_for(self, path: Path, *, session_id: str = "") -> ParsedSession:
         key = self._cache_path(path)
+        parser_version = usage_parser_version(self._parser)
         try:
             stat = key.stat()
         except OSError:
@@ -167,6 +170,7 @@ class SessionSnapshotCache:
             entry = self._entries.get(key)
             if (
                 entry is not None
+                and entry.parser_version == parser_version
                 and entry.file_size == int(stat.st_size)
                 and entry.mtime == stat.st_mtime
             ):
@@ -175,7 +179,11 @@ class SessionSnapshotCache:
                 if session_id and str(cached.session_id or "").strip() in {"", "n/a"}:
                     cached.session_id = session_id
                 return cached
-            if entry is not None and int(stat.st_size) > entry.file_size:
+            if (
+                entry is not None
+                and entry.parser_version == parser_version
+                and int(stat.st_size) > entry.file_size
+            ):
                 current_file_id = self._parser._file_id(key, stat)
                 if entry.state.file_id == current_file_id:
                     preserve_previous_cost = True
@@ -210,7 +218,14 @@ class SessionSnapshotCache:
                     path = self._pending.popleft()
                     session_id = self._pending_session_ids.get(path, "")
                     previous = self._entries.get(path)
-                    state = previous.state if previous is not None else None
+                    parser_version = usage_parser_version(self._parser)
+                    state = (
+                        previous.state
+                        if previous is not None
+                        and previous.parser_version == parser_version
+                        else None
+                    )
+                pricing_changed = False
                 try:
                     snapshot, state = self._parser.parse_file_incremental(
                         path,
@@ -231,7 +246,10 @@ class SessionSnapshotCache:
                     )
                 else:
                     with self._lock:
-                        if not self._closed.is_set():
+                        pricing_changed = (
+                            parser_version != usage_parser_version(self._parser)
+                        )
+                        if not self._closed.is_set() and not pricing_changed:
                             latest_session_id = self._pending_session_ids.get(path, "")
                             if latest_session_id and str(snapshot.session_id or "").strip() in {
                                 "",
@@ -244,14 +262,19 @@ class SessionSnapshotCache:
                                 file_size=int(stat.st_size),
                                 mtime=stat.st_mtime,
                                 accessed_at=time.monotonic(),
+                                parser_version=parser_version,
                             )
                             self._trim_locked()
-                    if not self._closed.is_set():
+                    if not self._closed.is_set() and not pricing_changed:
                         self._publish_hydrated(path)
                 finally:
                     with self._lock:
                         self._queued.discard(path)
-                        self._pending_session_ids.pop(path, None)
+                        latest_session_id = self._pending_session_ids.pop(
+                            path, session_id
+                        )
+                        if pricing_changed and not self._closed.is_set():
+                            self._enqueue_locked(path, latest_session_id)
 
     def _trim_locked(self) -> None:
         while len(self._entries) > self._max_entries:

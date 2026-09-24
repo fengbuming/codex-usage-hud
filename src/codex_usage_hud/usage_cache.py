@@ -83,6 +83,7 @@ class UsageSummaryCache:
             parser,
             on_commit=self._touch_insights,
         )
+        self._last_parser_version = usage_parser_version(parser)
         self._entries: dict[Path, _UsageCacheEntry] = {}
         self._dirty_entries: set[Path] = set()
         self._hydrated_scan_key: (
@@ -157,6 +158,21 @@ class UsageSummaryCache:
         self._insights_revision += 1
         self._insights_generated_at = datetime.now().astimezone()
 
+    def _refresh_parser_version(self) -> None:
+        parser_version = usage_parser_version(self._parser)
+        if parser_version == self._last_parser_version:
+            return
+        self._last_parser_version = parser_version
+        self._entries.clear()
+        self._dirty_entries.clear()
+        self._hydrated_scan_key = None
+        self._deleted_entries.clear()
+        self._last_scan_key = None
+        self._last_scan_at = 0.0
+        self._last_day_total = UsageSummary()
+        self._last_week_total = UsageSummary()
+        self._touch_insights()
+
     def is_warm_for(
         self,
         sessions_root: Path,
@@ -166,7 +182,10 @@ class UsageSummaryCache:
         """Return whether this cache has scanned the requested budget windows."""
         sessions_root = self._cache_path(sessions_root)
         scan_key = (self._scan_roots(sessions_root), day_start, week_start)
-        return self._last_scan_key == scan_key
+        return (
+            self._last_scan_key == scan_key
+            and self._last_parser_version == usage_parser_version(self._parser)
+        )
 
     def _trim_tail_states(self) -> None:
         """Bound retained raw JSONL records while keeping recent files incremental."""
@@ -211,6 +230,9 @@ class UsageSummaryCache:
         except DeletedUsageLedgerError as exc:
             _LOGGER.warning("deleted_session_usage_load_failed error=%s", exc)
             return []
+        estimator = getattr(self._parser, "cost_estimator", None)
+        price_snapshot = getattr(estimator, "price_snapshot", None)
+        calculate = getattr(estimator, "calculate", None)
         month_start = day_start - timedelta(days=29)
         entries: list[_UsageCacheEntry] = []
         for session in sessions:
@@ -218,6 +240,29 @@ class UsageSummaryCache:
                 continue
             providers: dict[str, list[DeletedUsageEvent]] = {}
             for event in session.events:
+                if (
+                    event.cost_usd is None
+                    and callable(price_snapshot)
+                    and callable(calculate)
+                ):
+                    selected = price_snapshot(
+                        event.model,
+                        provider=event.provider,
+                        occurred_at=event.timestamp,
+                    )
+                    if selected["status"] != "unavailable" and not selected["baseUrl"]:
+                        cost = calculate(
+                            event.model,
+                            event.input_tokens,
+                            event.cached_tokens,
+                            event.output_tokens,
+                            event.reasoning_tokens,
+                            cache_write_tokens=event.cache_write_tokens,
+                            provider=event.provider,
+                            occurred_at=event.timestamp,
+                        )
+                        if cost is not None:
+                            event = replace(event, cost_usd=cost)
                 providers.setdefault(event.provider, []).append(event)
             for provider, events in providers.items():
                 daily_usage = self._daily_usage_contributions(events, day_start)
@@ -478,6 +523,7 @@ class UsageSummaryCache:
         included_providers: Iterable[str] | None = None,
     ) -> tuple[UsageSummary, UsageSummary]:
         now = time.monotonic()
+        self._refresh_parser_version()
         sessions_root = self._cache_path(sessions_root)
         scan_roots = self._scan_roots(sessions_root)
         self._hydrate_persisted_entries(scan_roots, day_start, week_start)
@@ -765,6 +811,7 @@ class UsageSummaryCache:
         if (
             not force
             and entry is not None
+            and entry.parser_version == usage_parser_version(self._parser)
             and (
                 entry.mtime_ns == int(stat.st_mtime_ns)
                 if entry.mtime_ns is not None

@@ -96,11 +96,6 @@ def apply_to_context(
     overrides = dict(getattr(context, "config_overrides", {}) or {})
     next_config = apply_cli_overrides(next_config, overrides)
     previous_config = getattr(context, "user_config", UserConfig.defaults())
-    prices_changed = (
-        next_config.price_table() != previous_config.price_table()
-        or getattr(next_config, "pricing_versions", ())
-        != getattr(previous_config, "pricing_versions", ())
-    )
     sessions_root = getattr(context, "sessions_root", None)
     registry = None
     if isinstance(sessions_root, Path):
@@ -117,6 +112,10 @@ def apply_to_context(
             sessions_root=sessions_root,
             include_history=include_history,
         )
+    prices_changed = (
+        next_config.price_table() != previous_config.price_table()
+        or next_config.pricing_versions != previous_config.pricing_versions
+    )
     context.user_config = next_config
     context.settings_mtime = mtime
     context.daily_budget_usd = max(0.0, float(next_config.daily_budget_usd))
@@ -137,6 +136,10 @@ def apply_to_context(
         if tracker is not None:
             tracker.cost_estimator = estimator
         ports.configure_ui_cost_estimators(estimator)
+        worker = getattr(context, "usage_insights_worker", None)
+        request_refresh = getattr(worker, "request_refresh", None)
+        if callable(request_refresh):
+            request_refresh(request_id="pricing-change")
     session_lock_monitor = getattr(context, "session_lock_monitor", None)
     set_enabled = getattr(session_lock_monitor, "set_enabled", None)
     if callable(set_enabled):

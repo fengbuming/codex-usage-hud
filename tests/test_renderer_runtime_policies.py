@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from codex_usage_hud import renderer_runtime, renderer_runtime_policies
 from codex_usage_hud import runtime_policies
 from codex_usage_hud import runtime_compat
+from codex_usage_hud.config import UserConfig
 
 
 _OWNER_NAMES = (
@@ -75,6 +76,20 @@ def test_policy_invalidation_adapters_keep_incremental_jsonl_contract() -> None:
     assert renderer_runtime_policies._renderer_budget_refresh_paths(
         {current, Path("settings.json")}
     ) == ()
+
+
+def test_budget_signature_changes_with_pricing() -> None:
+    estimator = SimpleNamespace(pricing_fingerprint="old")
+    context = SimpleNamespace(
+        sessions_root=Path("sessions"),
+        user_config=UserConfig.defaults(),
+        parser=SimpleNamespace(cost_estimator=estimator),
+    )
+
+    before = renderer_runtime_policies._renderer_budget_signature(context)
+    estimator.pricing_fingerprint = "new"
+
+    assert renderer_runtime_policies._renderer_budget_signature(context) != before
 
 
 def test_policy_idle_wait_adapter_only_wakes_for_event_driven_idle_state() -> None:

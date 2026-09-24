@@ -1085,6 +1085,24 @@ class CostEstimator:
     ) -> None:
         self._calculator = calculator or UsageCalculator()
         self._default_model = default_model
+        self.pricing_fingerprint = (
+            f"{self._default_model}:{self._calculator.pricing_fingerprint}"
+        )
+
+    def price_snapshot(
+        self,
+        model: str,
+        *,
+        provider: str = "",
+        base_url: str = "",
+        occurred_at: datetime | None = None,
+    ) -> dict[str, object]:
+        return self._calculator.price_snapshot(
+            model or self._default_model,
+            provider=provider,
+            base_url=base_url,
+            occurred_at=occurred_at,
+        )
 
     def calculate(
         self,
