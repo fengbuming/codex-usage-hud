@@ -7,6 +7,14 @@ and this repository follows Semantic Versioning for release tags.
 
 ## [Unreleased]
 
+## [1.3.1] - 2026-09-28
+
+### Fixed
+
+- Fixed Windows Store Codex startup failing with "The process has no package identity"
+  when launched by the HUD. Packaged applications now use Windows application
+  activation while retaining the remote-debugging arguments required by Renderer mode.
+
 ## [1.3.0] - 2026-09-24
 
 Renderer Recovery, Provider Pricing, and Configuration Edition.

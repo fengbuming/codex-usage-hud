@@ -193,6 +193,48 @@ def test_windows_executable_launch_filters_pyinstaller_environment(
     )
 
 
+@pytest.mark.parametrize("activated", [True, False])
+def test_store_launch_preserves_identity_and_debug_arguments(
+    monkeypatch: pytest.MonkeyPatch, activated: bool,
+) -> None:
+    executable = Path(
+        "C:/Program Files/WindowsApps/OpenAI.Codex_26.924_x64__2p2nqsd0c76g0/app/ChatGPT.exe"
+    )
+    monkeypatch.setattr(app.sys, "platform", "win32")
+    monkeypatch.delenv(app.CODEX_APP_ID_ENV, raising=False)
+    activate = MagicMock(return_value=activated)
+    direct = MagicMock()
+    monkeypatch.setattr(app, "activate_packaged_app", activate)
+    monkeypatch.setattr(app, "_direct_windows_executable_open", direct)
+    parameters = app.codex_app_debugger_parameters(61234)
+
+    assert app._shell_execute_open_with_elevation_fallback(
+        executable, parameters=parameters, working_dir=executable.parent,
+    ) is activated
+
+    activate.assert_called_once_with(app.CODEX_APP_DEFAULT_ID, parameters)
+    direct.assert_not_called()
+
+
+def test_packaged_shell_launch_filters_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    inherited: dict[str, str] = {}
+    monkeypatch.setattr(app.sys, "platform", "win32")
+    monkeypatch.setenv("_PYI_ARCHIVE_FILE", "C:/hud.exe")
+
+    def activate(app_id: str, arguments: str) -> bool:
+        assert app_id == "Example.Codex!App"
+        assert arguments == "--remote-debugging-port=61234"
+        inherited.update(os.environ)
+        return True
+
+    monkeypatch.setattr(app, "activate_packaged_app", activate)
+    assert app._shell_execute_open(
+        "shell:AppsFolder\\Example.Codex!App", parameters="--remote-debugging-port=61234",
+    )
+    assert "_PYI_ARCHIVE_FILE" not in inherited
+    assert os.environ["_PYI_ARCHIVE_FILE"] == "C:/hud.exe"
+
+
 def test_windows_launch_inherits_registry_env_for_shell_children(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

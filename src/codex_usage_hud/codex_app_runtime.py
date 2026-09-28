@@ -24,6 +24,7 @@ from .process_environment import (
     external_process_environment,
 )
 from .platforms.cdp_probe import cdp_port_from_env
+from .platforms.windows_activation import activate_packaged_app
 from .runtime_paths import (
     CODEX_APP_DEFAULT_ID,
     CODEX_APP_ID_ENV,
@@ -184,6 +185,10 @@ def _shell_execute_open(
 ) -> bool:
     if not sys.platform.startswith("win"):
         return False
+    prefix = "shell:appsfolder\\"
+    if str(target).lower().startswith(prefix):
+        with external_environment_scope():
+            return activate_packaged_app(str(target)[len(prefix):], parameters)
     try:
         import ctypes
         from ctypes import wintypes
@@ -253,6 +258,13 @@ def _shell_execute_open_with_elevation_fallback(
     parameters: str = "",
     working_dir: str | Path | None = None,
 ) -> bool:
+    # Store executables require package activation. A successful Popen only
+    # confirms process creation; the app can then fail before opening a window.
+    normalized = _normalized_windows_path(str(target))
+    if "\\windowsapps\\openai.codex_" in normalized:
+        app_id = os.environ.get(CODEX_APP_ID_ENV, "").strip() or CODEX_APP_DEFAULT_ID
+        target_id = app_id if app_id.lower().startswith("shell:") else f"shell:AppsFolder\\{app_id}"
+        return _shell_execute_open(target_id, parameters=parameters)
     if _direct_windows_executable_open(
         target,
         parameters=parameters,
