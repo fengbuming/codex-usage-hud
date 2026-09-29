@@ -927,7 +927,6 @@ def _refresh_visible_current_work_item(
     )
     segment_released = bool(
         refreshed is not None
-        and refreshed.status == "recent"
         and _clear_terminal_item_task_for_new_segment(context, snapshot)
     )
     _remember_released_segment(
@@ -954,6 +953,13 @@ def _refresh_visible_current_work_item(
             )
         if existing_index is None:
             return list(items)
+        return [item for index, item in enumerate(items) if index != existing_index]
+    if (
+        refreshed is not None
+        and not segment_released
+        and _work_overlay_terminal_item_tasks(context).get(session_id)
+        == _terminal_task_marker(refreshed)
+    ):
         return [item for index, item in enumerate(items) if index != existing_index]
     if existing_index is None:
         # Replace the immediate send bubble when Codex later provides the

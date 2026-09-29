@@ -38,9 +38,9 @@ let textWrites = 0, padWrites = 0, measurements = 0;
 let text = 'Total $75', pad = '76px';
 let panelWidth = '300px';
 const copy = {get textContent(){return text}, set textContent(v){textWrites++;text=v}};
-const badge = {scrollWidth:60, getBoundingClientRect(){measurements++;return {width:60}}, querySelector(){return copy}};
+const badge = {style:{display:''},scrollWidth:60, getBoundingClientRect(){measurements++;return {width:60}}, querySelector(){return copy}};
 const label = {clientWidth:200,scrollWidth:80};
-const rail = {dataset:{overflowBadge:'Total $75'},closest(){return {style:{width:panelWidth}}},querySelector(s){return s.includes('track-text')?label:badge},style:{width:'',getPropertyValue(){return pad},setProperty(k,v){padWrites++;pad=v}}};
+const rail = {dataset:{overflowBadge:'Total $75'},closest(){return {style:{width:panelWidth}}},querySelector(s){return s.includes('track-text')?label:badge},style:{width:'',getPropertyValue(){return pad},setProperty(k,v){padWrites++;pad=v},removeProperty(){pad=''}}};
 global.getComputedStyle = () => ({right:'6px'});
 ''' + factory + r'''
 const domain = createBudgetDomain({}, {});
@@ -66,6 +66,73 @@ assert.equal(measurements, 4);
         capture_output=True, text=True, encoding="utf-8", check=False,
     )
     assert result.returncode == 0, result.stderr
+
+def test_budget_badge_hides_and_remeasures_after_rail_or_font_resize() -> None:
+    factory = BUDGET.split("  const budgetDomain = ctx.domains.register(", 1)[0]
+    script = r'''
+const assert = require('node:assert/strict');
+let resizeCallback, fontCallback, width = 260, wideFont = false;
+let text = 'Full $75', pad = '';
+let measurements = 0;
+const copy = {get textContent(){return text},set textContent(value){text=value}};
+const badge = {
+  style:{display:''},
+  get scrollWidth(){return this.style.display === 'none' ? 0 : (text === 'Full $75' ? (wideFont ? 145 : 118) : 68)},
+  getBoundingClientRect(){measurements++;return {width:this.scrollWidth}},
+  querySelector(){return copy},
+};
+const label = {
+  scrollWidth:100,
+  get clientWidth(){return width - (rail.dataset.badge ? Number.parseInt(pad || '96', 10) : 10) - 20},
+};
+const rail = {
+  isConnected:true,
+  dataset:{overflowBadge:'Full $75',overflowBadgeCompact:'$75'},
+  closest(){return {style:{width:'300px'},dataset:{expanded:'false'}}},
+  querySelector(selector){return selector.includes('track-text') ? label : badge},
+  style:{width:'',getPropertyValue(){return pad},setProperty(_key,value){pad=value},removeProperty(){pad=''}},
+};
+const root = {querySelectorAll(selector){return selector.includes('progress-rail') ? [rail] : []}};
+global.rootId = 'hud-root';
+global.document = {fonts:{addEventListener(){}},getElementById(){return root}};
+global.ResizeObserver = class {constructor(callback){resizeCallback=callback}observe(){}unobserve(){}disconnect(){}};
+global.getComputedStyle = () => ({right:'6px'});
+const ctx = {
+  observers:{set(_name,observer){return observer},clear(){}},
+  lifecycle:{listen(_owner,_target,_type,callback){fontCallback=callback;return ()=>{}}},
+  frames:{cancel(){}},
+};
+''' + factory + r'''
+const domain = createBudgetDomain(ctx, {});
+domain.install();
+domain.refreshProgressRailLabel(rail);
+assert.equal(text, 'Full $75');
+assert.equal(badge.style.display, '');
+const cachedMeasurements = measurements;
+domain.refreshProgressRailLabel(rail);
+assert.equal(measurements, cachedMeasurements);
+width = 160;
+resizeCallback([{target:rail}]);
+assert.equal(badge.style.display, 'none');
+assert.equal(rail.dataset.badge, undefined);
+assert.equal(pad, '');
+assert.ok(label.clientWidth >= label.scrollWidth);
+width = 260;
+resizeCallback([{target:rail}]);
+assert.equal(text, 'Full $75');
+assert.equal(badge.style.display, '');
+wideFont = true;
+fontCallback();
+assert.equal(text, '$75');
+assert.equal(badge.style.display, '');
+console.log('budget-badge-resize-ok');
+'''
+    result = subprocess.run(
+        ["node", "--input-type=commonjs"], input=script,
+        capture_output=True, text=True, encoding="utf-8", check=False,
+    )
+    assert result.returncode == 0, result.stderr
+
 
 P6_5_DOMAIN_SOURCES = (
     ("layout", "Layout", LAYOUT),

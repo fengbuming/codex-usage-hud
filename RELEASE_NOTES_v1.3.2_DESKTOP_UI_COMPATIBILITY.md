@@ -3,11 +3,14 @@
 Codex Desktop UI Compatibility and Recovery Patch.
 
 - Eliminates repeated budget-badge DOM writes and synchronous reflows observed
-  dominating the renderer CPU profile during active conversations.
+  dominating the renderer CPU profile during active conversations. The badge
+  adapts to rail and font changes and yields space to the usage label on narrow
+  rails.
 - Restores custom model and reasoning-option augmentation in the redesigned
   Codex Desktop model picker.
 - Restores session-search keyword filling and native highlighting with the new
   dynamically generated find-input IDs.
+- Keeps copied-session task bubbles suppressed until a new task is identified.
 - Changes renderer-stall handling to pause HUD injection without automatically
   restarting Codex or repeatedly reinstalling into an unresponsive renderer,
   with a dismissible notice that clears after recovery.

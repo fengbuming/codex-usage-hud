@@ -20,11 +20,15 @@ and this repository follows Semantic Versioning for release tags.
 ### Fixed
 
 - Removed redundant budget-badge text writes and synchronous layout measurements
-  that dominated renderer CPU time during live updates.
+  that dominated renderer CPU time during live updates. Badge layout now
+  remeasures after rail or font changes and hides the badge when even its
+  compact copy would truncate the usage label.
 - Restored model-catalog and reasoning-option augmentation for the redesigned
   Codex Desktop model picker while retaining compatibility with the legacy picker.
 - Restored session-search keyword filling and native highlighting when Codex uses
   dynamically suffixed find-input IDs.
+- Prevented a copied session's suppressed task bubble from reappearing during
+  a stale running refresh, while allowing an explicit new task to appear.
 - Preserved configured model priority order when injecting multiple catalog models.
 - Kept Codex interactive behind the full-screen rest-reminder treatment and
   removed its expensive full-screen blur and continuous glow animation.

@@ -2,7 +2,9 @@
 
 TEXT = r"""
   function createBudgetDomain(ctx, shared) {
-  const badgeLayoutCache = new WeakMap();
+  let badgeLayoutCache = new WeakMap();
+  let badgeResizeObserver = null;
+  let stopFontWatch = null;
   function progressStripViewport(node) {
     const parent = node?.parentElement;
     if (!parent?.classList?.contains("codex-usage-hud-progress-strip-viewport")) return null;
@@ -71,6 +73,7 @@ TEXT = r"""
     if (!rail) return;
     const candidates = progressBadgeCandidates(rail);
     if (!candidates.length) {
+      badgeLayoutCache.delete(rail);
       rail.style.removeProperty("--codex-usage-hud-progress-badge-pad");
       return;
     }
@@ -90,15 +93,23 @@ TEXT = r"""
 
     // Prefer full badge copy. Fall back to cost-only only when the full badge
     // squeezes the fixed left usage/amount label.
+    badge.style.display = "";
+    rail.dataset.badge = "true";
+    let fits = false;
     for (const candidate of candidates) {
       setProgressBadgeText(rail, candidate);
       applyProgressBadgePad(rail);
       if (progressRailLeftLabelFits(rail)) {
+        fits = true;
         break;
       }
     }
+    if (!fits) {
+      badge.style.display = "none";
+      delete rail.dataset.badge;
+      rail.style.removeProperty("--codex-usage-hud-progress-badge-pad");
+    }
     badgeLayoutCache.set(rail, layoutKey);
-    // The final candidate was already applied and measured inside the loop.
   }
 
   function refreshProgressRailLabel(rail) {
@@ -277,10 +288,17 @@ TEXT = r"""
   function renderProgressList(container, metrics) {
     if (!container) return false;
     const items = Array.isArray(metrics) ? metrics.filter((item) => item && item.label) : [];
+    container.querySelectorAll(":scope > .codex-usage-hud-progress-rail").forEach((rail) => {
+      badgeResizeObserver?.unobserve(rail);
+    });
     container.replaceChildren();
     if (items.length > 0) container.dataset.count = String(items.length);
     else delete container.dataset.count;
-    for (const item of items) container.appendChild(progressRail(item));
+    for (const item of items) {
+      const rail = progressRail(item);
+      container.appendChild(rail);
+      badgeResizeObserver?.observe(rail);
+    }
     ctx.lifecycle.frame("budget", () => {
       container.querySelectorAll(":scope > .codex-usage-hud-progress-rail").forEach(refreshProgressRailLabel);
       if (container.classList.contains("codex-usage-hud-progress-strip")) {
@@ -305,6 +323,21 @@ TEXT = r"""
     function install() {
       if (installed) return false;
       installed = true;
+      if (typeof ResizeObserver === "function" && ctx.observers?.set) {
+        badgeResizeObserver = ctx.observers.set("budget_resize", new ResizeObserver((entries) => {
+          for (const { target } of entries) {
+            if (!target?.isConnected) continue;
+            badgeLayoutCache.delete(target);
+            refreshProgressRailBadge(target);
+          }
+        }));
+      }
+      if (document.fonts?.addEventListener && ctx.lifecycle?.listen) {
+        stopFontWatch = ctx.lifecycle.listen("budget_fonts", document.fonts, "loadingdone", () => {
+          badgeLayoutCache = new WeakMap();
+          refresh(document.getElementById(rootId));
+        });
+      }
       return true;
     }
 
@@ -323,6 +356,11 @@ TEXT = r"""
       const wasInstalled = installed;
       installed = false;
       ctx.frames.cancel("budget");
+      ctx.observers?.clear("budget_resize");
+      badgeResizeObserver = null;
+      stopFontWatch?.();
+      stopFontWatch = null;
+      badgeLayoutCache = new WeakMap();
       return wasInstalled;
     }
 

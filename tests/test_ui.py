@@ -3379,6 +3379,44 @@ class BudgetHelperTests(unittest.TestCase):
             [],
         )
 
+    def test_current_refresh_releases_copy_tombstone_for_new_running_prompt(self) -> None:
+        now = datetime.now().astimezone()
+        session_started_at = now - timedelta(minutes=5)
+        source_started_at = session_started_at - timedelta(minutes=4)
+        context = SimpleNamespace(
+            user_config=UserConfig.defaults(),
+            app_provider="custom",
+            _work_overlay_terminal_item_tasks={
+                "copied-session": source_started_at.isoformat(),
+            },
+            _work_overlay_terminal_completion_prompts={
+                "copied-session": "source task",
+            },
+        )
+        snapshot = ParsedSession(
+            session_id="copied-session",
+            session_title="Copied session",
+            model_provider="custom",
+            client_kind="app",
+            session_started_at=session_started_at,
+            task_started_at=source_started_at,
+            task_prompt="new task",
+        )
+        snapshot.request.status = "running"
+        snapshot.request.started_at = now - timedelta(seconds=30)
+        snapshot.request.updated_at = snapshot.request.started_at
+        snapshot.activity = Activity(
+            kind="agent", detail="working", timestamp=snapshot.request.started_at,
+        )
+
+        refreshed = active_work._refresh_visible_current_work_item(
+            context, [], snapshot,
+        )
+
+        self.assertEqual(len(refreshed), 1)
+        self.assertEqual(refreshed[0].status, "running")
+        self.assertEqual(context._work_overlay_terminal_item_tasks, {})
+
     def test_work_overlay_keeps_post_copy_user_steer_completion_without_task_started(self) -> None:
         parser = JsonlSessionParser()
         now = datetime.now().astimezone()
