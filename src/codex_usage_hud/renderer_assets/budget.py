@@ -2,6 +2,7 @@
 
 TEXT = r"""
   function createBudgetDomain(ctx, shared) {
+  const badgeLayoutCache = new WeakMap();
   function progressStripViewport(node) {
     const parent = node?.parentElement;
     if (!parent?.classList?.contains("codex-usage-hud-progress-strip-viewport")) return null;
@@ -76,6 +77,17 @@ TEXT = r"""
     const badge = rail.querySelector(":scope > .codex-usage-hud-progress-badge");
     if (!badge) return;
 
+    const panel = rail.closest?.("[data-panel]");
+    const layoutKey = JSON.stringify([
+      candidates,
+      rail.style.width,
+      panel?.style.width,
+      panel?.dataset?.expanded,
+      globalThis.innerWidth || 0,
+      globalThis.devicePixelRatio || 1,
+    ]);
+    if (badgeLayoutCache.get(rail) === layoutKey) return;
+
     // Prefer full badge copy. Fall back to cost-only only when the full badge
     // squeezes the fixed left usage/amount label.
     for (const candidate of candidates) {
@@ -85,6 +97,7 @@ TEXT = r"""
         break;
       }
     }
+    badgeLayoutCache.set(rail, layoutKey);
     // The final candidate was already applied and measured inside the loop.
   }
 

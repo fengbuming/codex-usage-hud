@@ -36,10 +36,11 @@ def test_budget_badge_refresh_does_not_rewrite_unchanged_text_or_padding() -> No
 const assert = require('node:assert/strict');
 let textWrites = 0, padWrites = 0, measurements = 0;
 let text = 'Total $75', pad = '76px';
+let panelWidth = '300px';
 const copy = {get textContent(){return text}, set textContent(v){textWrites++;text=v}};
 const badge = {scrollWidth:60, getBoundingClientRect(){measurements++;return {width:60}}, querySelector(){return copy}};
 const label = {clientWidth:200,scrollWidth:80};
-const rail = {dataset:{overflowBadge:'Total $75'},querySelector(s){return s.includes('track-text')?label:badge},style:{getPropertyValue(){return pad},setProperty(k,v){padWrites++;pad=v}}};
+const rail = {dataset:{overflowBadge:'Total $75'},closest(){return {style:{width:panelWidth}}},querySelector(s){return s.includes('track-text')?label:badge},style:{width:'',getPropertyValue(){return pad},setProperty(k,v){padWrites++;pad=v}}};
 global.getComputedStyle = () => ({right:'6px'});
 ''' + factory + r'''
 const domain = createBudgetDomain({}, {});
@@ -47,11 +48,18 @@ domain.refreshProgressRailLabel(rail);
 domain.refreshProgressRailLabel(rail);
 assert.equal(textWrites, 0);
 assert.equal(padWrites, 0);
-assert.equal(measurements, 2);
+assert.equal(measurements, 1);
 rail.dataset.overflowBadge = 'Total $80';
 domain.refreshProgressRailLabel(rail);
 assert.equal(textWrites, 1);
 assert.equal(text, 'Total $80');
+assert.equal(measurements, 2);
+panelWidth = '260px';
+domain.refreshProgressRailLabel(rail);
+assert.equal(measurements, 3);
+rail.style.width = '240px';
+domain.refreshProgressRailLabel(rail);
+assert.equal(measurements, 4);
 '''
     result = subprocess.run(
         ["node", "--input-type=commonjs"], input=script,
