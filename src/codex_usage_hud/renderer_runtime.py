@@ -576,12 +576,19 @@ def run_renderer_hud_session(args: argparse.Namespace, *, lock_already_held: boo
                             show_notice(
                                 title="Codex 界面无响应",
                                 message="HUD 已暂停注入，让 Codex 自行恢复；若长时间白屏，请手动重启 Codex。",
+                                dismissible=True,
                             )
                     except Exception:
                         ports._LOGGER.debug('renderer_hung_notice_failed', exc_info=True)
                     command_refresh_requested.set()
 
-                connection_manager = renderer_connection.RendererConnectionManager(client=client, tracker_provider=lambda: getattr(context, 'active_session_tracker', None), wake=command_refresh_requested.set, schedule_soft_reinstall=loop_controls.schedule_soft_reinstall, debug_enabled=ports._runtime_debug_enabled, runtime_errors=lambda: ports._runtime_errors_payload_for_context(context), health=connection_health, escalate_renderer_hung=escalate_renderer_hung)
+                def renderer_recovered() -> None:
+                    clear_notice = getattr(work_overlay, 'clear_system_notice', None)
+                    if callable(clear_notice):
+                        clear_notice()
+                    ports._append_renderer_diagnostic('renderer_hung_recovered')
+
+                connection_manager = renderer_connection.RendererConnectionManager(client=client, tracker_provider=lambda: getattr(context, 'active_session_tracker', None), wake=command_refresh_requested.set, schedule_soft_reinstall=loop_controls.schedule_soft_reinstall, debug_enabled=ports._runtime_debug_enabled, runtime_errors=lambda: ports._runtime_errors_payload_for_context(context), health=connection_health, escalate_renderer_hung=escalate_renderer_hung, renderer_recovered=renderer_recovered)
                 connection_managers['manager'] = connection_manager
                 loop_controls.connection_manager = connection_manager
                 publish_rest_reminder = getattr(work_overlay, 'update_rest_reminder', None)

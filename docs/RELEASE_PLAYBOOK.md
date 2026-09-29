@@ -17,7 +17,7 @@ patch releases can follow the same path without rediscovery.
    directly.
 6. Run the validation set:
    - `python -m pytest`
-   - `python -m pytest -m ui`
+   - `python -m pytest -m "ui or qt_ui"`
    - `python -m compileall -q src tools tests`
    - `python tools/pre_release_check.py`
 7. If the release changes renderer injection, desktop overlay behavior, or

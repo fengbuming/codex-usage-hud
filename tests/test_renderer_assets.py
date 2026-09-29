@@ -114,6 +114,28 @@ def test_renderer_kernel_manifest_and_shared_contract_are_explicit() -> None:
     assert 'ctx.domains.register(\n    "active_session",' in script
 
 
+def test_model_picker_supports_new_radio_menu_contract() -> None:
+    script = renderer_script._RENDERER_HUD_SCRIPT_TEMPLATE
+
+    assert "function modelPickerModernProps(node)" in script
+    assert "[role=\"menuitem\"], [role=\"menuitemradio\"]" in script
+    assert "Array.isArray(props?.models)" in script
+    assert 'typeof props?.onSelectModel === "function"' in script
+    assert '}, 120)?.memoizedProps || null;' in script
+    assert "modernProps.onSelectModel(option.model, option.defaultReasoningEffort" in script
+    assert 'document.querySelector(\'[data-reasoning-slider="true"]\')' in script
+
+
+def test_native_thread_find_supports_dynamic_input_ids() -> None:
+    script = renderer_script._RENDERER_HUD_SCRIPT_TEMPLATE
+
+    assert "function threadFindInput()" in script
+    assert 'input[id^="content-search-input-"]' in script
+    assert 'input[aria-label="Find in chat"]' in script
+    assert "const existingInput = threadFindInput();" in script
+    assert 'document.getElementById("content-search-input")' not in script
+
+
 def test_session_cleanup_payload_keeps_revision_state_in_function_scope() -> None:
     script = renderer_script._RENDERER_HUD_SCRIPT_TEMPLATE
     start = script.index("function applySessionCleanupPayload")

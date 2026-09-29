@@ -77,6 +77,8 @@ def _normalized_system_notice(value: object) -> dict[str, object] | None:
         "message": message,
         "status": status,
         "persistent": bool(value.get("persistent")),
+        "dismissible": bool(value.get("dismissible")),
+        "instanceId": str(value.get("instanceId") or ""),
     }
 
 def _system_notice_overlay_item(notice: Mapping[str, object]) -> dict[str, object]:
@@ -84,11 +86,13 @@ def _system_notice_overlay_item(notice: Mapping[str, object]) -> dict[str, objec
         "id": str(notice.get("id") or ""),
         "title": str(notice.get("title") or ""),
         "status": str(notice.get("status") or "warning"),
-        "statusLabel": "请稍候",
-        "statusText": "请稍候",
+        "statusLabel": "等待恢复" if notice.get("dismissible") else "请稍候",
+        "statusText": "等待恢复" if notice.get("dismissible") else "请稍候",
         "lastText": str(notice.get("message") or ""),
         "elapsedText": "",
         "systemNotice": True,
+        "dismissible": bool(notice.get("dismissible")),
+        "taskStartedAt": str(notice.get("instanceId") or ""),
     }
 
 def _item_is_system_notice(item: Mapping[str, object]) -> bool:

@@ -29,6 +29,36 @@ DOMAIN_SOURCES = (
     ("session_view", "SessionView", SESSION_VIEW),
 )
 
+
+def test_budget_badge_refresh_does_not_rewrite_unchanged_text_or_padding() -> None:
+    factory = BUDGET.split("  const budgetDomain = ctx.domains.register(", 1)[0]
+    script = r'''
+const assert = require('node:assert/strict');
+let textWrites = 0, padWrites = 0, measurements = 0;
+let text = 'Total $75', pad = '76px';
+const copy = {get textContent(){return text}, set textContent(v){textWrites++;text=v}};
+const badge = {scrollWidth:60, getBoundingClientRect(){measurements++;return {width:60}}, querySelector(){return copy}};
+const label = {clientWidth:200,scrollWidth:80};
+const rail = {dataset:{overflowBadge:'Total $75'},querySelector(s){return s.includes('track-text')?label:badge},style:{getPropertyValue(){return pad},setProperty(k,v){padWrites++;pad=v}}};
+global.getComputedStyle = () => ({right:'6px'});
+''' + factory + r'''
+const domain = createBudgetDomain({}, {});
+domain.refreshProgressRailLabel(rail);
+domain.refreshProgressRailLabel(rail);
+assert.equal(textWrites, 0);
+assert.equal(padWrites, 0);
+assert.equal(measurements, 2);
+rail.dataset.overflowBadge = 'Total $80';
+domain.refreshProgressRailLabel(rail);
+assert.equal(textWrites, 1);
+assert.equal(text, 'Total $80');
+'''
+    result = subprocess.run(
+        ["node", "--input-type=commonjs"], input=script,
+        capture_output=True, text=True, encoding="utf-8", check=False,
+    )
+    assert result.returncode == 0, result.stderr
+
 P6_5_DOMAIN_SOURCES = (
     ("layout", "Layout", LAYOUT),
     ("composer", "Composer", COMPOSER),
@@ -731,6 +761,127 @@ console.log("renderer-leaf-domains-ok");
     )
     assert completed.returncode == 0, completed.stderr or completed.stdout
     assert "renderer-leaf-domains-ok" in completed.stdout
+
+
+def test_model_picker_modern_fiber_inserts_in_order_and_routes_selection() -> None:
+    factory = MODEL_PICKER.split(
+        "  const modelPickerDomain = ctx.domains.register(", 1
+    )[0]
+    script = f"""
+const assert = require("node:assert/strict");
+class FakeNode {{
+  constructor(text = "", attrs = {{}}) {{
+    this.textContent = text;
+    this.attrs = new Map(Object.entries(attrs));
+    this.isConnected = true;
+    this.parentElement = null;
+    this.title = "";
+  }}
+  getAttribute(name) {{ return this.attrs.has(name) ? this.attrs.get(name) : null; }}
+  setAttribute(name, value) {{ this.attrs.set(name, String(value)); }}
+  removeAttribute(name) {{ this.attrs.delete(name); }}
+  hasAttribute(name) {{ return this.attrs.has(name); }}
+  cloneNode() {{ return new FakeNode(this.textContent, Object.fromEntries(this.attrs)); }}
+  closest(selector) {{
+    if (selector.includes("data-codex-usage-hud-model-option") && this.hasAttribute("data-codex-usage-hud-model-option")) return this;
+    if (selector.includes("data-codex-usage-hud-reasoning-option") && this.hasAttribute("data-codex-usage-hud-reasoning-option")) return this;
+    return null;
+  }}
+}}
+class FakeContainer {{
+  constructor(children = []) {{ this.children = []; children.forEach((node) => this.appendChild(node)); }}
+  get firstChild() {{ return this.children[0] || null; }}
+  appendChild(node) {{ node.parentElement = this; this.children.push(node); return node; }}
+  insertBefore(node, reference) {{
+    node.parentElement = this;
+    const index = this.children.indexOf(reference);
+    this.children.splice(index < 0 ? this.children.length : index, 0, node);
+    return node;
+  }}
+  querySelector(selector) {{
+    const match = selector.match(/\\[([^=]+)=\"([^\"]+)\"\\]/);
+    return match ? this.children.find((node) => node.getAttribute(match[1]) === match[2]) || null : null;
+  }}
+}}
+const listeners = {{}};
+const selectCalls = [];
+let completed = 0;
+const modernProps = {{
+  model: "gpt-6-sol",
+  models: [{{ id: "gpt-6-sol", model: "gpt-6-sol", displayName: "GPT-6-Sol", inputModalities: ["text"] }}],
+  modelOptions: [{{ model: {{ id: "gpt-6-sol", model: "gpt-6-sol" }}, disabledReason: null }}],
+  onBeforeSelectModel: () => true,
+  onSelectModel: (model, effort) => selectCalls.push([model, effort]),
+  onSelectComplete: () => {{ completed += 1; }},
+}};
+const defaultItem = new FakeNode("Default", {{ role: "menuitemradio" }});
+const nativeItem = new FakeNode("6 Sol", {{ role: "menuitemradio", "aria-describedby": "native" }});
+let fiber = {{ memoizedProps: {{}}, return: null }};
+nativeItem.__reactFiber$test = fiber;
+for (let depth = 0; depth < 82; depth += 1) {{
+  fiber.return = {{ memoizedProps: {{}}, return: null }};
+  fiber = fiber.return;
+}}
+fiber.memoizedProps = modernProps;
+const modelContainer = new FakeContainer([defaultItem, nativeItem]);
+const slider = new FakeNode("", {{ role: "menuitem", "data-reasoning-slider": "true" }});
+const reasoningContainer = new FakeContainer([slider]);
+global.window = {{ CSS: {{ escape: String }} }};
+global.document = {{
+  querySelectorAll(selector) {{
+    if (selector.includes('[role="menuitem"]')) return modelContainer.children;
+    if (selector.includes("data-codex-usage-hud")) return [...modelContainer.children, ...reasoningContainer.children].filter((node) => node.getAttribute("data-codex-usage-hud-model-option") || node.getAttribute("data-codex-usage-hud-reasoning-option"));
+    return [];
+  }},
+  querySelector(selector) {{ return selector.includes("data-reasoning-slider") ? slider : null; }},
+}};
+const ctx = {{
+  frames: {{ cancel() {{}}, schedule(_owner, callback) {{ callback(); return 1; }} }},
+  lifecycle: {{
+    listen(_owner, _target, type, callback) {{ listeners[type] = callback; }},
+    clearTimeout() {{}}, timeout() {{ return 1; }},
+  }},
+}};
+const normalize = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+const visible = (node) => !!node?.isConnected;
+const cssEscape = String;
+const codexModelPickerCatalog = [
+  {{ model: "catalog-a", displayName: "Catalog A", defaultReasoningEffort: "low", supportedReasoningEfforts: [{{ reasoningEffort: "low" }}, {{ reasoningEffort: "ultra" }}] }},
+  {{ model: "catalog-b", displayName: "Catalog B", defaultReasoningEffort: "medium", supportedReasoningEfforts: [{{ reasoningEffort: "medium" }}] }},
+];
+const modelPickerPatchHandlerName = "__patch";
+const modelPickerPatchRafName = "__raf";
+const modelPickerPatchTimersName = "__timers";
+const modelPickerSelectionName = "__selection";
+{factory}
+const domain = createModelPickerDomain(ctx, {{ normalize, visible, cssEscape }});
+domain.install();
+domain.apply();
+assert.deepEqual(
+  modelContainer.children.map((node) => node.textContent),
+  ["Default", "Catalog A", "Catalog B", "6 Sol"],
+);
+const catalogA = modelContainer.querySelector('[data-codex-usage-hud-model-option="catalog-a"]');
+listeners.click({{ type: "click", target: catalogA, preventDefault() {{}}, stopPropagation() {{}} }});
+assert.deepEqual(selectCalls, [["catalog-a", "low"]]);
+assert.equal(completed, 1);
+const ultra = reasoningContainer.querySelector('[data-codex-usage-hud-reasoning-option="ultra"]');
+assert.ok(ultra);
+listeners.click({{ type: "click", target: ultra, preventDefault() {{}}, stopPropagation() {{}} }});
+assert.deepEqual(selectCalls, [["catalog-a", "low"], ["catalog-a", "ultra"]]);
+assert.equal(completed, 2);
+console.log("modern-model-picker-ok");
+"""
+    completed = subprocess.run(
+        ["node", "--input-type=commonjs"],
+        input=script,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+    assert "modern-model-picker-ok" in completed.stdout
 
 
 def test_session_view_activity_scroll_scopes_to_turn_and_reacquires_virtualized_nodes() -> None:

@@ -7,6 +7,28 @@ and this repository follows Semantic Versioning for release tags.
 
 ## [Unreleased]
 
+## [1.3.2] - 2026-09-29
+
+### Changed
+
+- Renderer stalls now pause HUD injection without automatically restarting Codex,
+  avoid reinstalling the bundle while even the liveness probe is unresponsive,
+  show a dismissible desktop notice, and clear that notice after recovery.
+- Background usage now identifies Codex task catch-up summaries and the current
+  task-title prompt, including historical records previously shown as unknown.
+
+### Fixed
+
+- Removed redundant budget-badge text writes and synchronous layout measurements
+  that dominated renderer CPU time during live updates.
+- Restored model-catalog and reasoning-option augmentation for the redesigned
+  Codex Desktop model picker while retaining compatibility with the legacy picker.
+- Restored session-search keyword filling and native highlighting when Codex uses
+  dynamically suffixed find-input IDs.
+- Preserved configured model priority order when injecting multiple catalog models.
+- Kept Codex interactive behind the full-screen rest-reminder treatment and
+  removed its expensive full-screen blur and continuous glow animation.
+
 ## [1.3.1] - 2026-09-28
 
 ### Fixed

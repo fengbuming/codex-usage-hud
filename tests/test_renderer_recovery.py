@@ -3,6 +3,8 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from codex_usage_hud import daemon_runtime, runtime_orchestration
 from codex_usage_hud.desktop_overlay import DesktopWorkOverlay
 from codex_usage_hud.renderer_session_lifecycle import RendererSessionResources
@@ -393,6 +395,42 @@ def test_system_notice_preserves_existing_items_and_overlay_process() -> None:
     assert payload["items"] == existing_items
     assert payload["systemNotice"]["id"] == "renderer-recovery-notice"
     assert overlay._process is helper
+
+
+@pytest.mark.qt_ui
+def test_hung_notice_can_be_dismissed_without_hiding_next_incident(tmp_path, monkeypatch) -> None:
+    pytest.importorskip("PySide6")
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+    from codex_usage_hud.ui.work_overlay.qt_window import OverlayWindow
+
+    app = QApplication.instance() or QApplication([])
+    window = OverlayWindow(
+        app=app, path=tmp_path / "state.json", read_state=lambda: None,
+        owner_pid=None, process_exists=lambda _: True, stale_seconds=20,
+        item_limit=2, overlay_alpha=0.88, hover_alpha=0.22,
+        heartbeat_path=tmp_path / "heartbeat", header_title_limit=28,
+    )
+    notice = {
+        "id": "renderer-recovery-notice", "title": "Codex 界面无响应",
+        "message": "等待恢复", "persistent": True, "dismissible": True,
+        "instanceId": "first",
+    }
+    items = [{"id": "session", "title": "Working", "status": "running"}]
+    try:
+        window.render_items(items, system_notice=notice)
+        notice_anchor = next(anchor for anchor in window._close_anchors if anchor[1].get("systemNotice"))
+        window.dismiss_item(notice_anchor[1])
+        window.render_items(items, system_notice=notice)
+        assert not any(anchor[1].get("systemNotice") for anchor in window._close_anchors)
+        assert any(anchor[1]["id"] == "session" for anchor in window._close_anchors)
+        window.render_items(items, system_notice={**notice, "instanceId": "second"})
+        assert any(anchor[1].get("systemNotice") for anchor in window._close_anchors)
+        window.render_items(items, system_notice={})
+        assert not any(anchor[1].get("systemNotice") for anchor in window._close_anchors)
+    finally:
+        window.close()
+        app.processEvents()
 
 
 def test_restart_action_reuses_notice_card_and_clears_after_attach() -> None:

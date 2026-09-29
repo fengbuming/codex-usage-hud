@@ -32,7 +32,15 @@ def test_unacknowledged_renderer_payload_reinstalls_immediately() -> None:
         client._script_identifier = "script-2"
 
     client._install = install  # type: ignore[method-assign]
-    client._send_update = MagicMock(side_effect=[False, True])  # type: ignore[method-assign]
+    send_results = iter([False, True])
+
+    def send_update(*_args: object) -> bool:
+        result = next(send_results)
+        if not result:
+            client.last_update_metrics = {"rendererAliveProbe": "alive"}
+        return result
+
+    client._send_update = MagicMock(side_effect=send_update)  # type: ignore[method-assign]
 
     assert client.update_payload({"payloadDomains": {}})
     assert installs == [
@@ -40,6 +48,31 @@ def test_unacknowledged_renderer_payload_reinstalls_immediately() -> None:
     ]
     assert client._send_update.call_count == 2
     assert client.last_update_metrics["inPlaceRecovery"] is True
+
+
+def test_unresponsive_renderer_does_not_trigger_immediate_reinstall() -> None:
+    client = RendererHudClient(port=9229, enabled=True)
+    target = {
+        "id": "target-1",
+        "webSocketDebuggerUrl": "ws://127.0.0.1:9229/devtools/page/1",
+    }
+    client._target_id = str(target["id"])
+    client._websocket_url = str(target["webSocketDebuggerUrl"])
+    client._script_identifier = "script-1"
+    client._payload_digest_target_id = str(target["id"])
+    client._page_target = MagicMock(return_value=target)  # type: ignore[method-assign]
+    client._install = MagicMock()  # type: ignore[method-assign]
+
+    def send_update(*_args: object) -> bool:
+        client.last_update_metrics = {"rendererAliveProbe": "error:TimeoutError"}
+        return False
+
+    client._send_update = MagicMock(side_effect=send_update)  # type: ignore[method-assign]
+
+    assert not client.update_payload({"payloadDomains": {"settings": {}}})
+    client._install.assert_not_called()
+    assert client._script_identifier == "script-1"
+    assert "liveness probe did not acknowledge" in client.last_error
 
 
 def test_verified_persistent_update_does_not_invalidate_renderer_cache() -> None:

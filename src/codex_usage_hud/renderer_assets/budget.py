@@ -31,7 +31,8 @@ TEXT = r"""
     const badge = rail?.querySelector?.(":scope > .codex-usage-hud-progress-badge");
     if (!badge) return;
     const copy = badge.querySelector(":scope > .codex-usage-hud-progress-badge-copy");
-    if (copy) copy.textContent = String(text || "");
+    const value = String(text || "");
+    if (copy && copy.textContent !== value) copy.textContent = value;
   }
 
   function progressRailLeftLabelFits(rail) {
@@ -59,7 +60,10 @@ TEXT = r"""
     ));
     // Keep a small gap between fixed left usage text and the shrinkable badge.
     const pad = Math.max(52, width + right + 10);
-    rail.style.setProperty("--codex-usage-hud-progress-badge-pad", `${pad}px`);
+    const value = `${pad}px`;
+    if (rail.style.getPropertyValue("--codex-usage-hud-progress-badge-pad") !== value) {
+      rail.style.setProperty("--codex-usage-hud-progress-badge-pad", value);
+    }
   }
 
   function refreshProgressRailBadge(rail) {
@@ -74,18 +78,14 @@ TEXT = r"""
 
     // Prefer full badge copy. Fall back to cost-only only when the full badge
     // squeezes the fixed left usage/amount label.
-    let selected = candidates[0];
     for (const candidate of candidates) {
       setProgressBadgeText(rail, candidate);
       applyProgressBadgePad(rail);
       if (progressRailLeftLabelFits(rail)) {
-        selected = candidate;
         break;
       }
-      selected = candidate;
     }
-    setProgressBadgeText(rail, selected);
-    applyProgressBadgePad(rail);
+    // The final candidate was already applied and measured inside the loop.
   }
 
   function refreshProgressRailLabel(rail) {

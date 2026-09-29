@@ -1759,7 +1759,8 @@ class RendererHudPayloadTests(unittest.TestCase):
             'function fillThreadFindInput(input, query, { force = false } = {})',
             script,
         )
-        self.assertIn('const existingInput = document.getElementById("content-search-input");', script)
+        self.assertIn("const existingInput = threadFindInput();", script)
+        self.assertIn('input[id^="content-search-input-"]', script)
         self.assertIn("function threadFindInputVisible(input)", script)
         self.assertIn("if (threadFindInputVisible(existingInput))", script)
         self.assertIn('fillThreadFindInput(existingInput, value, { force: true });', script)
@@ -1961,6 +1962,7 @@ class RendererHudPayloadTests(unittest.TestCase):
             patch.object(client, "_send_update", return_value=False) as send,
             patch.object(client, "_clear_target_cache") as clear_target,
         ):
+            client.last_update_metrics = {"rendererAliveProbe": "alive"}
             self.assertFalse(client.update_payload({"payloadDomains": {}}))
             self.assertEqual(client.last_status, "failed")
             self.assertEqual(install.call_count, 2)
@@ -2053,6 +2055,7 @@ class RendererHudPayloadTests(unittest.TestCase):
 
         def send_update(websocket_url: str, payload: dict[str, object]) -> bool:
             send_payloads.append((websocket_url, dict(payload)))
+            client.last_update_metrics = {"rendererAliveProbe": "alive"}
             return False
 
         client._install = install  # type: ignore[method-assign]
@@ -2590,8 +2593,8 @@ class RendererHudPayloadTests(unittest.TestCase):
         self.assertIn('data-action="settings-close"', script)
         self.assertIn('aria-label="关闭"', script)
 
-    def test_rest_reminder_toast_receives_pointer_events(self) -> None:
-        """HUD root is pointer-events:none; toast + buttons must re-enable hits."""
+    def test_rest_reminder_toast_keeps_codex_interactive_behind_visual_mask(self) -> None:
+        """Only the reminder card captures input; the full-screen mask is visual."""
         script = renderer_hud.RENDERER_HUD_SCRIPT
 
         toast_css_start = script.index(".codex-usage-hud-rest-toast {")
@@ -2602,17 +2605,19 @@ class RendererHudPayloadTests(unittest.TestCase):
         mask_css_start = script.index(".codex-usage-hud-rest-mask {")
         mask_css_end = script.index("}", mask_css_start)
         mask_css = script[mask_css_start:mask_css_end]
-        self.assertIn("pointer-events: auto", mask_css)
+        self.assertIn("pointer-events: none", mask_css)
+        self.assertNotIn("backdrop-filter", mask_css)
+        self.assertIn('aria-modal="false"', script)
+        self.assertNotIn("codex-usage-hud-rest-glow", script)
         self.assertIn("position: fixed", mask_css)
         self.assertIn("inset: 0", mask_css)
-        self.assertIn("backdrop-filter", mask_css)
 
         # Interactive whitelist also includes the toast class so children inherit.
         whitelist_start = script.index(".codex-usage-hud-settings-modal,")
         whitelist_end = script.index("pointer-events: auto;", whitelist_start)
         whitelist = script[whitelist_start:whitelist_end]
         self.assertIn("codex-usage-hud-rest-toast", whitelist)
-        self.assertIn("codex-usage-hud-rest-mask", whitelist)
+        self.assertNotIn("codex-usage-hud-rest-mask", whitelist)
         self.assertIn("codex-usage-hud-rest-bubble", whitelist)
 
         self.assertIn('data-rest-reminder-mask="true"', script)
@@ -3596,7 +3601,9 @@ class RendererHudClientTests(unittest.TestCase):
                 )
             )
 
-        clear_target.assert_called_once_with(clear_script=True)
+        # The startup retry must rescan the target without forcing another
+        # large script install into a renderer that failed its liveness probe.
+        clear_target.assert_called_once_with(clear_script=False)
 
     def test_client_installs_renderer_script_with_model_catalog(self) -> None:
         install_calls: list[str] = []

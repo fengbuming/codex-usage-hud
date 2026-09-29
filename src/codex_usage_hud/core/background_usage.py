@@ -24,6 +24,7 @@ UNKNOWN_FEATURE_LABEL = "未知后台任务"
 BACKGROUND_USAGE_SCHEMA_VERSION = 3
 REQUEST_SPLIT_REPAIR_METADATA_KEY = "request_split_repair_v1"
 TITLE_DESCRIPTION_FEATURE_KEY = "title_description"
+TASK_CATCH_UP_FEATURE_KEY = "task_catch_up"
 TITLE_DESCRIPTION_USER_PROMPT_MARKER = "User prompt:"
 DELEGATION_INPUT_RE = re.compile(
     r"<codex_delegation(?:\s[^>]*)?>.*?<input>\s*(.*?)\s*</input>",
@@ -42,6 +43,7 @@ BACKGROUND_FEATURE_LABELS = {
     "suggestion_safety": "建议安全检查",
     "title_description": "任务标题与描述",
     "description_refresh": "刷新任务描述",
+    TASK_CATCH_UP_FEATURE_KEY: "任务回顾摘要",
     UNKNOWN_FEATURE_KEY: UNKNOWN_FEATURE_LABEL,
 }
 
@@ -55,12 +57,15 @@ BACKGROUND_FEATURE_LABELS = {
 # title_description / description_refresh: 无公开官方界面名，按官方 prompt
 #   特征（"provide a short title for a task" / "fork of an existing codex
 #   thread" + "structured description field"）命名。
+# task_catch_up: 无公开官方界面名，按官方 prompt 的 "brief catch-up"
+#   命名；官方 Long-running work 文档将对应用户动作称为 status recap。
 BACKGROUND_FEATURE_EN_LABELS = {
     "memory_consolidation": "Memory consolidation",
     "context_suggestions": "Context-aware suggestions",
     "suggestion_safety": "Ambient suggestion safety",
     "title_description": "Title & description generation",
     "description_refresh": "Description refresh",
+    TASK_CATCH_UP_FEATURE_KEY: "Task catch-up",
 }
 
 # 官方定义的后台任务实际作用（中文译文）。
@@ -84,6 +89,10 @@ BACKGROUND_FEATURE_PURPOSES = {
     ),
     "description_refresh": (
         "在分叉已有 Codex 线程后，重新生成并刷新该任务的结构化描述"
+    ),
+    TASK_CATCH_UP_FEATURE_KEY: (
+        "在用户返回任务时，根据已有会话生成简短进度摘要和可选下一步，"
+        "帮助恢复长任务上下文"
     ),
 }
 
@@ -168,10 +177,26 @@ def classify_background_feature(prompt: str) -> BackgroundFeature:
     ):
         return BackgroundFeature("title_description", background_feature_label("title_description"))
     if (
+        lowered.lstrip().startswith("generate a concise, single-line task title")
+        and "do not answer the request" in lowered
+    ):
+        return BackgroundFeature("title_description", background_feature_label("title_description"))
+    if (
         "fork of an existing codex thread" in lowered
         and "structured description field" in lowered
     ):
         return BackgroundFeature("description_refresh", background_feature_label("description_refresh"))
+    if (
+        lowered.lstrip().startswith("write a brief catch-up for a user returning to this")
+        and (
+            "summary and nullable next_action" in lowered
+            or "explain the objective, what was completed or learned, and the next step or blocker" in lowered
+        )
+    ):
+        return BackgroundFeature(
+            TASK_CATCH_UP_FEATURE_KEY,
+            background_feature_label(TASK_CATCH_UP_FEATURE_KEY),
+        )
     return BackgroundFeature(UNKNOWN_FEATURE_KEY, UNKNOWN_FEATURE_LABEL, "")
 
 
@@ -1734,6 +1759,25 @@ class BackgroundUsageScanner:
             thread_id = str(row["thread_id"])
             current_state = str(row["classification_state"] or "pending")
             current_attribution = str(row["app_attribution"] or "")
+            feature_key = str(row["feature_key"] or UNKNOWN_FEATURE_KEY)
+            prompt = str(row["prompt"] or "")
+            if feature_key == UNKNOWN_FEATURE_KEY:
+                repaired_feature = classify_background_feature(prompt)
+                if repaired_feature.key != UNKNOWN_FEATURE_KEY:
+                    feature_key = repaired_feature.key
+                    connection.execute(
+                        """
+                        UPDATE background_events
+                        SET feature_key=?, feature_label=?
+                        WHERE event_id=?
+                        """,
+                        (
+                            repaired_feature.key,
+                            repaired_feature.label,
+                            str(row["event_id"]),
+                        ),
+                    )
+                    changed = True
             if thread_id in visible or thread_id in child_threads:
                 next_state = "excluded"
                 next_attribution = "visible_session" if thread_id in visible else "subagent"
@@ -1742,7 +1786,6 @@ class BackgroundUsageScanner:
                 next_attribution = current_attribution
             else:
                 process_uuid = str(row["process_uuid"] or "")
-                feature_key = str(row["feature_key"] or UNKNOWN_FEATURE_KEY)
                 pid_match = _PROCESS_PID_RE.match(process_uuid)
                 pid = int(pid_match.group(1)) if pid_match is not None else 0
                 if feature_key != UNKNOWN_FEATURE_KEY:
@@ -1760,8 +1803,8 @@ class BackgroundUsageScanner:
                 else:
                     next_state = "background"
             next_related_session_id = self._related_session_id(
-                feature_key=str(row["feature_key"] or UNKNOWN_FEATURE_KEY),
-                prompt=str(row["prompt"] or ""),
+                feature_key=feature_key,
+                prompt=prompt,
                 first_seen_at=int(row["first_seen_at"] or 0),
                 candidates=related_session_candidates,
             )

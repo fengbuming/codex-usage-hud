@@ -20,6 +20,8 @@ if str(SRC_ROOT) not in sys.path:
 from codex_usage_hud.core.background_usage import (
     BackgroundUsageScanner,
     BackgroundUsageStore,
+    background_feature_en_label,
+    background_feature_purpose,
     classify_background_feature,
     decode_request_context,
     decode_request_evidence,
@@ -293,6 +295,82 @@ class BackgroundUsageDecoderTests(unittest.TestCase):
         feature = classify_background_feature("New internal feature prompt")
         self.assertEqual(feature.key, "unknown")
         self.assertEqual(feature.label, "未知后台任务")
+
+    def test_current_title_and_task_catch_up_prompts_are_attributed(self) -> None:
+        title = classify_background_feature(
+            "Generate a concise, single-line task title of at most 36 characters. "
+            "Do not answer the request.\n\nUser prompt:\nRepair the HUD."
+        )
+        self.assertEqual(title.key, "title_description")
+        self.assertEqual(title.label, "任务标题与描述")
+
+        for prompt in (
+            "Write a brief catch-up for a user returning to this task. "
+            "Return JSON with summary and nullable next_action.",
+            "Write a brief catch-up for a user returning to this Codex task. "
+            "In at most 40 words, explain the objective, what was completed or learned, and the next step or blocker.",
+        ):
+            catch_up = classify_background_feature(prompt)
+            self.assertEqual(catch_up.key, "task_catch_up")
+            self.assertEqual(catch_up.label, "任务回顾摘要")
+        self.assertEqual(
+            background_feature_en_label("task_catch_up"), "Task catch-up"
+        )
+        self.assertIn("恢复长任务上下文", background_feature_purpose("task_catch_up"))
+
+    def test_reclassify_repairs_historical_unknown_feature_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            store = BackgroundUsageStore(root / "audit.sqlite3")
+            scanner = BackgroundUsageScanner(
+                logs_path=root / "logs.sqlite3",
+                state_path=root / "state.sqlite3",
+                store=store,
+                grace_seconds=0,
+                now=lambda: 2_000.0,
+            )
+            with closing(store._connect()) as connection, connection:
+                connection.execute(
+                    """
+                    INSERT INTO background_events(
+                        event_id, thread_id, process_uuid, feature_key,
+                        feature_label, prompt, first_seen_at, last_seen_at,
+                        classification_state, request_count
+                    ) VALUES(?, ?, ?, 'unknown', '未知后台任务', ?, ?, ?, ?, 1)
+                    """,
+                    (
+                        UNKNOWN_ID,
+                        UNKNOWN_ID,
+                        APP_PROCESS,
+                        "Write a brief catch-up for a user returning to this task. "
+                        "Return JSON with summary and nullable next_action.",
+                        1_000,
+                        1_001,
+                        "unattributed",
+                    ),
+                )
+                self.assertTrue(
+                    scanner._reclassify(
+                        connection,
+                        visible={},
+                        child_threads=set(),
+                        related_session_candidates={},
+                        now_ts=2_000,
+                    )
+                )
+                row = connection.execute(
+                    """
+                    SELECT feature_key, feature_label, classification_state,
+                           app_attribution
+                    FROM background_events WHERE event_id=?
+                    """,
+                    (UNKNOWN_ID,),
+                ).fetchone()
+            assert row is not None
+            self.assertEqual(row["feature_key"], "task_catch_up")
+            self.assertEqual(row["feature_label"], "任务回顾摘要")
+            self.assertEqual(row["classification_state"], "background")
+            self.assertEqual(row["app_attribution"], "feature_signature")
 
 
 class BackgroundUsageScannerTests(unittest.TestCase):

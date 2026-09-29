@@ -178,7 +178,6 @@ TEXT = r"""
           #${rootId} .codex-usage-hud-top-body,
           #${rootId} .codex-usage-hud-request-list,
           #${rootId} .codex-usage-hud-settings-modal,
-          #${rootId} .codex-usage-hud-rest-mask,
           #${rootId} .codex-usage-hud-rest-toast,
           #${rootId} .codex-usage-hud-rest-bubble {
             pointer-events: auto;
@@ -5826,16 +5825,10 @@ TEXT = r"""
             z-index: 2147483600;
             display: none;
             overflow: hidden;
-            /* Root is pointer-events:none; mask must capture clicks across Codex. */
-            pointer-events: auto;
+            /* Visual-only layer: Codex remains interactive outside the reminder card. */
+            pointer-events: none;
             cursor: default;
-            background:
-              radial-gradient(ellipse 70% 50% at 50% 38%, rgba(243, 210, 122, 0.10), transparent 58%),
-              radial-gradient(ellipse 55% 40% at 18% 78%, rgba(115, 213, 160, 0.07), transparent 55%),
-              radial-gradient(ellipse 50% 45% at 84% 18%, rgba(156, 203, 255, 0.06), transparent 50%),
-              linear-gradient(165deg, rgba(7, 11, 18, 0.78) 0%, rgba(10, 14, 22, 0.86) 48%, rgba(6, 9, 14, 0.92) 100%);
-            backdrop-filter: blur(8px) saturate(1.05);
-            -webkit-backdrop-filter: blur(8px) saturate(1.05);
+            background: linear-gradient(165deg, rgba(7, 11, 18, 0.70) 0%, rgba(10, 14, 22, 0.76) 48%, rgba(6, 9, 14, 0.82) 100%);
             opacity: 0;
             transition: opacity 220ms ease;
           }
@@ -5848,13 +5841,7 @@ TEXT = r"""
             filter: blur(2px);
           }
           #${rootId} .codex-usage-hud-rest-mask::before {
-            width: min(42vw, 380px);
-            height: min(42vw, 380px);
-            left: 50%;
-            top: 34%;
-            transform: translate(-50%, -50%);
-            background: radial-gradient(circle, rgba(243, 210, 122, 0.16) 0%, rgba(243, 210, 122, 0.04) 42%, transparent 70%);
-            animation: codex-usage-hud-rest-glow 5.6s ease-in-out infinite;
+            display: none;
           }
           #${rootId} .codex-usage-hud-rest-mask::after {
             inset: 0;
@@ -5866,10 +5853,6 @@ TEXT = r"""
           #${rootId} .codex-usage-hud-rest-mask[data-visible="true"] {
             display: block;
             opacity: 1;
-          }
-          @keyframes codex-usage-hud-rest-glow {
-            0%, 100% { opacity: 0.72; transform: translate(-50%, -50%) scale(1); }
-            50% { opacity: 1; transform: translate(-50%, -50%) scale(1.08); }
           }
           @keyframes codex-usage-hud-rest-card-in {
             from {

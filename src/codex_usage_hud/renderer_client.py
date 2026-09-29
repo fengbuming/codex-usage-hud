@@ -886,8 +886,17 @@ class RendererHudClient:
                     )
             stage = "payload_apply"
             if not self._send_update(websocket_url, prepared_payload):
+                renderer_probe = str(
+                    self.last_update_metrics.get("rendererAliveProbe") or ""
+                )
+                if renderer_probe != "alive":
+                    stage = "renderer_unresponsive"
+                    raise RuntimeError(
+                        "renderer liveness probe did not acknowledge"
+                    )
                 # Both the persistent binding and its fresh-websocket
-                # verification reported that the page cannot apply a payload.
+                # verification reported that the page cannot apply a payload,
+                # while the trivial liveness probe still succeeds.
                 # Reinstall and rehydrate immediately: waiting for the normal
                 # one-second retry makes the top and bottom HUD visibly blink.
                 first_update_metrics = dict(self.last_update_metrics)

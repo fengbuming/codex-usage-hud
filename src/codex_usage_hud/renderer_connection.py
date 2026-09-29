@@ -16,15 +16,14 @@ _LOGGER = logging.getLogger(__name__)
 # A renderer that has not acknowledged a single CDP round-trip for this long
 # while the user is at the desktop is considered hung. Healthy idle sessions
 # still answer 0.35s liveness probes every ~5s, so any real unresponsiveness
-# of this duration means the Codex renderer main thread is wedged and the app
-# window is showing blank content that only a Codex restart can recover.
+# of this duration can indicate a stalled renderer or CDP channel.
 # Degrade (not restart) after 30s with no acknowledgement while the
 # probe also fails; a probe-alive renderer is busy and never escalates.
 RENDERER_HUNG_GRACE_SECONDS = 30.0
 # After an unlock/resume, give a frozen-but-recoverable renderer time to thaw
-# before the HUD escalates to a Codex restart.
+# before the HUD pauses injection.
 RENDERER_HUNG_POST_UNLOCK_GRACE_SECONDS = 45.0
-# Minimum interval between escalations so a wedge + restart cycle cannot loop.
+# Minimum interval between escalations so a repeated stall cannot loop.
 RENDERER_HUNG_MIN_REESCALATE_SECONDS = 300.0
 
 
@@ -60,6 +59,7 @@ class RendererConnectionManager:
         health: ConnectionHealth | None = None,
         wall_time: Callable[[], float] = time.time,
         escalate_renderer_hung: Callable[[str], None] | None = None,
+        renderer_recovered: Callable[[], None] | None = None,
     ) -> None:
         self.client = client
         self.tracker_provider = tracker_provider
@@ -70,6 +70,8 @@ class RendererConnectionManager:
         self.health = health or ConnectionHealth()
         self.wall_time = wall_time
         self.escalate_renderer_hung = escalate_renderer_hung
+        self.renderer_recovered = renderer_recovered
+        self._hung_recovery_pending = False
         self._light_push_enabled = False
         self._connection_attempt_lock = threading.Lock()
         self._connection_attempt_generation = 0
@@ -320,16 +322,12 @@ class RendererConnectionManager:
         self._hung_escalated = False
 
     def maybe_escalate_renderer_hung(self) -> bool:
-        """Detect a permanently unresponsive Codex renderer and escalate.
+        """Pause injection for a stalled renderer; clear its notice on recovery.
 
-        The blank-UI failure after a long lock is a wedged renderer main
-        thread: CDP ``Runtime.evaluate`` stops being acknowledged (visible as
-        hours of ``cdp.update_failed``/``persistentFallbackReason`` timeouts),
-        the window paints nothing, and every HUD cleanup path fails because it
-        also needs CDP. When the renderer has not acknowledged anything for
-        ``RENDERER_HUNG_GRACE_SECONDS`` while the desktop is unlocked, request
-        a Codex restart through the existing restart-codex escalation path so
-        the user is not left with a permanently blank app.
+        Missing CDP acknowledgements cannot establish the cause of a blank UI.
+        After ``RENDERER_HUNG_GRACE_SECONDS`` while unlocked, let Codex recover
+        without additional HUD injection. A subsequent acknowledgement ends
+        the notice, including when session resume has reset escalation flags.
 
         Must run after the probe in the same loop iteration: a healthy renderer
         refreshes ``last_ok_at`` first and never escalates.
@@ -339,6 +337,14 @@ class RendererConnectionManager:
         health = self.health
         now = time.monotonic()
         last_ok = float(getattr(health, "last_ok_at", 0.0) or 0.0)
+        if self._hung_recovery_pending and last_ok > self._hung_escalated_at:
+            try:
+                if self.renderer_recovered is not None:
+                    self.renderer_recovered()
+            except Exception:
+                _LOGGER.exception("renderer_recovered_callback_failed")
+            else:
+                self._hung_recovery_pending = False
         if last_ok <= 0.0:
             # Never connected yet; startup attach failure is handled elsewhere.
             return False
@@ -386,6 +392,7 @@ class RendererConnectionManager:
             getattr(self.client, "last_error", ""),
         )
         try:
+            self._hung_recovery_pending = True
             self.escalate_renderer_hung(reason)
         except Exception:
             _LOGGER.exception("renderer_hung_escalation_callback_failed")

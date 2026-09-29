@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import subprocess
 
 from tools import pre_release_check
 
@@ -38,3 +39,28 @@ def test_pre_release_check_rejects_missing_release_notes(
 
     assert pre_release_check.main() == 1
     assert "RELEASE_NOTES_v1.2.0_*.md is missing" in capsys.readouterr().out
+
+
+def test_pre_release_check_rejects_dirty_changes_on_the_existing_version_tag(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    _write_release_tree(tmp_path)
+    (tmp_path / "RELEASE_NOTES_v1.2.0_TEST.md").write_text(
+        "notes\n", encoding="utf-8"
+    )
+    for args in (
+        ("init",),
+        ("config", "user.email", "release-test@example.com"),
+        ("config", "user.name", "Release Test"),
+        ("add", "."),
+        ("commit", "-m", "release fixture"),
+        ("tag", "v1.2.0"),
+    ):
+        subprocess.run(
+            ["git", *args], cwd=tmp_path, check=True, capture_output=True
+        )
+    (tmp_path / "README.md").write_text("dirty\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    assert pre_release_check.main() == 1
+    assert "already tags HEAD while the worktree has changes" in capsys.readouterr().out

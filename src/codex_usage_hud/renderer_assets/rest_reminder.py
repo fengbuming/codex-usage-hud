@@ -24,7 +24,7 @@ TEXT = r"""
   function restReminderToastMarkup() {
     return `
       <div class="codex-usage-hud-rest-mask" data-rest-reminder-mask="true" data-visible="false" aria-hidden="true"></div>
-      <div class="codex-usage-hud-rest-toast" data-rest-reminder-toast="true" data-visible="false" role="dialog" aria-live="assertive" aria-modal="true" aria-labelledby="codex-usage-hud-rest-title">
+      <div class="codex-usage-hud-rest-toast" data-rest-reminder-toast="true" data-visible="false" role="dialog" aria-live="assertive" aria-modal="false" aria-labelledby="codex-usage-hud-rest-title">
         <div class="codex-usage-hud-rest-toast-accent" aria-hidden="true"></div>
         <div class="codex-usage-hud-rest-toast-body">
           <div class="codex-usage-hud-rest-toast-head">

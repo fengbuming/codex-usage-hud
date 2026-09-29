@@ -84,11 +84,77 @@ TEXT = r"""
       return findFiber(node, (fiber) => !!fiber?.memoizedProps?.modelOption);
     }
 
-    function modelPickerModelItems() {
-      return Array.from(document.querySelectorAll('[role="menuitem"]'))
+    function modelPickerMenuItems() {
+      return Array.from(document.querySelectorAll('[role="menuitem"], [role="menuitemradio"]'))
+        .filter(visible);
+    }
+
+    function modelPickerModernProps(node) {
+      return findFiber(node, (fiber) => {
+        const props = fiber?.memoizedProps;
+        return Array.isArray(props?.models)
+          && Array.isArray(props?.modelOptions)
+          && typeof props?.onSelectModel === "function";
+      }, 120)?.memoizedProps || null;
+    }
+
+    function modelPickerLabelKey(value) {
+      return normalize(value)
+        .toLowerCase()
+        .replace(/^gpt[\s-]*/, "")
+        .replace(/[^a-z0-9]+/g, "");
+    }
+
+    function modelPickerNodeMatchesModel(node, model) {
+      const nodeKey = modelPickerLabelKey(node?.textContent);
+      const modelKeys = [model?.displayName, model?.model, model?.id]
+        .map(modelPickerLabelKey)
+        .filter(Boolean);
+      return !!nodeKey && modelKeys.some((key) => nodeKey === key || nodeKey.startsWith(key));
+    }
+
+    function modelPickerContext() {
+      const menuItems = modelPickerMenuItems();
+      const legacyItems = menuItems
         .filter(visible)
         .map((node) => ({ node, fiber: modelPickerLeafFiber(node) }))
         .filter((item) => !!item.fiber?.memoizedProps?.modelOption);
+      if (legacyItems.length) {
+        const props = legacyItems[0].fiber.memoizedProps || {};
+        return {
+          items: legacyItems.map((item) => item.node),
+          nativeModels: legacyItems.map((item) => item.fiber.memoizedProps.modelOption),
+          prototypeOption: props.modelOption || null,
+          selectedModel: String(props.selectedModel || ""),
+          selectModel: props.onSelect,
+        };
+      }
+
+      const modernProps = menuItems
+        .map(modelPickerModernProps)
+        .find(Boolean);
+      if (!modernProps) return null;
+      const nativeModels = modernProps.models.filter((model) => model && typeof model === "object");
+      const items = menuItems.filter((node) => (
+        node.getAttribute("role") === "menuitemradio"
+        && nativeModels.some((model) => modelPickerNodeMatchesModel(node, model))
+      ));
+      if (!items.length) return null;
+      return {
+        items,
+        nativeModels,
+        prototypeOption: nativeModels[0] || null,
+        selectedModel: String(modernProps.model || ""),
+        selectModel(option) {
+          if (!option?.model) return;
+          if (
+            typeof modernProps.onBeforeSelectModel === "function"
+            && modernProps.onBeforeSelectModel(option.model) === false
+          ) return;
+          modernProps.onSelectModel(option.model, option.defaultReasoningEffort || "medium");
+          modernProps.onSelectComplete?.();
+        },
+      };
     }
 
     function selectedCatalogModelFromMenu() {
@@ -105,10 +171,16 @@ TEXT = r"""
       const node = referenceNode.cloneNode(true);
       node.textContent = option.displayName;
       node.title = option.description || option.displayName;
-      node.setAttribute("role", "menuitem");
+      node.setAttribute("role", referenceNode.getAttribute("role") || "menuitem");
       node.setAttribute("tabindex", "-1");
       node.setAttribute("data-codex-usage-hud-model-option", option.model);
       node.removeAttribute("data-model-selected");
+      node.removeAttribute("aria-describedby");
+      if (node.getAttribute("role") === "menuitemradio") {
+        node.setAttribute("aria-checked", String(modelProps.selectedModel === option.model));
+      } else {
+        node.removeAttribute("aria-checked");
+      }
       if (modelProps.selectedModel === option.model) node.setAttribute("data-model-selected", "true");
       node[syntheticSelect] = (event) => {
         event.preventDefault();
@@ -122,10 +194,10 @@ TEXT = r"""
         modelProps.onSelect(option, option.defaultServiceTier ?? null);
         schedulePatch();
       };
-      container.insertBefore(node, container.firstChild);
+      container.insertBefore(node, referenceNode);
     }
 
-    function insertSyntheticReasoningItem(container, referenceNode, model, effort) {
+    function insertSyntheticReasoningItem(container, referenceNode, model, effort, { modern = false } = {}) {
       const selection = window[modelPickerSelectionName];
       if (!container || !referenceNode || typeof selection?.selectModel !== "function") return;
       if (container.querySelector(`[data-codex-usage-hud-reasoning-option="${cssEscape(effort.reasoningEffort)}"]`)) return;
@@ -133,10 +205,18 @@ TEXT = r"""
       const label = reasoningEffortLabel(effort.reasoningEffort);
       node.textContent = label;
       node.title = effort.description || label;
-      node.setAttribute("role", "menuitem");
+      node.setAttribute("role", modern ? "menuitemradio" : "menuitem");
       node.setAttribute("tabindex", "-1");
       node.setAttribute("data-codex-usage-hud-reasoning-option", effort.reasoningEffort);
       node.removeAttribute("data-reasoning-selected");
+      node.removeAttribute("data-reasoning-slider");
+      node.removeAttribute("aria-describedby");
+      node.removeAttribute("aria-keyshortcuts");
+      if (modern) {
+        node.setAttribute("aria-checked", String(selection?.option?.defaultReasoningEffort === effort.reasoningEffort));
+      } else {
+        node.removeAttribute("aria-checked");
+      }
       node[syntheticSelect] = (event) => {
         event.preventDefault();
         event.stopPropagation();
@@ -170,29 +250,36 @@ TEXT = r"""
 
     function patchCodexModelPicker() {
       if (!models.length) return;
-      const modelItems = modelPickerModelItems();
-      if (modelItems.length) {
-        const first = modelItems[0];
-        const container = first.node.parentElement;
-        const existing = new Set(modelItems.map((item) => String(item.fiber.memoizedProps.modelOption?.model || "")));
-        const modelProps = first.fiber.memoizedProps || {};
+      const context = modelPickerContext();
+      if (context?.items?.length && typeof context.selectModel === "function") {
+        const first = context.items[0];
+        const container = first.parentElement;
+        const existing = new Set(context.nativeModels.map((item) => String(item?.model || item?.id || "")));
+        const modelProps = {
+          modelOption: context.prototypeOption,
+          selectedModel: context.selectedModel,
+          onSelect: context.selectModel,
+        };
         for (const model of models) {
           if (!existing.has(String(model.model))) {
-            insertSyntheticModelItem(container, first.node, model, modelProps);
+            insertSyntheticModelItem(container, first, model, modelProps);
           }
         }
       }
       const selectedModel = selectedCatalogModelFromMenu();
       if (!selectedModel) return;
-      const reasoningItems = Array.from(document.querySelectorAll('[role="menuitem"]'))
-        .filter(visible)
+      const reasoningItems = modelPickerMenuItems()
         .filter((node) => node.hasAttribute("data-reasoning-selected") || ["轻度", "中", "高", "极高"].includes(normalize(node.textContent)));
-      if (!reasoningItems.length) return;
+      const modernSlider = document.querySelector('[data-reasoning-slider="true"]');
+      const referenceNode = reasoningItems[0] || (visible(modernSlider) ? modernSlider : null);
+      if (!referenceNode) return;
       const existingLabels = new Set(reasoningItems.map((node) => normalize(node.textContent)));
-      const container = reasoningItems[0].parentElement;
+      const container = referenceNode.parentElement;
       for (const effort of normalizeReasoningEfforts(selectedModel)) {
         if (!existingLabels.has(reasoningEffortLabel(effort.reasoningEffort))) {
-          insertSyntheticReasoningItem(container, reasoningItems[0], selectedModel, effort);
+          insertSyntheticReasoningItem(container, referenceNode, selectedModel, effort, {
+            modern: !reasoningItems.length,
+          });
         }
       }
     }

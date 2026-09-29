@@ -1651,7 +1651,7 @@ class OverlayRenderingMixin:
                     if "minutes" in action:
                         action_item["minutes"] = action.get("minutes")
                     self._rest_action_anchors.append((label, action_item))
-            elif not system_notice:
+            elif not system_notice or item.get("dismissible"):
                 self._close_anchors.append(
                     (record["close_anchor"], dict(item), card_bg, pill_bg, accent)
                 )
@@ -2146,8 +2146,13 @@ class OverlayRenderingMixin:
                 ],
             ]
         if self._system_notice is not None:
+            notice_item = _system_notice_overlay_item(self._system_notice)
+            notice_items = (
+                _visible_overlay_items([notice_item], self._dismissed_instances, item_limit=1)
+                if notice_item.get("dismissible") else [notice_item]
+            )
             visible_items = [
-                _system_notice_overlay_item(self._system_notice),
+                *notice_items,
                 *[
                     item
                     for item in visible_items

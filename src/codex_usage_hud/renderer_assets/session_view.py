@@ -1872,11 +1872,20 @@ TEXT = r"""
       return !!rect && rect.width > 0 && rect.height > 0;
     }
 
+    function threadFindInput() {
+      const inputs = Array.from(document.querySelectorAll([
+        'input[id="content-search-input"]',
+        'input[id^="content-search-input-"]',
+        'input[aria-label="Find in chat"]',
+      ].join(", ")));
+      return inputs.find(threadFindInputVisible) || inputs[0] || null;
+    }
+
     function openThreadFind(query) {
       const value = String(query || "").trim();
       if (!value) return;
       cancelThreadFindJump();
-      const existingInput = document.getElementById("content-search-input");
+      const existingInput = threadFindInput();
       const state = { query: value, timer: 0 };
       threadFindJump = state;
       // Sending find-in-thread while the native bar is already open toggles it
@@ -1886,7 +1895,7 @@ TEXT = r"""
         fillThreadFindInput(existingInput, value, { force: true });
         state.timer = ctx.lifecycle.timeout("thread_find_refill", () => {
           if (threadFindJump !== state) return;
-          const current = document.getElementById("content-search-input");
+          const current = threadFindInput();
           if (current) fillThreadFindInput(current, value, { force: true });
         }, 120);
         return;
@@ -1897,14 +1906,14 @@ TEXT = r"""
       let elapsed = 0;
       const step = () => {
         if (threadFindJump !== state) return;
-        const input = document.getElementById("content-search-input");
+        const input = threadFindInput();
         if (input) {
           fillThreadFindInput(input, value, { force: true });
           // 会话可能在查找栏打开后才挂载完；若输入框仍是我们填的词
           // （用户没有开始手动输入），补触发一次让原生检索重扫已挂载内容。
           state.timer = ctx.lifecycle.timeout("thread_find_refill", () => {
             if (threadFindJump !== state) return;
-            const current = document.getElementById("content-search-input");
+            const current = threadFindInput();
             if (current && current.value === value) {
               fillThreadFindInput(current, value, { force: true });
             }

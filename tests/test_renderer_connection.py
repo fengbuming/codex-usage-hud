@@ -301,14 +301,19 @@ def test_hung_escalation_rearms_after_recovery(monkeypatch) -> None:
         now[0] - _rc.RENDERER_HUNG_GRACE_SECONDS - 1.0,
     )
     manager, _, _, _ = _manager(health=health, escalate=escalations.append)
+    recovered = MagicMock()
+    manager.renderer_recovered = recovered
 
     assert manager.maybe_escalate_renderer_hung()
     assert len(escalations) == 1
+    assert not manager.maybe_escalate_renderer_hung()
+    recovered.assert_not_called()
 
     # Renderer recovers: a success refreshes last_ok_at, rearming the check.
     now[0] += 10.0
     health.note_success(now=now[0])
     assert not manager.maybe_escalate_renderer_hung()
+    recovered.assert_called_once_with()
 
     # Healthy for a long stretch, then it wedges again beyond the grace.
     now[0] += _rc.RENDERER_HUNG_MIN_REESCALATE_SECONDS
@@ -317,3 +322,27 @@ def test_hung_escalation_rearms_after_recovery(monkeypatch) -> None:
     now[0] += _rc.RENDERER_HUNG_GRACE_SECONDS + 1.0
     assert manager.maybe_escalate_renderer_hung()
     assert len(escalations) == 2
+    now[0] += 1.0
+    health.note_success(now=now[0])
+    assert not manager.maybe_escalate_renderer_hung()
+    assert recovered.call_count == 2
+
+
+def test_hung_recovery_notice_survives_resume_until_ack(monkeypatch) -> None:
+    now = [10_000.0]
+    monkeypatch.setattr(_rc.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(_rc, "windows_session_locked", lambda: False)
+    health = _hung_health(now[0], now[0] - 31.0)
+    manager, _, _, _ = _manager(health=health, escalate=MagicMock())
+    recovered = MagicMock(side_effect=[RuntimeError("temporary failure"), None])
+    manager.renderer_recovered = recovered
+    assert manager.maybe_escalate_renderer_hung()
+    manager.note_session_resumed()
+    assert not manager.maybe_escalate_renderer_hung()
+    recovered.assert_not_called()
+    now[0] += 1.0
+    health.note_success(now=now[0])
+    assert not manager.maybe_escalate_renderer_hung()
+    assert not manager.maybe_escalate_renderer_hung()
+    assert not manager.maybe_escalate_renderer_hung()
+    assert recovered.call_count == 2

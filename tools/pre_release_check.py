@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import os
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -62,6 +63,23 @@ def _read_version(path: Path) -> str | None:
     return match.group("version") if match else None
 
 
+def _git_output(root: Path, *args: str) -> str | None:
+    try:
+        completed = subprocess.run(
+            ["git", *args],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            check=False,
+        )
+    except OSError:
+        return None
+    if completed.returncode != 0:
+        return None
+    return completed.stdout.strip()
+
+
 def main() -> int:
     root = Path.cwd()
 
@@ -104,6 +122,17 @@ def main() -> int:
             print(f"{_ok('[OK]')} {release_notes[0].name}")
         else:
             failures.append(f"RELEASE_NOTES_v{version}_*.md is missing")
+        tag_commit = _git_output(root, "rev-list", "-n", "1", f"v{version}")
+        head_commit = _git_output(root, "rev-parse", "HEAD")
+        worktree_status = _git_output(root, "status", "--porcelain")
+        if tag_commit and head_commit and tag_commit != head_commit:
+            failures.append(
+                f"tag v{version} already exists at a different commit"
+            )
+        elif tag_commit and tag_commit == head_commit and worktree_status:
+            failures.append(
+                f"package version {version} already tags HEAD while the worktree has changes"
+            )
 
     print()
     if failures:

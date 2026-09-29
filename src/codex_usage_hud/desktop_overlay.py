@@ -327,8 +327,10 @@ class DesktopWorkOverlay:
         self._ensure_keepalive_worker_if_runtime_started()
         return self._process is not None
 
-    def show_system_notice(self, *, title: str, message: str) -> bool:
-        """Publish a non-interactive notice without replacing session bubbles."""
+    def show_system_notice(
+        self, *, title: str, message: str, dismissible: bool = False,
+    ) -> bool:
+        """Publish a notice without replacing session bubbles."""
         if self._closed:
             return False
         self._system_action = None
@@ -338,6 +340,8 @@ class DesktopWorkOverlay:
             "message": str(message or ""),
             "status": "warning",
             "persistent": True,
+            "dismissible": dismissible,
+            "instanceId": uuid.uuid4().hex,
         }
         if not self._runtime_available():
             self._report_unavailable_once(self._unavailable_reason)
