@@ -692,6 +692,26 @@ def test_general_provider_config_only_save_does_not_prompt_restart() -> None:
     assert "重启 Codex Desktop" not in status["message"]
 
 
+def test_renderer_default_switch_reloads_without_history_scan() -> None:
+    reload_config = MagicMock()
+    context = SimpleNamespace(
+        app_provider="old", reload_user_config=reload_config, settings_mtime=1,
+    )
+    with patch(
+        "codex_usage_hud.runtime_commands.set_default_codex_provider",
+        return_value={"providerId": "new", "changed": True},
+    ) as write_default:
+        status = _handle_renderer_settings_command(
+            {"action": "providerSetDefault", "provider": "new", "requestId": "switch-1"},
+            context, MagicMock(), MagicMock(),
+        )
+    write_default.assert_called_once_with("new")
+    reload_config.assert_called_once_with(include_history=False)
+    assert status["providerSetDefaultProvider"] == "new"
+    assert status["requestId"] == "switch-1"
+    assert status["restartVisible"] is False
+
+
 def test_general_provider_set_default_dispatches_without_restart_prompt() -> None:
     config = UserConfig.defaults()
     set_default = MagicMock(

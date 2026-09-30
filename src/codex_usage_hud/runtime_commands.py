@@ -2408,7 +2408,7 @@ def _handle_renderer_settings_command(
         # config.toml 已热生效（运行中的 Codex Desktop 新建会话即读取新默认值），
         # 但 HUD 自己的 app_provider/供应商注册表需要重载一次，让菜单栏标签立即刷新。
         context.settings_mtime = None
-        context.reload_user_config()
+        context.reload_user_config(include_history=False)
         # 保存流程通过写 HUD 设置文件触发 watcher 发布 settings_changed；本流程只改
         # config.toml，需显式发布同一事件，渲染器才会重拉 payload 并刷新菜单栏标签。
         publish = getattr(getattr(context, "runtime_events", None), "publish", None)

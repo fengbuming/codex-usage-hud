@@ -110,6 +110,8 @@ def partial_domains_for_command(
     # that closes the clone loading overlay.
     if action == "providerCloneSwitch":
         return {"settings"}
+    if action == "providerSetDefault":
+        return {"settings"}
     if (
         previous_config.price_table() != current_config.price_table()
         or previous_config.pricing_versions != current_config.pricing_versions

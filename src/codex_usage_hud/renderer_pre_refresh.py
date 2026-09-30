@@ -454,6 +454,12 @@ class RendererPreRefreshExecutor:
             previous_config,
             current_config,
         )
+        if action == "providerSetDefault":
+            # Deliver the acknowledgement even when concurrent session/file
+            # work still requires a full snapshot. Never leave the menu busy
+            # solely because that work prevented partial-snapshot replacement.
+            self._request_settings_domain(inputs)
+            return
         if not self._can_replace_snapshot_with_domains(inputs, partial_domains):
             if action in self._ASYNC_UPDATE_ACTIONS and self.state.latest_snapshot is None:
                 # There is no settings-domain refresh to carry this transient

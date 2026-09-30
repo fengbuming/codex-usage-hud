@@ -76,6 +76,14 @@ def test_provider_clone_delivers_settings_status_despite_price_table_change() ->
     ) == {"settings"}
 
 
+def test_default_provider_switch_uses_settings_partial_domain() -> None:
+    config = UserConfig.defaults()
+    assert partial_domains_for_command(
+        {"action": "providerSetDefault"},
+        previous_config=config, current_config=config,
+    ) == {"settings"}
+
+
 def test_overlay_side_save_uses_overlay_partial_domain() -> None:
     previous = UserConfig.defaults()
     current = UserConfig.from_dict(

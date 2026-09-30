@@ -76,6 +76,12 @@ _TEXT_PREFIX = r"""
         toggle: null,
         surface: null,
         providers: [],
+        pendingProvider: "",
+        pendingRequestId: "",
+        migration: null,
+        loadingTimer: 0,
+        timeoutTimer: 0,
+        feedbackLayer: null,
       };
       // 点击供应商切换菜单项且存在活跃会话（其供应商与目标不同）时弹出的
       // 迁移提示对话框。迁移优先在弹窗内完成（thread/fork 通常亚秒）；超过
@@ -5207,6 +5213,15 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
       function applySettingsCommandStatus(payload) {
         const status = payload?.settingsCommandStatus;
         sessionViewDomain.applySearchJump(status?.sessionCleanupSessionJump);
+        if (String(status?.action || "") === "providerSetDefault") {
+          const failed = String(status?.kind || "") === "error";
+          finishDefaultProviderSwitch({
+            requestId: status?.requestId,
+            provider: status?.providerSetDefaultProvider,
+            ok: !failed && !!status?.providerSetDefaultProvider,
+            message: status?.message,
+          });
+        }
         const providerCloneSwitch = status?.providerCloneSwitch;
         if (providerCloneSwitch && typeof providerCloneSwitch === "object") {
           finishProviderCloneWorkflow(status?.requestId);
@@ -5541,6 +5556,8 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(payload),
             keepalive: true,
+          }).then((response) => {
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
           }).catch((error) => {
             handleSettingsCommandSubmissionError(error, command);
           });
@@ -5604,6 +5621,13 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
       }
 
       function handleSettingsCommandSubmissionError(error, command = {}) {
+        if (String(command?.action || "") === "providerSetDefault") {
+          finishDefaultProviderSwitch({
+            requestId: command?.requestId || command?.id || "",
+            ok: false,
+            message: `切换命令提交失败：${error?.message || error}`,
+          });
+        }
         if (["restReminderAck", "restReminderStart", "restReminderCredit", "restReminderPostpone"].includes(String(command?.action || ""))) {
           restReminderDomain.restore();
         }
@@ -7256,6 +7280,14 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
           .codex-usage-hud-cli-provider-label[data-mismatch="true"]::before {
             background: var(--status-warning, #e2a23a);
           }
+          .codex-usage-hud-cli-provider-label[data-switching="true"]::before {
+            background: var(--accent, #7aa2ff);
+            animation: codexUsageHudProviderSwitchPulse .7s ease-in-out infinite alternate;
+          }
+          @keyframes codexUsageHudProviderSwitchPulse {
+            from { opacity: .35; transform: scale(.75); }
+            to { opacity: 1; transform: scale(1.15); }
+          }
           [data-codex-usage-hud-provider-switch-surface="true"] [role="menuitem"] {
             min-height: 32px;
             justify-content: space-between;
@@ -7279,7 +7311,8 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
             color: var(--status-warning, #e2a23a);
             background: color-mix(in srgb, var(--status-warning, #e2a23a) 13%, transparent);
           }
-          [data-codex-provider-migrate-layer="true"] {
+          [data-codex-provider-migrate-layer="true"],
+          [data-codex-provider-switch-feedback="true"] {
             position: fixed;
             inset: 0;
             z-index: 2147483100;
@@ -7367,8 +7400,10 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
             .codex-usage-hud-cli-quick-surface,
             .codex-usage-hud-cli-quick-track span,
             [data-codex-provider-migrate-layer="true"],
+            [data-codex-provider-switch-feedback="true"],
             .codex-usage-hud-provider-migrate-surface,
-            .codex-usage-hud-provider-migrate-spinner { animation: none; }
+            .codex-usage-hud-provider-migrate-spinner,
+            .codex-usage-hud-cli-provider-label[data-switching="true"]::before { animation: none; }
           }
         `;
         document.head.appendChild(style);
@@ -7512,6 +7547,81 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
         renderCodexCliQuickLaunchMenu();
       }
 
+      function clearDefaultProviderSwitchFeedback() {
+        const state = codexProviderSwitchMenuState;
+        window.clearTimeout(state.loadingTimer);
+        window.clearTimeout(state.timeoutTimer);
+        state.loadingTimer = 0;
+        state.timeoutTimer = 0;
+        state.feedbackLayer?.remove();
+        state.feedbackLayer = null;
+      }
+
+      function showDefaultProviderSwitchFeedback(message, failed = false) {
+        const state = codexProviderSwitchMenuState;
+        state.feedbackLayer?.remove();
+        const layer = document.createElement("div");
+        layer.dataset.codexProviderSwitchFeedback = "true";
+        layer.setAttribute("role", "dialog");
+        layer.setAttribute("aria-modal", "true");
+        layer.setAttribute("aria-label", failed ? "供应商切换未确认" : "正在切换供应商");
+        layer.innerHTML = `
+          <div class="codex-usage-hud-provider-migrate-surface">
+            <div class="codex-usage-hud-provider-migrate-head"><strong>${failed ? "供应商切换未确认" : "正在切换默认供应商"}</strong></div>
+            <div class="codex-usage-hud-provider-migrate-body" role="status">
+              ${failed ? "" : '<span class="codex-usage-hud-provider-migrate-spinner" aria-hidden="true"></span>'}
+              ${escapeHtml(message)}
+            </div>
+            ${failed ? '<div class="codex-usage-hud-provider-migrate-actions"><button type="button">关闭</button></div>' : ""}
+          </div>`;
+        if (failed) layer.querySelector("button")?.addEventListener("click", clearDefaultProviderSwitchFeedback);
+        document.body.appendChild(layer);
+        state.feedbackLayer = layer;
+      }
+
+      function beginDefaultProviderSwitch({ provider, requestId, migration = null } = {}) {
+        const normalized = String(provider || "").trim().toLowerCase();
+        if (!normalized || !requestId || codexProviderSwitchMenuState.pendingRequestId) return false;
+        clearDefaultProviderSwitchFeedback();
+        codexProviderSwitchMenuState.pendingProvider = normalized;
+        codexProviderSwitchMenuState.pendingRequestId = String(requestId || "");
+        codexProviderSwitchMenuState.migration = migration;
+        codexProviderSwitchMenuState.loadingTimer = window.setTimeout(() => {
+          showDefaultProviderSwitchFeedback(`正在保存「${providerDisplayName(hudSettingsFromPayload(), normalized)}」为默认供应商…`);
+        }, 350);
+        codexProviderSwitchMenuState.timeoutTimer = window.setTimeout(() => {
+          finishDefaultProviderSwitch({ requestId, ok: false, message: "暂未收到切换结果。配置可能已保存，请关闭后查看菜单中的默认标记。" });
+        }, 15000);
+        syncCodexCliQuickLaunchMenu();
+        return true;
+      }
+
+      function finishDefaultProviderSwitch({ requestId = "", provider = "", ok = true, message = "" } = {}) {
+        const expected = String(codexProviderSwitchMenuState.pendingRequestId || "");
+        const received = String(requestId || "");
+        if (!expected || expected !== received) return false;
+        clearDefaultProviderSwitchFeedback();
+        const settings = hudSettingsFromPayload();
+        const confirmed = String(provider || "")
+          .trim().toLowerCase();
+        ok = ok && confirmed === codexProviderSwitchMenuState.pendingProvider;
+        const migration = codexProviderSwitchMenuState.migration;
+        if (ok) {
+          settings.default_provider = confirmed;
+          if (settingsProviderDraft) settingsProviderDraft.appProvider = confirmed;
+        }
+        codexProviderSwitchMenuState.pendingProvider = "";
+        codexProviderSwitchMenuState.pendingRequestId = "";
+        codexProviderSwitchMenuState.migration = null;
+        syncCodexCliQuickLaunchMenu();
+        if (codexProviderSwitchMenuState.open) renderCodexProviderSwitchMenu();
+        if (!ok) showDefaultProviderSwitchFeedback(message || "未能切换默认供应商，请稍后重试。", true);
+        if (ok && migration && typeof migration === "object") {
+          openCodexProviderMigrateDialog(migration);
+        }
+        return true;
+      }
+
       function renderCodexProviderSwitchMenu() {
         const label = codexProviderSwitchMenuState.toggle;
         const settings = hudSettingsFromPayload();
@@ -7519,7 +7629,9 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
         // 默认徽标基于 config.toml 顶层 model_provider（稳定值），而非会被
         // 活跃会话供应商观察覆盖的 app_provider。
         const appProvider = String(
-          settings.default_provider || settings.app_provider || ""
+          settings.default_provider
+            || settings.app_provider
+            || ""
         ).trim().toLowerCase();
         const activeSession = String(currentPayload()?.activeSessionProvider || "").trim().toLowerCase();
         if (!label?.isConnected || !providers.length) {
@@ -8002,21 +8114,28 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
           const activeProvider = String(payload.activeSessionProvider || "").trim().toLowerCase();
           const activeSessionId = String(payload.sessionId || "").trim();
           const name = providerDisplayName(settings, provider);
-          submitSettingsCommand(
-            { action: "providerSetDefault", provider },
-            `正在切换默认供应商到「${name}」...`,
-            { preserveOverlay: true, quiet: true },
-          );
-          // 存在活跃会话且其供应商与目标不同：切换默认后弹出迁移提示，
-          // 新会话立即走新默认，当前会话可选择一键复制迁移到目标供应商。
-          if (activeProvider && activeProvider !== provider && activeSessionId) {
-            openCodexProviderMigrateDialog({
+          if (codexProviderSwitchMenuState.pendingRequestId) return;
+          const requestId = typedSettingsRequestId("provider-set-default");
+          const migration = activeProvider && activeProvider !== provider && activeSessionId
+            ? {
               targetProvider: provider,
               targetName: name,
               activeProvider,
               activeSessionId,
-            });
+            }
+            : null;
+          const currentDefault = String(settings.default_provider || settings.app_provider || "").trim().toLowerCase();
+          if (provider === currentDefault) {
+            if (migration) openCodexProviderMigrateDialog(migration);
+            return;
           }
+          if (!beginDefaultProviderSwitch({ provider, requestId, migration })) return;
+          const submitted = submitSettingsCommand(
+            { action: "providerSetDefault", provider, requestId },
+            `正在切换默认供应商到「${name}」...`,
+            { preserveOverlay: true, quiet: true },
+          );
+          if (!submitted) finishDefaultProviderSwitch({ requestId, ok: false });
           return;
         }
         const providerLabel = event.target?.closest?.('[data-codex-usage-hud-cli-provider-label="true"]');
@@ -8036,10 +8155,13 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
 
       function codexCliQuickLaunchProviderLabelState() {
         const active = String(currentPayload()?.activeSessionProvider || "").trim().toLowerCase();
+        const pending = String(codexProviderSwitchMenuState.pendingProvider || "")
+          .trim().toLowerCase();
         // config.toml 顶层 model_provider 的稳定默认（新会话默认供应商）；
         // app_provider 会被活跃会话供应商观察覆盖，不能作为「默认」展示。
         const fallback = String(
-          hudSettingsFromPayload().default_provider
+          pending
+            || hudSettingsFromPayload().default_provider
             || hudSettingsFromPayload().app_provider
             || ""
         ).trim().toLowerCase();
@@ -8051,8 +8173,11 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
           return {
             provider: active,
             mismatch,
+            switching: !!pending,
             text: `供应商 ${activeName}`,
-            title: mismatch
+            title: pending
+              ? `正在切换默认供应商为：${fallbackName}`
+              : mismatch
               ? `当前会话供应商：${activeName}（config.toml 默认：${fallbackName}）`
               : `当前会话供应商：${activeName}`,
           };
@@ -8062,8 +8187,11 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
           return {
             provider: fallback,
             mismatch: false,
-            text: `供应商 ${fallbackName}（默认）`,
-            title: `默认供应商：${fallbackName}（当前无活跃会话）`,
+            switching: !!pending,
+            text: pending ? `正在切换 ${fallbackName}…` : `供应商 ${fallbackName}（默认）`,
+            title: pending
+              ? `正在切换默认供应商为：${fallbackName}`
+              : `默认供应商：${fallbackName}（当前无活跃会话）`,
           };
         }
         return null;
@@ -8101,11 +8229,13 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
         if (
           label.dataset.provider !== state.provider
           || label.dataset.mismatch !== String(state.mismatch)
+          || label.dataset.switching !== String(state.switching)
           || label.textContent !== state.text
           || label.title !== state.title
         ) {
           label.dataset.provider = state.provider;
           label.dataset.mismatch = String(state.mismatch);
+          label.dataset.switching = String(state.switching);
           label.textContent = state.text;
           label.title = state.title;
         }
@@ -8227,6 +8357,10 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
       }
 
       function disposeCodexCliQuickLaunchMenu() {
+        clearDefaultProviderSwitchFeedback();
+        codexProviderSwitchMenuState.pendingRequestId = "";
+        codexProviderSwitchMenuState.pendingProvider = "";
+        codexProviderSwitchMenuState.migration = null;
         ctx.observers.clear("codex_cli_quick_launch_menu");
         closeCodexCliQuickLaunchMenu();
         closeCodexProviderSwitchMenu();

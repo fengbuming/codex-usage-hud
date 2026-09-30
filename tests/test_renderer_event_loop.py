@@ -1143,6 +1143,24 @@ def test_pre_refresh_command_replaces_full_snapshot_with_partial_domains() -> No
     )
 
 
+@pytest.mark.parametrize("reasons", [set(), {"session"}])
+def test_default_provider_switch_always_delivers_settings_status(reasons) -> None:
+    status = {"action": "providerSetDefault", "requestId": "switch-1"}
+    state = RendererLoopState(latest_snapshot=SimpleNamespace())
+    executor = RendererPreRefreshExecutor(
+        state, _pre_refresh_ports(execute_command=lambda command: status),
+    )
+    inputs = _tick_inputs(
+        plan=RefreshPlan(snapshot=True), reasons=reasons,
+        command={"action": "providerSetDefault"},
+    )
+    executor.apply_settings_command(inputs)
+    assert state.settings_command_status == status
+    assert inputs.event_refresh_request.domains == {"settings"}
+    assert inputs.event_refresh_request.force_fast
+    assert inputs.event_refresh_request.snapshot == bool(reasons)
+
+
 def test_pre_refresh_provider_clone_always_requests_settings_terminal_payload() -> None:
     state = RendererLoopState(latest_snapshot=SimpleNamespace())
     executor = RendererPreRefreshExecutor(
