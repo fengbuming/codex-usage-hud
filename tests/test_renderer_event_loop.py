@@ -1143,6 +1143,71 @@ def test_pre_refresh_command_replaces_full_snapshot_with_partial_domains() -> No
     )
 
 
+def test_pre_refresh_provider_clone_always_requests_settings_terminal_payload() -> None:
+    state = RendererLoopState(latest_snapshot=SimpleNamespace())
+    executor = RendererPreRefreshExecutor(
+        state,
+        _pre_refresh_ports(
+            current_config=lambda: "after",
+            execute_command=lambda command: {
+                "action": "providerCloneSwitch",
+                "requestId": command["requestId"],
+                "providerCloneSwitch": {"newProviderId": "custom-copy"},
+            },
+            partial_domains_for_command=lambda command, previous, current: None,
+        ),
+    )
+    inputs = _tick_inputs(
+        plan=RefreshPlan(snapshot=False),
+        reasons={"settings"},
+        command={"action": "providerCloneSwitch", "requestId": "clone-1"},
+    )
+
+    executor.apply_settings_command(inputs)
+
+    assert state.settings_command_status["requestId"] == "clone-1"
+    assert inputs.event_refresh_request.domains == {"settings"}
+    assert inputs.event_refresh_request.force_fast
+
+
+def test_pre_refresh_provider_clone_queues_and_wakes_terminal_payload() -> None:
+    woke = Event()
+
+    def execute(command: dict[str, object]) -> dict[str, object]:
+        return {
+            "action": "providerCloneSwitch",
+            "requestId": command["requestId"],
+            "message": "克隆完成",
+            "providerCloneSwitch": {"newProviderId": "custom-copy"},
+        }
+
+    state = RendererLoopState(latest_snapshot=SimpleNamespace())
+    executor = RendererPreRefreshExecutor(
+        state,
+        _pre_refresh_ports(execute_command=execute, wake=woke.set),
+    )
+    inputs = _tick_inputs(
+        plan=RefreshPlan(snapshot=False),
+        command={"action": "providerCloneSwitch", "requestId": "clone-async-1"},
+    )
+
+    try:
+        executor.apply_settings_command(inputs)
+
+        assert state.settings_command_status["action"] == "providerCloneSwitchPending"
+        assert woke.wait(timeout=1.0)
+
+        result_inputs = _tick_inputs(plan=RefreshPlan(snapshot=False))
+        executor.apply(result_inputs)
+
+        assert state.settings_command_status["action"] == "providerCloneSwitch"
+        assert state.settings_command_status["requestId"] == "clone-async-1"
+        assert result_inputs.event_refresh_request.domains == {"settings"}
+        assert result_inputs.event_refresh_request.force_fast
+    finally:
+        executor.close()
+
+
 def test_pre_refresh_async_update_commands_do_not_leave_sticky_command_status() -> None:
     """checkUpdate/installUpdate/updateAction 由 AutoUpdateManager（updateState）
     异步驱动最终状态。execute_command 只返回中间态（如 checking），不能作为粘性

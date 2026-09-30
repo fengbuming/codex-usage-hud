@@ -182,6 +182,7 @@ class GeneralCommandPorts:
     codex_cli_launch: Callable[[Mapping[str, object]], Mapping[str, object]] | None = None
     set_default_provider: Callable[[str], Mapping[str, object]] | None = None
     clone_provider_with_bearer_key: Callable[[str, str], Mapping[str, object]] | None = None
+    save_config_fast: Callable[[Any], None] | None = None
 
 
 def _status(message: str, *, kind: str = "") -> dict[str, object]:
@@ -246,6 +247,50 @@ def _pricing_version_state_changed(previous: UserConfig, current: UserConfig) ->
     return (
         previous.pricing_versions != current.pricing_versions
         or previous.pricing_audit != current.pricing_audit
+    )
+
+
+def _clone_provider_user_settings(
+    config: UserConfig,
+    source_provider: str,
+    new_provider: str,
+) -> UserConfig:
+    """Persist the HUD-side provider clone in the same backend workflow."""
+    source = str(source_provider or "").strip().lower()
+    target = str(new_provider or "").strip().lower()
+    source_settings = config.provider_settings.get(source)
+    if source_settings is None:
+        source_settings = ProviderSettings(
+            model_prices=dict(config.model_prices),
+            pricing_url=config.pricing_url,
+            weekly_adjustment_usd=config.weekly_adjustment_usd,
+        )
+    cloned_prices = {
+        key: replace(price, provider=target)
+        for key, price in source_settings.model_prices.items()
+    }
+    provider_settings = dict(config.provider_settings)
+    provider_settings[target] = replace(
+        source_settings,
+        model_prices=cloned_prices,
+    )
+    provider_order = list(config.provider_order)
+    if target not in provider_order:
+        provider_order.append(target)
+    selected_providers = list(config.selected_providers)
+    if config.provider_scope_mode == "custom" and target not in selected_providers:
+        selected_providers.append(target)
+    notification_only = [
+        provider
+        for provider in config.notification_only_providers
+        if provider != target
+    ]
+    return replace(
+        config,
+        provider_settings=provider_settings,
+        provider_order=provider_order,
+        selected_providers=selected_providers,
+        notification_only_providers=notification_only,
     )
 
 
@@ -1395,7 +1440,7 @@ def handle_general_command(
             provider = str(command.get("provider") or "").strip()
             try:
                 result = ports.set_default_provider(provider)
-            except (ValueError, OSError, FileNotFoundError) as exc:
+            except (ValueError, OSError, RuntimeError) as exc:
                 return _status(
                     _exc_detail_log(exc, tag="provider_set_default_failed"),
                     kind="error",
@@ -1416,6 +1461,16 @@ def handle_general_command(
             api_key = str(command.get("apiKey") or command.get("api_key") or "").strip()
             try:
                 result = ports.clone_provider_with_bearer_key(source, api_key)
+                new_id = str(
+                    (result.get("newProviderId") if isinstance(result, Mapping) else "")
+                    or ""
+                ).strip().lower()
+                if not new_id:
+                    raise ValueError("供应商克隆结果缺少新供应商 ID。")
+                save_cloned_config = ports.save_config_fast or ports.save_config
+                save_cloned_config(
+                    _clone_provider_user_settings(ports.load_config(), source, new_id)
+                )
             except (ValueError, OSError, FileNotFoundError) as exc:
                 return _status(
                     _exc_detail_log(exc, tag="provider_clone_switch_failed"),
@@ -1424,13 +1479,11 @@ def handle_general_command(
             new_name = str(
                 (result.get("name") if isinstance(result, Mapping) else "") or ""
             )
-            new_id = str(
-                (result.get("newProviderId") if isinstance(result, Mapping) else "") or ""
-            )
             status = _status(
                 f"已克隆为供应商「{new_name}」并切换为默认（新 key 已生效，无需重启），原供应商保留。"
             )
             status["providerCloneSwitch"] = dict(result) if isinstance(result, Mapping) else {}
+            status["providerCloneSwitch"]["hudSettingsCloned"] = True
             status["providerCloneSwitchProvider"] = new_id
             return status
         if action == "deleteProvider":
@@ -1853,13 +1906,11 @@ def handle_general_command(
                     for item in codex_provider_result.get("providerIds", [])
                     if str(item or "")
                 ]
-                # 修改了默认 Codex App Provider 时，Codex Desktop 在启动时才加载
-                # config.toml 与用户环境变量，必须重启 Codex Desktop 才能生效，
-                # 因此返回带 restartVisible + restartCodex 的状态，前端据此弹出
-                # 「立即重启 Codex Desktop / 稍后重启」提示。
-                if codex_provider_result.get("defaultProviderEdited"):
+                # config.toml 会被新会话热读；auth.json 和用户环境变量不会注入
+                # 已运行的 Codex Desktop 进程。只有默认供应商凭据变化才提示重启。
+                if codex_provider_result.get("requiresCodexRestart"):
                     return runtime_settings.settings_status(
-                        "默认 Codex App Provider 配置已保存，需要重启 Codex Desktop 才能生效。",
+                        "默认 Codex App Provider 凭据已保存，需要重启 Codex Desktop 才能生效。",
                         restart_visible=True,
                         restart_codex=True,
                     )
@@ -2163,6 +2214,13 @@ def _handle_renderer_settings_command(
         context.settings_mtime = None
         context.reload_user_config()
 
+    def save_config_fast(config: UserConfig) -> None:
+        if settings_store is None:
+            raise RuntimeError("配置存储当前不可用。")
+        settings_store.save(config)
+        context.settings_mtime = None
+        context.reload_user_config(include_history=False)
+
     def install_update(info: object) -> None:
         installer = download_update_asset(info)
         launch_installer(installer)
@@ -2359,17 +2417,12 @@ def _handle_renderer_settings_command(
         return result
 
     def clone_provider_with_bearer_key(source: str, api_key: str) -> Mapping[str, object]:
-        result = clone_provider_with_bearer_key_config(source, api_key)
-        # 新供应商段与顶层 model_provider 均已被运行中的 App Server 热读
-        # （实测：新增 [model_providers.<id>] 段 + experimental_bearer_token
-        # 在未重启时即被 App 识别并用于下一个请求）；这里重载 HUD 自身的
-        # 配置缓存并发布 settings_changed，让菜单栏标签与供应商列表立即刷新。
-        context.settings_mtime = None
-        context.reload_user_config()
-        publish = getattr(getattr(context, "runtime_events", None), "publish", None)
-        if callable(publish):
-            publish("settings_changed", source="provider_clone_switch", context={})
-        return result
+        # Do not reload the runtime between writing config.toml and cloning the
+        # HUD price table.  That incomplete intermediate state triggers an
+        # expensive provider/history refresh and can leave the renderer waiting
+        # indefinitely.  The command handler saves HUD settings immediately
+        # afterwards; save_config performs the single authoritative reload.
+        return clone_provider_with_bearer_key_config(source, api_key)
 
     general_ports = GeneralCommandPorts(
         load_config=load_config,
@@ -2408,6 +2461,7 @@ def _handle_renderer_settings_command(
         codex_cli_launch=launch_cli,
         set_default_provider=set_default_provider,
         clone_provider_with_bearer_key=clone_provider_with_bearer_key,
+        save_config_fast=save_config_fast,
     )
     result = dispatch_command(command, command_ports, general_ports)
     session_index = result.get("sessionIndex") if isinstance(result, Mapping) else None

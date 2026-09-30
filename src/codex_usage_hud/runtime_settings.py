@@ -104,6 +104,12 @@ def partial_domains_for_command(
     current_config: UserConfig,
 ) -> set[str] | None:
     action = str(command.get("action") or "").strip()
+    # Provider cloning intentionally adds a full provider price table.  The
+    # settings payload can carry that table without rebuilding the current
+    # session snapshot, and it must also deliver the terminal command status
+    # that closes the clone loading overlay.
+    if action == "providerCloneSwitch":
+        return {"settings"}
     if (
         previous_config.price_table() != current_config.price_table()
         or previous_config.pricing_versions != current_config.pricing_versions

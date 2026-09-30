@@ -31,6 +31,7 @@ class ProviderRegistryEntry:
     requires_openai_auth: bool = False
     wire_api: str = "responses"
     has_api_key: bool = False
+    bearer_token: str = ""
     config_text: str = ""
     from_base_config: bool = False
     from_profile: bool = False
@@ -109,6 +110,7 @@ def discover_provider_registry(
                         "requires_openai_auth": definition.requires_openai_auth,
                         "wire_api": definition.wire_api,
                         "has_api_key": definition.has_api_key,
+                        "bearer_token": definition.bearer_token,
                         "config_text": definition.section_text,
                     }
                 )
@@ -146,6 +148,7 @@ def discover_provider_registry(
             requires_openai_auth=bool(state.get("requires_openai_auth")),
             wire_api=str(state.get("wire_api") or "responses"),
             has_api_key=bool(state.get("has_api_key")),
+            bearer_token=str(state.get("bearer_token") or ""),
             config_text=str(state.get("config_text") or ""),
             from_base_config=bool(state.get("from_base_config")),
             from_profile=bool(state.get("from_profile")),

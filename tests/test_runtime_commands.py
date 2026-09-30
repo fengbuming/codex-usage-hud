@@ -1,3 +1,4 @@
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -16,7 +17,7 @@ from codex_usage_hud.runtime_commands import (
     handle_insights_command,
     dispatch_command,
 )
-from codex_usage_hud.config import UserConfig
+from codex_usage_hud.config import ModelPrice, ProviderSettings, UserConfig
 
 
 TARGET_ID = "10000000-0000-4000-8000-000000000012"
@@ -607,6 +608,7 @@ def test_general_provider_save_prompts_for_default_codex_restart() -> None:
             "changed": True,
             "providerIds": ["custom"],
             "defaultProviderEdited": True,
+            "requiresCodexRestart": True,
         }
     )
     ports = GeneralCommandPorts(
@@ -646,6 +648,48 @@ def test_general_provider_save_prompts_for_default_codex_restart() -> None:
     assert status["restartVisible"] is True
     assert status["restartCodex"] is True
     assert "重启 Codex Desktop" in status["message"]
+
+
+def test_general_provider_config_only_save_does_not_prompt_restart() -> None:
+    config = UserConfig.defaults()
+    ports = GeneralCommandPorts(
+        load_config=lambda: config,
+        save_config=lambda value: None,
+        fetch_prices=lambda url: {},
+        rest_reminder=None,
+        update_manager=None,
+        work_overlay=None,
+        request_restart=lambda: None,
+        request_exit=lambda: None,
+        check_update=lambda: SimpleNamespace(error="", available=False, current_version="1"),
+        install_update=lambda info: None,
+        overlay_status=lambda: {},
+        start_overlay_install=lambda: False,
+        clear_forced_missing=lambda: None,
+        forced_missing_with_real_install=lambda: False,
+        pyside_version=lambda: "",
+        default_overlay_limit=lambda: 1,
+        dismiss_warnings_today=lambda: True,
+        save_codex_providers=lambda updates: {
+            "changed": True,
+            "providerIds": ["custom"],
+            "defaultProviderEdited": True,
+            "requiresCodexRestart": False,
+        },
+    )
+
+    status = dispatch_command(
+        {
+            "action": "save",
+            "settings": config.to_dict(),
+            "codexProviders": [{"provider_id": "custom"}],
+        },
+        RuntimeCommandPorts(),
+        ports,
+    )
+
+    assert status["restartVisible"] is False
+    assert "重启 Codex Desktop" not in status["message"]
 
 
 def test_general_provider_set_default_dispatches_without_restart_prompt() -> None:
@@ -728,7 +772,29 @@ def test_general_provider_set_default_surfaces_failure() -> None:
 
 
 def test_general_provider_clone_switch_dispatches_with_result() -> None:
-    config = UserConfig.defaults()
+    source_price = ModelPrice(
+        input=1.0,
+        cached_input=0.5,
+        cache_write=0.75,
+        output=2.0,
+        reasoning=2.0,
+        model="gpt-clone-test",
+        provider="custom",
+    )
+    config = replace(
+        UserConfig.defaults(),
+        provider_settings={
+            "custom": ProviderSettings(
+                model_prices={"gpt-clone-test": source_price},
+                pricing_url="https://prices.example/custom.json",
+                weekly_adjustment_usd=3.5,
+            )
+        },
+        provider_order=["custom"],
+        provider_scope_mode="custom",
+        selected_providers=["custom"],
+    )
+    saved: list[UserConfig] = []
     clone_switch = MagicMock(
         return_value={
             "changed": True,
@@ -739,7 +805,7 @@ def test_general_provider_clone_switch_dispatches_with_result() -> None:
     )
     ports = GeneralCommandPorts(
         load_config=lambda: config,
-        save_config=lambda value: None,
+        save_config=lambda value: saved.append(value),
         fetch_prices=lambda url: {},
         rest_reminder=None,
         update_manager=None,
@@ -769,9 +835,20 @@ def test_general_provider_clone_switch_dispatches_with_result() -> None:
     assert status["action"] == "providerCloneSwitch"
     assert status["providerCloneSwitchProvider"] == "custom-copy"
     assert status["providerCloneSwitch"]["newProviderId"] == "custom-copy"
+    assert status["providerCloneSwitch"]["hudSettingsCloned"] is True
     assert "OpenAI（副本）" in status["message"]
     assert status.get("restartVisible") is not True
     assert status.get("restartCodex") is not True
+    assert len(saved) == 1
+    cloned = saved[0]
+    assert cloned.provider_order == ["custom", "custom-copy"]
+    assert cloned.selected_providers == ["custom", "custom-copy"]
+    assert cloned.provider_settings["custom-copy"].pricing_url == "https://prices.example/custom.json"
+    assert cloned.provider_settings["custom-copy"].weekly_adjustment_usd == 3.5
+    cloned_price = cloned.provider_settings["custom-copy"].model_prices["gpt-clone-test"]
+    assert cloned_price.input == 1.0
+    assert cloned_price.output == 2.0
+    assert cloned_price.provider == "custom-copy"
 
 
 def test_general_provider_clone_switch_surfaces_failure() -> None:

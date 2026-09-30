@@ -43,7 +43,7 @@ QUOTED_STRING_PATTERN = re.compile(
 
 @dataclass(frozen=True, slots=True)
 class CodexProviderDefinition:
-    """Non-secret provider metadata exposed to the settings renderer."""
+    """Provider metadata used to build the local settings payload."""
 
     provider_id: str
     name: str = ""
@@ -54,6 +54,7 @@ class CodexProviderDefinition:
     requires_openai_auth: bool = False
     wire_api: str = "responses"
     has_api_key: bool = False
+    bearer_token: str = ""
     section_text: str = ""
 
 
@@ -222,6 +223,19 @@ def _broadcast_environment_change() -> None:
         return
     try:
         user32 = ctypes.windll.user32
+        # Registry persistence is already complete. WM_SETTINGCHANGE is only a
+        # best-effort hint, so do not make provider saves wait behind every
+        # top-level window on the desktop (the old broadcast could stall for
+        # the full five-second timeout when one window was unresponsive).
+        notify = getattr(user32, "SendNotifyMessageW", None)
+        if callable(notify):
+            notify(
+                ctypes.c_void_p(0xFFFF),
+                ctypes.c_uint(0x001A),
+                ctypes.c_void_p(0),
+                ctypes.c_wchar_p("Environment"),
+            )
+            return
         result = ctypes.c_size_t(0)
         user32.SendMessageTimeoutW(
             ctypes.c_void_p(0xFFFF),
@@ -229,7 +243,7 @@ def _broadcast_environment_change() -> None:
             ctypes.c_void_p(0),
             ctypes.c_wchar_p("Environment"),
             ctypes.c_uint(0x0002),
-            ctypes.c_uint(5000),
+            ctypes.c_uint(250),
             ctypes.byref(result),
         )
     except (AttributeError, OSError):
@@ -589,6 +603,11 @@ def read_provider_definitions(
         requires_openai_auth = normalized_provider == "custom" or bool(
             raw_value.get("requires_openai_auth")
         )
+        bearer_token = (
+            ""
+            if requires_openai_auth
+            else str(raw_value.get("experimental_bearer_token") or "")
+        )
         auth_key = (
             CODEX_AUTH_API_KEY
             if normalized_provider == default_provider and requires_openai_auth
@@ -607,10 +626,13 @@ def read_provider_definitions(
             requires_openai_auth=requires_openai_auth,
             wire_api=str(raw_value.get("wire_api") or "responses").strip(),
             has_api_key=(
-                bool(read_codex_auth_api_key(path, auth_key=auth_key))
+                bool(bearer_token)
+                or bool(read_codex_auth_api_key(path, auth_key=auth_key))
                 if auth_key
-                else bool(_user_environment_value(env_key)) if env_key else False
+                else bool(bearer_token)
+                or (bool(_user_environment_value(env_key)) if env_key else False)
             ),
+            bearer_token=bearer_token,
             section_text=_provider_section_text(text, provider_id),
         )
     return result
@@ -700,6 +722,9 @@ def save_provider_configs(
     auth_original_exists = False
     auth_candidate_text = ""
     auth_changed = False
+    default_environment_keys: set[str] = set()
+    default_restart_environment_keys: set[str] = set()
+    default_bearer_changed = False
 
     for update in normalized_updates:
         raw_section_text = str(
@@ -718,6 +743,12 @@ def save_provider_configs(
                     if isinstance(raw_entry, Mapping):
                         raw_default_entry = raw_entry
                     break
+        uses_experimental_bearer = bool(
+            raw_default_entry.get("experimental_bearer_token")
+        ) and not bool(raw_default_entry.get("requires_openai_auth"))
+        requested_api_key = str(
+            update.get("api_key") or update.get("apiKey") or ""
+        )
         is_default_provider = (
             bool(default_provider) and normalized_requested_id == default_provider
         )
@@ -728,6 +759,15 @@ def save_provider_configs(
                 or bool(raw_default_entry.get("requires_openai_auth"))
             )
         )
+        if (
+            is_default_provider
+            and uses_experimental_bearer
+            and requested_api_key
+        ):
+            default_bearer_changed = (
+                requested_api_key
+                != str(raw_default_entry.get("experimental_bearer_token") or "")
+            )
         if is_default_provider and codex_auth_uses_official_account(path):
             raise ValueError(
                 "官方账号登录时，默认 Codex App Provider 由 Codex Desktop 管理，不支持编辑。"
@@ -808,6 +848,11 @@ def save_provider_configs(
                 next_body = _set_quoted_value(body, "base_url", base_url, newline)
                 if env_key or re.search(r"(?m)^[\t ]*env_key[\t ]*=", body):
                     next_body = _set_quoted_value(next_body, "env_key", env_key, newline)
+            if uses_experimental_bearer and api_key:
+                newline = _preferred_newline(candidate_text)
+                next_body = _set_quoted_value(
+                    next_body, "experimental_bearer_token", api_key, newline
+                )
             candidate_text = _replace_section_body(candidate_text, provider_id, next_body)
 
         if is_default_app_provider:
@@ -821,6 +866,10 @@ def save_provider_configs(
             previous_env_key = existing.env_key if existing else ""
             previous_env_value = _user_environment_value(previous_env_key)
             target_env_value = _user_environment_value(env_key)
+            if is_default_provider:
+                default_environment_keys.add(env_key.casefold())
+                if not uses_experimental_bearer:
+                    default_restart_environment_keys.add(env_key.casefold())
             if env_key not in env_before:
                 env_before[env_key] = target_env_value
             if api_key:
@@ -830,6 +879,13 @@ def save_provider_configs(
                     env_after[env_key] = previous_env_value
                 elif is_new or not existing or previous_env_key != env_key:
                     raise ValueError(f"请为 Provider {provider_id} 填写 API key。")
+            if is_default_provider:
+                default_provider_before_section = _provider_section_text(
+                    original_text, provider_id
+                )
+                default_provider_candidate_section = _provider_section_text(
+                    candidate_text, provider_id
+                )
 
     _validate_toml(candidate_text)
     config_changed = candidate_text != original_text
@@ -901,6 +957,18 @@ def save_provider_configs(
             ) from None
         raise
 
+    default_environment_changed = any(
+        str(item or "").casefold() in default_environment_keys
+        for item in env_written
+    )
+    default_restart_environment_changed = any(
+        str(item or "").casefold() in default_restart_environment_keys
+        for item in env_written
+    )
+    default_credentials_changed = bool(
+        auth_changed or default_environment_changed or default_bearer_changed
+    )
+    requires_codex_restart = bool(auth_changed or default_restart_environment_changed)
     return {
         "changed": bool(config_changed or created_profiles or env_written or auth_changed),
         "providerIds": provider_ids,
@@ -911,8 +979,10 @@ def save_provider_configs(
         "authKeys": [CODEX_AUTH_API_KEY] if auth_changed else [],
         "defaultProviderEdited": bool(
             default_provider_before_section != default_provider_candidate_section
-            or auth_changed
+            or default_credentials_changed
         ),
+        "defaultProviderCredentialsChanged": default_credentials_changed,
+        "requiresCodexRestart": requires_codex_restart,
     }
 
 
@@ -1082,6 +1152,9 @@ def clone_provider_with_bearer_key(
     if not name_replaced:
         retained_lines.insert(0, f'name = "{_toml_string(f"{source_name}（副本）")}"')
     retained_lines.append(f'experimental_bearer_token = "{_toml_string(key)}"')
+    env_key = re.sub(r"[^A-Za-z0-9_]", "_", new_id).upper().strip("_")
+    env_key = f"{env_key or 'CODEX_PROVIDER'}_API_KEY"
+    retained_lines.append(f'env_key = "{_toml_string(env_key)}"')
     new_body = newline.join(retained_lines).strip(newline)
     candidate_text = _add_provider_section_text(original_text, new_id, new_body)
     # 顶层 model_provider 切到新供应商（复用 set_default_codex_provider 的 head/tail 改写）。
@@ -1107,12 +1180,28 @@ def clone_provider_with_bearer_key(
         raise ValueError("克隆后的供应商段写入校验失败。")
     if str(candidate_parsed.get("model_provider") or "").strip().casefold() != new_id:
         raise ValueError("config.toml 顶层 model_provider 写入后校验失败。")
-    _write_text_atomically(path, candidate_text, original_text, private=True)
+    previous_env_value = _user_environment_value(env_key)
+    env_written = False
+    try:
+        if previous_env_value != key:
+            _set_user_environment_value(env_key, key)
+            env_written = True
+        _write_text_atomically(path, candidate_text, original_text, private=True)
+    except Exception:
+        if env_written:
+            try:
+                _set_user_environment_value(env_key, previous_env_value)
+            except Exception:
+                raise RuntimeError(
+                    "供应商克隆失败，且新环境变量无法完全恢复，请检查用户环境变量。"
+                ) from None
+        raise
     return {
         "changed": True,
         "providerId": requested,
         "newProviderId": new_id,
         "name": f"{source_name}（副本）",
+        "environmentKey": env_key,
         "configPath": str(path),
     }
 

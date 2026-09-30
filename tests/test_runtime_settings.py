@@ -1,6 +1,6 @@
 from dataclasses import replace
 
-from codex_usage_hud.config import ModelPrice, UserConfig
+from codex_usage_hud.config import ModelPrice, ProviderSettings, UserConfig
 from codex_usage_hud.runtime_settings import (
     background_usage_response_status,
     changed_config_keys,
@@ -43,6 +43,35 @@ def test_background_usage_workdir_uses_settings_partial_domain() -> None:
     assert partial_domains_for_command(
         {"action": "openBackgroundUsageWorkdir"},
         previous_config=current,
+        current_config=current,
+    ) == {"settings"}
+
+
+def test_provider_clone_delivers_settings_status_despite_price_table_change() -> None:
+    previous = UserConfig.defaults()
+    current = replace(
+        previous,
+        provider_settings={
+            "custom-copy": ProviderSettings(
+                model_prices={
+                    "gpt-clone": ModelPrice(
+                        input=1.0,
+                        cached_input=0.5,
+                        cache_write=0.75,
+                        output=2.0,
+                        reasoning=2.0,
+                        model="gpt-clone",
+                        provider="custom-copy",
+                    )
+                }
+            )
+        },
+    )
+
+    assert previous.price_table() != current.price_table()
+    assert partial_domains_for_command(
+        {"action": "providerCloneSwitch"},
+        previous_config=previous,
         current_config=current,
     ) == {"settings"}
 

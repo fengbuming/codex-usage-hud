@@ -2133,7 +2133,12 @@ _TEXT_PREFIX = r"""
           providerId: provider,
           name: String(detail.name || "").trim(),
           baseUrl: String(detail.baseUrl || ""),
-          envKey: String(detail.envKey || (defined ? "" : suggestedProviderEnvironmentKey(provider))),
+          envKey: String(
+            detail.envKey
+            || ((detail.usesExperimentalBearer === true || !defined)
+              ? suggestedProviderEnvironmentKey(provider)
+              : ""),
+          ),
           configText: String(detail.configText || ""),
           apiKey: "",
           currentApiKey: String(detail.apiKey || ""),
@@ -2430,11 +2435,6 @@ _TEXT_PREFIX = r"""
         const required = activeProvider === draft.appProvider;
         const providerRegistryEntry = settings.provider_registry?.[activeProvider] || {};
         const officialAccount = required && providerRegistryEntry.officialAccount === true;
-        // 仅 custom / requires_openai_auth 的默认供应商走 auth.json 编辑链路；
-        // 其它默认供应商（如内置 openai）不开放编辑，与后端 is_default_app_provider 判定一致。
-        const defaultProviderEditable = required && (
-          activeProvider === "custom" || providerRegistryEntry.requiresOpenaiAuth === true
-        );
         const quickLaunchEnabled = draft.quickLaunchProviders?.has(activeProvider) === true;
         const pricingDraftPending = settingsDirtyProviders.has(activeProvider);
         const meta = settingsProviderMeta(settings, activeProvider);
@@ -2476,9 +2476,7 @@ _TEXT_PREFIX = r"""
               <button type="button" class="codex-usage-hud-settings-icon-action" data-action="settings-transfer-provider" data-provider="${escapeHtml(activeProvider)}" aria-label="复制或迁移 ${escapeHtml(activeDisplayName)} 的会话" title="复制或迁移会话"><span aria-hidden="true">⇆</span></button>
               ${officialAccount
                 ? '<span class="codex-usage-hud-provider-config-locked" role="img" aria-label="官方账号登录，默认 Provider 不可编辑" title="官方账号登录时由 Codex Desktop 管理，默认 Provider 不可编辑">🔒</span>'
-                : defaultProviderEditable || !required
-                  ? '<button type="button" class="codex-usage-hud-settings-icon-action" data-action="settings-edit-provider" data-provider="' + escapeHtml(activeProvider) + '" aria-label="编辑 ' + escapeHtml(activeDisplayName) + ' 供应商配置" title="编辑供应商配置">✎</button>'
-                  : ''}
+                : '<button type="button" class="codex-usage-hud-settings-icon-action" data-action="settings-edit-provider" data-provider="' + escapeHtml(activeProvider) + '" aria-label="编辑 ' + escapeHtml(activeDisplayName) + ' 供应商配置" title="编辑供应商配置">✎</button>'}
               ${required ? "" : '<button type="button" class="codex-usage-hud-settings-icon-action codex-usage-hud-provider-delete-action" data-action="settings-delete-provider" data-provider="' + escapeHtml(activeProvider) + '" aria-label="删除 ' + escapeHtml(activeDisplayName) + ' 供应商" title="删除供应商"><span aria-hidden="true">⌫</span></button>'}
               <button type="button" class="codex-usage-hud-settings-action codex-usage-hud-pricing-apply-action" data-action="settings-pricing-apply" data-primary="true" data-price-draft-pending="${pricingDraftPending}" aria-label="${pricingDraftPending ? "应用模型单价修改，有待应用修改" : "应用模型单价修改"}" title="${pricingDraftPending ? "应用待提交的模型单价修改" : "应用模型单价修改"}">应用<span class="codex-usage-hud-provider-dirty-dot codex-usage-hud-pricing-apply-dirty-dot" data-pricing-apply-dirty-dot="true" aria-hidden="true" ${pricingDraftPending ? "" : "hidden"}></span></button>
             </div>
@@ -2926,10 +2924,12 @@ _TEXT_PREFIX = r"""
         const normalizedProvider = String(provider || "").trim().toLowerCase();
         const isAppProvider = !isNew && normalizedProvider === String(settingsProviderDraft.appProvider || "").trim().toLowerCase();
         const registryEntry = settings.provider_registry?.[normalizedProvider] || {};
-        // 仅 custom / requires_openai_auth 的默认供应商走 auth.json 编辑链路，与后端 is_default_app_provider 判定一致。
-        const isDefaultProvider = isAppProvider && (
+        // 只有 custom / requires_openai_auth 的默认供应商走 auth.json；其它
+        // 默认供应商仍可编辑，但凭据保存在其 env_key 指向的用户环境变量中。
+        const usesCodexAuth = isAppProvider && (
           normalizedProvider === "custom" || registryEntry.requiresOpenaiAuth === true
         );
+        const usesExperimentalBearer = registryEntry.usesExperimentalBearer === true;
         // 官方账号登录时，任意默认供应商都不可编辑（不限于 custom）。
         if (isAppProvider && registryEntry.officialAccount === true) {
           setSettingsStatus("官方账号登录时，默认 Codex App Provider 由 Codex Desktop 管理，不支持编辑。", "error");
@@ -2958,11 +2958,15 @@ _TEXT_PREFIX = r"""
         // 结尾则默认关闭，避免失焦时改写用户既有的非 /v1 配置。
         const initialV1Enabled = isNew
           || /\/v1\/?$/i.test(String(target?.baseUrl || registryEntry.baseUrl || "").trim());
-        const targetEnvKey = target?.envKey || (isNew ? suggestedProviderEnvironmentKey(normalizedProvider) : "");
+        const targetEnvKey = target?.envKey || (
+          (isNew || usesExperimentalBearer)
+            ? suggestedProviderEnvironmentKey(normalizedProvider)
+            : ""
+        );
         const initialConfigText = String(
           target?.configText
             || defaultProviderSectionText(normalizedProvider, target?.baseUrl || "", targetEnvKey, {
-              isDefault: isDefaultProvider,
+              isDefault: usesCodexAuth,
             }),
         );
         const sourceProvider = isNew
@@ -2988,7 +2992,7 @@ _TEXT_PREFIX = r"""
                   <input data-provider-config-field="provider_id" value="${escapeHtml(normalizedProvider)}" ${isNew ? "" : "readonly"} autocomplete="off">
                 </label>
                 <label>供应商名称
-                  <input data-provider-config-field="name" value="${escapeHtml(initialProviderName)}" ${isDefaultProvider ? "readonly" : ""} placeholder="默认与 Provider ID 相同" autocomplete="off">
+                  <input data-provider-config-field="name" value="${escapeHtml(initialProviderName)}" ${usesCodexAuth ? "readonly" : ""} placeholder="默认与 Provider ID 相同" autocomplete="off">
                 </label>
               </div>
               ${isNew ? `<label>复制模型列表 / 单价配置
@@ -3007,10 +3011,10 @@ _TEXT_PREFIX = r"""
                 </div>
                 <input data-provider-config-field="base_url" value="${escapeHtml(target?.baseUrl || "")}" placeholder="https://api.example.com/v1" autocomplete="url">
               </div>
-              ${isDefaultProvider
+              ${usesCodexAuth
                 ? `<div class="codex-usage-hud-provider-config-auth-note">Codex App 使用 auth.json 中的 OPENAI_API_KEY，不使用用户环境变量。</div>`
                 : `<label>用户环境变量名称
-                  <input data-provider-config-field="env_key" value="${escapeHtml(target?.envKey || (isNew ? suggestedProviderEnvironmentKey(normalizedProvider) : ""))}" autocomplete="off">
+                  <input data-provider-config-field="env_key" value="${escapeHtml(targetEnvKey)}" autocomplete="off">
                 </label>`}
               <div class="codex-usage-hud-provider-config-apikey">
                 <label>API key
@@ -3046,9 +3050,13 @@ _TEXT_PREFIX = r"""
                 <span>此处内容会写回用户 config.toml；Base URL 和环境变量名会与上面的字段同步。</span>
               </label>
             </details>
-            <div class="codex-usage-hud-settings-confirm-body">${isDefaultProvider
+            <div class="codex-usage-hud-settings-confirm-body">${usesExperimentalBearer
+              ? "保存设置后会同步更新 config.toml 中的内嵌 bearer token 和对应用户环境变量，新的 Codex 会话立即生效，无需重启。编辑时已填充当前密钥，点击 👁 可查看明文。"
+              : usesCodexAuth
               ? "保存设置后会更新主 config.toml 的默认 Provider 段，Base URL / 名称等修改保存后立即生效（新会话，无需重启）；API key 写入 Codex auth.json，编辑时已填充当前密钥，点击 👁 可查看明文。修改 API key 后需重启 Codex Desktop 才能确保生效，保存后会提示你选择立即重启或稍后重启。"
-              : "保存设置后会更新用户的 config.toml，保存后立即生效（新会话，无需重启）；API key 只写入用户环境变量，不会保存到 HUD 配置。编辑时已填充当前密钥，点击 👁 可查看明文。"}</div>
+              : isAppProvider
+                ? "保存设置后会更新主 config.toml 的默认 Provider 段，Base URL / 名称等修改保存后立即生效（新会话，无需重启）；API key 只写入用户环境变量，不会保存到 HUD 配置。已运行的 Codex Desktop 不会获得新的环境变量值，因此修改 API key 后会提示你选择立即重启或稍后重启。"
+                : "保存设置后会更新用户的 config.toml，保存后立即生效（新会话，无需重启）；API key 只写入用户环境变量，不会保存到 HUD 配置。编辑时已填充当前密钥，点击 👁 可查看明文。"}</div>
             <div class="codex-usage-hud-provider-config-status" data-provider-config-status="true" role="alert" aria-live="polite"></div>
             <div class="codex-usage-hud-settings-confirm-actions">
               <button type="button" class="codex-usage-hud-settings-action" data-action="settings-provider-cancel" data-variant="ghost">取消</button>
@@ -3063,6 +3071,13 @@ _TEXT_PREFIX = r"""
         const sectionNode = layer.querySelector('[data-provider-config-field="section_text"]');
         const baseUrlNode = layer.querySelector('[data-provider-config-field="base_url"]');
         const v1Node = layer.querySelector('[data-provider-config-field="base_url_v1"]');
+        if (
+          usesExperimentalBearer
+          && envNode
+          && !providerSectionBasicString(sectionNode?.value || "", "env_key")
+        ) {
+          syncProviderSectionFromFields(layer);
+        }
         let generatedEnvKey = isNew
           ? suggestedProviderEnvironmentKey(idNode?.value)
           : "";
@@ -3160,9 +3175,10 @@ _TEXT_PREFIX = r"""
         const settings = hudSettingsFromPayload();
         const providerRegistryEntry = settings.provider_registry?.[provider] || {};
         // 与后端 is_default_app_provider 判定一致：仅 custom / requires_openai_auth 默认供应商走 auth.json 链路。
-        const isDefaultProvider = isAppProvider && (
+        const usesCodexAuth = isAppProvider && (
           provider === "custom" || providerRegistryEntry.requiresOpenaiAuth === true
         );
+        const usesExperimentalBearer = providerRegistryEntry.usesExperimentalBearer === true;
         if (isAppProvider && providerRegistryEntry.officialAccount === true) {
           setProviderConfigDialogError("官方账号登录时，默认 Codex App Provider 由 Codex Desktop 管理，不支持编辑。");
           return false;
@@ -3171,7 +3187,7 @@ _TEXT_PREFIX = r"""
         const baseUrl = sectionNode
           ? providerSectionBasicString(sectionText, "base_url").trim().replace(/\/+$/, "")
           : String(baseUrlNode?.value || "").trim().replace(/\/+$/, "");
-        const envKey = isDefaultProvider
+        const envKey = usesCodexAuth
           ? ""
           : sectionNode
           ? providerSectionBasicString(sectionText, "env_key").trim()
@@ -3194,7 +3210,7 @@ _TEXT_PREFIX = r"""
           setProviderConfigDialogError("请输入有效的用户环境变量名称。");
           return false;
         }
-        if (!envKey && (isNew || (!isDefaultProvider && existingCodex?.originalEnvKey))) {
+        if (!envKey && (isNew || (!usesCodexAuth && existingCodex?.originalEnvKey))) {
           setProviderConfigDialogError("请输入有效的用户环境变量名称。");
           return false;
         }
@@ -3205,7 +3221,7 @@ _TEXT_PREFIX = r"""
         }
         if (
           !apiKey
-          && (isNew || (isDefaultProvider && !existingCodex?.hasApiKey))
+          && (isNew || (usesCodexAuth && !existingCodex?.hasApiKey))
           && !existingCodex?.hasApiKey
         ) {
           setProviderConfigDialogError(
@@ -3215,13 +3231,13 @@ _TEXT_PREFIX = r"""
           );
           return false;
         }
-        // 默认供应商编辑：仅「修改了 API key」（写入 auth.json）才需要重启确认；
+        // 默认供应商编辑：仅修改凭据（auth.json 或用户环境变量）才需要重启确认；
         // Base URL / 名称 / wire_api 等 config.toml 字段已实测可热读，保存后即时生效，
         // 直接提交保存。弹窗按钮会设置 providerRestartDecision 并再次调用本函数完成提交。
-        const apiKeyChanged = isDefaultProvider
+        const apiKeyChanged = isAppProvider
           && !!apiKey
           && apiKey !== String(existingCodex?.currentApiKey || "");
-        if (isDefaultProvider && apiKeyChanged && providerRestartDecision === null) {
+        if (isAppProvider && apiKeyChanged && !usesExperimentalBearer && providerRestartDecision === null) {
           openProviderRestartConfirmDialog(provider);
           return;
         }
@@ -3231,18 +3247,22 @@ _TEXT_PREFIX = r"""
           // 克隆并切换：新 key 写入新供应商段的 experimental_bearer_token
           // （config.toml 字段，实测运行中的 Codex 热读并用于下一个请求，无需重启），
           // 顶层默认同步切到新供应商；不写 auth.json。原供应商段保留。
+          const requestId = typedSettingsRequestId("provider-clone-switch");
+          beginProviderCloneWorkflow(requestId, displayName, provider);
           const submitted = submitSettingsCommand(
-            { action: "providerCloneSwitch", provider, apiKey },
+            { action: "providerCloneSwitch", provider, apiKey, requestId },
             `正在克隆供应商 ${displayName} 并切换...`,
           );
           if (submitted) {
             codexProviderDirty.clear();
             renderSettingsProviderTabs();
+          } else {
+            finishProviderCloneWorkflow(requestId);
           }
           return true;
         }
         // 默认供应商未修改 API key 的保存：config.toml 字段热读，免重启即可生效。
-        if (isDefaultProvider && !apiKeyChanged) {
+        if (isAppProvider && (!apiKeyChanged || usesExperimentalBearer)) {
           codexProviderHotSavePending = true;
         }
         if (isNew) {
@@ -3301,7 +3321,7 @@ _TEXT_PREFIX = r"""
         }
         // 编辑供应商只保存 provider 配置（Base URL / 环境变量 / API key / config.toml 段），
         // 不提交 model 单价，避免触发价格变更校验或「保存新价格」确认流程。
-        if (isDefaultProvider && restartDecision) {
+        if (isAppProvider && restartDecision) {
           pendingProviderRestartAfterSave = restartDecision;
         }
         const submitted = submitSettingsCommand(
@@ -3710,6 +3730,12 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
       let pendingProviderRestartAfterSave = null;
       // 默认供应商免重启保存（未修改 API key）成功后的待展示提示。
       let codexProviderHotSavePending = false;
+      let providerCloneRequestId = "";
+      let providerCloneLoadingTimer = null;
+      let providerClonePollTimer = null;
+      let providerCloneExpectedId = "";
+      let providerCloneSourceId = "";
+      let providerCloneDisplayName = "";
 
       function setSettingsStatus(text, kind = "") {
         const node = document.querySelector(`#${settingsModalId} [data-settings-status="true"]`);
@@ -3912,6 +3938,13 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
       function openProviderRestartConfirmDialog(provider = "") {
         const dialog = settingsDialogRoot();
         if (!dialog) return;
+        const normalizedProvider = String(provider || "").trim().toLowerCase();
+        const registryEntry = hudSettingsFromPayload().provider_registry?.[normalizedProvider] || {};
+        const usesCodexAuth = normalizedProvider === "custom"
+          || registryEntry.requiresOpenaiAuth === true;
+        const credentialReloadText = usesCodexAuth
+          ? "API key 写入 auth.json 后，Codex Desktop 在运行中不会重新读取，重启后才会生效"
+          : "API key 写入用户环境变量后，已运行的 Codex Desktop 不会获得新的值，重启后才会生效";
         const layer = document.createElement("div");
         layer.className = "codex-usage-hud-settings-confirm-layer";
         layer.dataset.settingsConfirm = "true";
@@ -3920,7 +3953,7 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
           <div class="codex-usage-hud-settings-confirm-card" role="alertdialog" aria-modal="true" aria-label="修改 API key 生效方式">
             <div class="codex-usage-hud-settings-confirm-kicker">Codex Desktop</div>
             <div class="codex-usage-hud-settings-confirm-title">修改 API key 的生效方式</div>
-            <div class="codex-usage-hud-settings-confirm-body">API key 写入 auth.json 后，Codex Desktop 在运行中不会重新读取，重启后才会生效；Base URL / 名称等修改已即时生效（新会话）。\n\n也可以把当前供应商克隆为一个带新 key 的新供应商并切换为默认——新 key 直接写入 config.toml，无需重启即可生效，原供应商保留。\n\n选择操作方式：</div>
+            <div class="codex-usage-hud-settings-confirm-body">${credentialReloadText}；Base URL / 名称等修改已即时生效（新会话）。\n\n也可以把当前供应商克隆为一个带新 key 的新供应商并切换为默认——新 key 直接写入 config.toml，无需重启即可生效，原供应商保留。\n\n选择操作方式：</div>
             <div class="codex-usage-hud-settings-confirm-actions">
               <button type="button" class="codex-usage-hud-settings-action" data-action="settings-provider-restart-cancel" data-variant="ghost">取消</button>
               <button type="button" class="codex-usage-hud-settings-action" data-action="settings-provider-clone-switch" data-primary="true">克隆并切换（无需重启）</button>
@@ -3945,9 +3978,8 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
         applyProviderConfigDialog();
       }
 
-      // 克隆切换成功后：把新供应商复制进 HUD 供应商列表（价格表随源供应商），
-      // 并保存 HUD 侧设置（不带 codexProviders，避免覆盖 config.toml 中已写入的
-      // experimental_bearer_token）。菜单/统计立即认识新供应商。
+      // 后端已在克隆 config.toml 的同一工作流中持久化 HUD 单价与供应商顺序；
+      // 这里仅做即时 UI 对齐，不再发起容易被后续 payload 覆盖的级联保存命令。
       function handleProviderCloneSwitchResult(result) {
         const newId = String(result.newProviderId || "").trim().toLowerCase();
         const sourceId = String(result.providerId || "").trim().toLowerCase();
@@ -3959,29 +3991,132 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
           || settings.default_model_prices
           || settings.model_prices
           || {};
-        if (draft.order.includes(newId)) return false;
-        draft.order.push(newId);
-        draft.providers[newId] = {
-          enabled: true,
-          notificationOnly: false,
-          settings: {
-            model_prices: cloneProviderModelPrices(sourceTable, newId),
-            pricing_url: sourceEntry?.settings?.pricing_url || "",
-            weekly_adjustment_usd: sourceEntry?.settings?.weekly_adjustment_usd || 0,
-          },
-        };
+        if (!draft.order.includes(newId)) draft.order.push(newId);
+        if (!draft.providers[newId]) {
+          draft.providers[newId] = {
+            enabled: true,
+            notificationOnly: false,
+            settings: {
+              model_prices: cloneProviderModelPrices(sourceTable, newId),
+              pricing_url: sourceEntry?.settings?.pricing_url || "",
+              weekly_adjustment_usd: sourceEntry?.settings?.weekly_adjustment_usd || 0,
+            },
+          };
+        }
         draft.activeProvider = newId;
         // 默认供应商标记立即对齐：不依赖后端 settings_changed 的时序，前端先把
         // HUD 侧 appProvider 与 config.toml 已切换的顶层 model_provider 保持一致。
         draft.appProvider = newId;
         window[settingsProviderName] = newId;
         renderSettingsProviderTabs();
-        const nextSettings = { ...collectSettingsForm(), app_provider: newId };
-        const submitted = submitSettingsCommand(
-          { action: "save", settings: nextSettings },
-          "正在同步供应商列表...",
+        renderSettingsProviderEditor();
+        return result.hudSettingsCloned === true;
+      }
+
+      function finishProviderCloneWorkflow(requestId = "") {
+        const expected = String(providerCloneRequestId || "");
+        const received = String(requestId || "");
+        if (expected && received && expected !== received) return false;
+        if (providerCloneLoadingTimer !== null) {
+          window.clearTimeout(providerCloneLoadingTimer);
+          providerCloneLoadingTimer = null;
+        }
+        if (providerClonePollTimer !== null) {
+          window.clearTimeout(providerClonePollTimer);
+          providerClonePollTimer = null;
+        }
+        const layer = document.querySelector(
+          `#${settingsModalId} [data-loading-mode="provider-clone"]`,
         );
-        return !!submitted;
+        if (layer) layer.remove();
+        providerCloneRequestId = "";
+        providerCloneExpectedId = "";
+        providerCloneSourceId = "";
+        providerCloneDisplayName = "";
+        return true;
+      }
+
+      function expectedProviderCloneId(sourceProvider) {
+        const source = String(sourceProvider || "").trim().toLowerCase();
+        const existing = new Set(settingsProviderNames(hudSettingsFromPayload()));
+        const base = `${source}-copy`;
+        let candidate = base;
+        let suffix = 2;
+        while (existing.has(candidate)) {
+          candidate = `${base}${suffix}`;
+          suffix += 1;
+        }
+        return candidate;
+      }
+
+      function pollProviderClonePersistence(requestId) {
+        const expected = String(providerCloneExpectedId || "");
+        const bridge = settingsBridgeUrl();
+        if (!expected || !bridge || providerCloneRequestId !== requestId) return;
+        fetch(`${bridge}/settings`, { cache: "no-store" })
+          .then((response) => response.ok ? response.json() : null)
+          .then((payload) => {
+            if (providerCloneRequestId !== requestId) return;
+            const settings = payload?.settings;
+            const order = Array.isArray(settings?.provider_order)
+              ? settings.provider_order.map((item) => String(item || "").trim().toLowerCase())
+              : [];
+            const persisted = settings?.provider_settings?.[expected];
+            if (order.includes(expected) && persisted && typeof persisted === "object") {
+              const result = {
+                providerId: providerCloneSourceId,
+                newProviderId: expected,
+                name: `${providerCloneDisplayName}（副本）`,
+                hudSettingsCloned: true,
+              };
+              finishProviderCloneWorkflow(requestId);
+              handleProviderCloneSwitchResult(result);
+              setSettingsStatus(
+                `已克隆为供应商「${result.name}」并切换为默认（新 key 已生效，无需重启），原供应商保留。`,
+                "",
+              );
+              return;
+            }
+            providerClonePollTimer = window.setTimeout(
+              () => pollProviderClonePersistence(requestId),
+              100,
+            );
+          })
+          .catch(() => {
+            if (providerCloneRequestId !== requestId) return;
+            providerClonePollTimer = window.setTimeout(
+              () => pollProviderClonePersistence(requestId),
+              200,
+            );
+          });
+      }
+
+      function beginProviderCloneWorkflow(requestId, displayName, sourceProvider) {
+        finishProviderCloneWorkflow();
+        providerCloneRequestId = String(requestId || "");
+        providerCloneSourceId = String(sourceProvider || "").trim().toLowerCase();
+        providerCloneExpectedId = expectedProviderCloneId(providerCloneSourceId);
+        providerCloneDisplayName = String(displayName || providerCloneSourceId);
+        const expected = providerCloneRequestId;
+        providerClonePollTimer = window.setTimeout(
+          () => pollProviderClonePersistence(expected),
+          100,
+        );
+        providerCloneLoadingTimer = window.setTimeout(() => {
+          providerCloneLoadingTimer = null;
+          if (!expected || providerCloneRequestId !== expected) return;
+          openSettingsLoading({
+            kicker: "正在克隆",
+            title: `正在克隆供应商 ${displayName} 并切换`,
+            body: "正在写入供应商配置、复制模型单价并切换默认供应商。完成后会自动打开副本。",
+            mode: "provider-clone",
+            dismissible: false,
+          });
+          const layer = document.querySelector(
+            `#${settingsModalId} [data-loading-mode="provider-clone"]`,
+          );
+          if (layer) layer.dataset.providerCloneRequestId = expected;
+        }, 350);
       }
 
       function setSettingsLoadingText({ kicker = "", title = "", body = "" } = {}) {
@@ -5074,12 +5209,15 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
         sessionViewDomain.applySearchJump(status?.sessionCleanupSessionJump);
         const providerCloneSwitch = status?.providerCloneSwitch;
         if (providerCloneSwitch && typeof providerCloneSwitch === "object") {
+          finishProviderCloneWorkflow(status?.requestId);
           if (handleProviderCloneSwitchResult(providerCloneSwitch)) {
             setSettingsStatus(
               status?.message || "供应商已克隆并切换为默认，新 key 已生效（无需重启），原供应商保留。",
               "",
             );
           }
+        } else if (String(status?.action || "") === "providerCloneSwitch") {
+          finishProviderCloneWorkflow(status?.requestId);
         }
         const sessionIndex = status?.sessionIndex || payload?.sessionIndex;
         if (sessionIndex && typeof sessionIndex === "object") {
@@ -5472,6 +5610,9 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
         if (String(command?.action || "") === "fetchPricesPreview") {
           closePricingPreviewLoading({ requestId: command?.requestId || command?.id || "" });
         }
+        if (String(command?.action || "") === "providerCloneSwitch") {
+          finishProviderCloneWorkflow(command?.requestId || command?.id || "");
+        }
         setSettingsStatus(`设置命令提交失败：${error?.message || error}`, "error");
         if (String(command?.action || "") !== "deleteProvider") return;
         const requestId = String(command?.requestId || command?.id || "");
@@ -5487,7 +5628,13 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
         clearProviderDeleteWorkflow();
       }
 
-      function openSettingsLoading({ kicker = "正在处理", title = "", body = "", mode = "" } = {}) {
+      function openSettingsLoading({
+        kicker = "正在处理",
+        title = "",
+        body = "",
+        mode = "",
+        dismissible = true,
+      } = {}) {
         const dialog = settingsDialogRoot();
         if (!dialog) return;
         closeSettingsConfirm();
@@ -5497,7 +5644,7 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
         if (mode) layer.dataset.loadingMode = mode;
         layer.innerHTML = `
           <div class="codex-usage-hud-settings-confirm-card" role="status" aria-live="polite" aria-label="${escapeHtml(title || "正在处理设置变更")}">
-            <button type="button" class="codex-usage-hud-settings-confirm-close" data-action="settings-confirm-close" aria-label="关闭">×</button>
+            ${dismissible ? '<button type="button" class="codex-usage-hud-settings-confirm-close" data-action="settings-confirm-close" aria-label="关闭">×</button>' : ""}
             <div class="codex-usage-hud-settings-confirm-kicker">${escapeHtml(kicker)}</div>
             <div class="codex-usage-hud-settings-confirm-title">${escapeHtml(title)}</div>
             <div class="codex-usage-hud-settings-confirm-body">${escapeHtml(body)}</div>

@@ -945,15 +945,32 @@ def _provider_registry_payload(context: object) -> dict[str, object]:
             "officialAccount": bool(getattr(entry, "official_account", False)),
             "requiresOpenaiAuth": bool(getattr(entry, "requires_openai_auth", False)),
             "wireApi": str(getattr(entry, "wire_api", "responses") or "responses"),
+            "usesExperimentalBearer": bool(
+                str(getattr(entry, "bearer_token", "") or "")
+            ),
             "hasApiKey": bool(getattr(entry, "has_api_key", False)),
             "apiKey": (
-                read_codex_auth_api_key(config_path)
-                if str(provider or "").strip().lower() == app_provider
-                else _user_environment_value(str(getattr(entry, "env_key", "") or ""))
+                str(getattr(entry, "bearer_token", "") or "")
+                or read_codex_auth_api_key(config_path)
+                if (
+                    str(provider or "").strip().lower() == app_provider
+                    and (
+                        str(provider or "").strip().lower() == "custom"
+                        or bool(getattr(entry, "requires_openai_auth", False))
+                    )
+                )
+                else str(getattr(entry, "bearer_token", "") or "")
+                or _user_environment_value(str(getattr(entry, "env_key", "") or ""))
             ),
             "configText": (
                 ""
-                if str(provider or "").strip().lower() == app_provider
+                if (
+                    str(provider or "").strip().lower() == app_provider
+                    and (
+                        str(provider or "").strip().lower() == "custom"
+                        or bool(getattr(entry, "requires_openai_auth", False))
+                    )
+                )
                 else str(getattr(entry, "config_text", "") or "")
             ),
         }

@@ -6,6 +6,7 @@ from pathlib import Path
 import stat
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -34,6 +35,18 @@ from codex_usage_hud.codex_provider_config import (
 
 
 class CodexProviderConfigTests(unittest.TestCase):
+    def test_environment_change_broadcast_is_non_blocking_when_notify_is_available(self) -> None:
+        user32 = MagicMock()
+        with patch.object(provider_config_module.os, "name", "nt"), patch.object(
+            provider_config_module.ctypes,
+            "windll",
+            SimpleNamespace(user32=user32),
+        ):
+            provider_config_module._broadcast_environment_change()
+
+        user32.SendNotifyMessageW.assert_called_once()
+        user32.SendMessageTimeoutW.assert_not_called()
+
     def test_atomic_provider_write_preserves_existing_mode(self) -> None:
         config_text = (
             'model_provider = "custom"\n\n'
@@ -356,6 +369,8 @@ class CodexProviderConfigTests(unittest.TestCase):
 
         self.assertTrue(result["changed"])
         self.assertTrue(result["defaultProviderEdited"])
+        self.assertTrue(result["defaultProviderCredentialsChanged"])
+        self.assertTrue(result["requiresCodexRestart"])
         self.assertEqual(result["profilePaths"], [])
         self.assertEqual(result["environmentKeys"], [])
         self.assertEqual(result["authKeys"], [CODEX_AUTH_API_KEY])
@@ -402,7 +417,138 @@ class CodexProviderConfigTests(unittest.TestCase):
 
         self.assertFalse(result["changed"])
         self.assertFalse(result["defaultProviderEdited"])
+        self.assertFalse(result["defaultProviderCredentialsChanged"])
+        self.assertFalse(result["requiresCodexRestart"])
         self.assertEqual(result["authKeys"], [])
+
+    def test_default_custom_provider_config_only_edit_does_not_request_restart(self) -> None:
+        config_text = (
+            'model_provider = "custom"\n\n'
+            "[model_providers.custom]\n"
+            'name = "OpenAI"\n'
+            'base_url = "https://old.example/v1"\n'
+            'wire_api = "responses"\n'
+            "requires_openai_auth = true\n"
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            path = root / "config.toml"
+            path.write_text(config_text, encoding="utf-8")
+            (root / "auth.json").write_text(
+                '{"OPENAI_API_KEY": "same-secret"}\n', encoding="utf-8"
+            )
+            result = save_provider_configs(
+                {
+                    "provider_id": "custom",
+                    "base_url": "https://new.example/v1",
+                    "api_key": "same-secret",
+                },
+                config_path=path,
+            )
+
+        self.assertTrue(result["defaultProviderEdited"])
+        self.assertFalse(result["defaultProviderCredentialsChanged"])
+        self.assertFalse(result["requiresCodexRestart"])
+
+    def test_default_environment_provider_edit_marks_credential_restart(self) -> None:
+        config_text = (
+            'model_provider = "muyuan"\n\n'
+            "[model_providers.muyuan]\n"
+            'name = "Muyuan"\n'
+            'base_url = "https://old.example/v1"\n'
+            'env_key = "MUYUAN_API_KEY"\n'
+        )
+        env_values = {"MUYUAN_API_KEY": "old-secret"}
+
+        def fake_get_env(key: str) -> str:
+            return env_values.get(str(key), "")
+
+        def fake_set_env(key: str, value: str) -> None:
+            env_values[str(key)] = str(value)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "config.toml"
+            path.write_text(config_text, encoding="utf-8")
+            with patch(
+                "codex_usage_hud.codex_provider_config._user_environment_value",
+                side_effect=fake_get_env,
+            ), patch(
+                "codex_usage_hud.codex_provider_config._set_user_environment_value",
+                side_effect=fake_set_env,
+            ):
+                result = save_provider_configs(
+                    {
+                        "provider_id": "muyuan",
+                        "base_url": "https://new.example/v1",
+                        "env_key": "MUYUAN_API_KEY",
+                        "api_key": "new-secret",
+                        "section_text": (
+                            "[model_providers.muyuan]\n"
+                            'name = "Muyuan New"\n'
+                            'base_url = "https://new.example/v1"\n'
+                            'env_key = "MUYUAN_API_KEY"\n'
+                        ),
+                    },
+                    config_path=path,
+                )
+
+        self.assertTrue(result["defaultProviderEdited"])
+        self.assertTrue(result["defaultProviderCredentialsChanged"])
+        self.assertTrue(result["requiresCodexRestart"])
+        self.assertEqual(result["environmentKeys"], ["MUYUAN_API_KEY"])
+        self.assertEqual(env_values["MUYUAN_API_KEY"], "new-secret")
+
+    def test_default_bearer_clone_key_edit_is_hot_and_updates_environment(self) -> None:
+        config_text = (
+            'model_provider = "token-x-copy"\n\n'
+            "[model_providers.token-x-copy]\n"
+            'name = "Token X copy"\n'
+            'base_url = "https://api.example/v1"\n'
+            'experimental_bearer_token = "old-secret"\n'
+            'env_key = "TOKEN_X_COPY_API_KEY"\n'
+        )
+        env_values = {"TOKEN_X_COPY_API_KEY": "old-secret"}
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "config.toml"
+            path.write_text(config_text, encoding="utf-8")
+            with patch(
+                "codex_usage_hud.codex_provider_config._user_environment_value",
+                side_effect=lambda name: env_values.get(str(name), ""),
+            ), patch(
+                "codex_usage_hud.codex_provider_config._set_user_environment_value",
+                side_effect=lambda name, value: env_values.__setitem__(
+                    str(name), str(value)
+                ),
+            ):
+                result = save_provider_configs(
+                    {
+                        "provider_id": "token-x-copy",
+                        "base_url": "https://api.example/v1",
+                        "env_key": "TOKEN_X_COPY_API_KEY",
+                        "api_key": "new-secret",
+                        "section_text": (
+                            "[model_providers.token-x-copy]\n"
+                            'name = "Token X copy"\n'
+                            'base_url = "https://api.example/v1"\n'
+                            'experimental_bearer_token = "old-secret"\n'
+                            'env_key = "TOKEN_X_COPY_API_KEY"\n'
+                        ),
+                    },
+                    config_path=path,
+                )
+                updated = path.read_text(encoding="utf-8")
+                definition = read_provider_definitions(path)["token-x-copy"]
+
+        self.assertIn(
+            'experimental_bearer_token = "new-secret"',
+            updated,
+        )
+        self.assertEqual(env_values["TOKEN_X_COPY_API_KEY"], "new-secret")
+        self.assertEqual(definition.bearer_token, "new-secret")
+        self.assertTrue(result["defaultProviderEdited"])
+        self.assertTrue(result["defaultProviderCredentialsChanged"])
+        self.assertFalse(result["requiresCodexRestart"])
 
     def test_default_auth_write_rolls_back_when_profile_write_fails(self) -> None:
         config_text = (
@@ -1449,6 +1595,23 @@ class SendCliChatProbeTests(unittest.TestCase):
 
 
 class CloneProviderWithBearerKeyTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.environment: dict[str, str] = {}
+        get_patcher = patch(
+            "codex_usage_hud.codex_provider_config._user_environment_value",
+            side_effect=lambda name: self.environment.get(str(name), ""),
+        )
+        set_patcher = patch(
+            "codex_usage_hud.codex_provider_config._set_user_environment_value",
+            side_effect=lambda name, value: self.environment.__setitem__(
+                str(name), str(value)
+            ),
+        )
+        get_patcher.start()
+        set_patcher.start()
+        self.addCleanup(get_patcher.stop)
+        self.addCleanup(set_patcher.stop)
+
     def test_clone_matches_mixed_case_source_id_and_restricts_config_mode(self) -> None:
         config_text = (
             'model_provider = "MuYuan"\n\n'
@@ -1485,6 +1648,11 @@ class CloneProviderWithBearerKeyTests(unittest.TestCase):
                 'experimental_bearer_token = "sk-mixed-case"',
                 updated,
             )
+            self.assertIn('env_key = "MUYUAN_COPY_API_KEY"', updated)
+            self.assertEqual(result["environmentKey"], "MUYUAN_COPY_API_KEY")
+            self.assertEqual(
+                self.environment["MUYUAN_COPY_API_KEY"], "sk-mixed-case"
+            )
             self.assertEqual(
                 updated.splitlines()[0], 'model_provider = "muyuan-copy"'
             )
@@ -1520,6 +1688,7 @@ class CloneProviderWithBearerKeyTests(unittest.TestCase):
         )
         self.assertIn("stream_idle_timeout_ms = 45000", copy_section)
         self.assertIn('experimental_bearer_token = "sk-clone-key-789"', copy_section)
+        self.assertIn('env_key = "CUSTOM_COPY_API_KEY"', copy_section)
         self.assertNotIn('env_key = "TENANT_API_KEY"', copy_section)
         self.assertNotIn("requires_openai_auth", copy_section)
 
@@ -1551,6 +1720,7 @@ class CloneProviderWithBearerKeyTests(unittest.TestCase):
             self.assertIn(
                 'experimental_bearer_token = "sk-clone-key-123"', updated
             )
+            self.assertIn('env_key = "CUSTOM_COPY_API_KEY"', updated)
             self.assertIn("[model_providers.custom]", updated)
             copy_section = updated.split("[model_providers.custom-copy]", 1)[1]
             self.assertNotIn("requires_openai_auth", copy_section)
@@ -1577,6 +1747,7 @@ class CloneProviderWithBearerKeyTests(unittest.TestCase):
             self.assertIn(
                 'experimental_bearer_token = "sk-clone-key-456"', updated
             )
+            self.assertIn('env_key = "CUSTOM_COPY2_API_KEY"', updated)
             self.assertEqual(
                 updated.splitlines()[0],
                 'model_provider = "custom-copy2"',

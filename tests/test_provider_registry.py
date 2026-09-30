@@ -7,6 +7,7 @@ import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SRC_ROOT = PROJECT_ROOT / "src"
@@ -109,6 +110,59 @@ class ProviderRegistryTests(unittest.TestCase):
         self.assertFalse(registry.entries["muyuan"].requires_openai_auth)
         self.assertTrue(payload["custom"]["requiresOpenaiAuth"])
         self.assertFalse(payload["muyuan"]["requiresOpenaiAuth"])
+
+    def test_default_environment_provider_exposes_environment_key_and_config(self) -> None:
+        config_text = (
+            'model_provider = "muyuan"\n'
+            "[model_providers.muyuan]\n"
+            'name = "Muyuan"\n'
+            'base_url = "https://api.example/v1"\n'
+            'env_key = "MUYUAN_API_KEY"\n'
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "config.toml"
+            config_path.write_text(config_text, encoding="utf-8")
+            registry = discover_provider_registry(
+                user_config=UserConfig.defaults(),
+                config_path=config_path,
+                include_history=False,
+            )
+            with patch(
+                "codex_usage_hud.usage_insights._user_environment_value",
+                return_value="environment-secret",
+            ):
+                payload = _provider_registry_payload(
+                    SimpleNamespace(provider_registry=registry)
+                )
+
+        self.assertEqual(payload["muyuan"]["apiKey"], "environment-secret")
+        self.assertIn('env_key = "MUYUAN_API_KEY"', payload["muyuan"]["configText"])
+
+    def test_default_bearer_clone_exposes_key_and_environment_metadata(self) -> None:
+        config_text = (
+            'model_provider = "token-x-copy"\n'
+            "[model_providers.token-x-copy]\n"
+            'name = "Token X copy"\n'
+            'base_url = "https://api.example/v1"\n'
+            'experimental_bearer_token = "inline-secret"\n'
+            'env_key = "TOKEN_X_COPY_API_KEY"\n'
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "config.toml"
+            config_path.write_text(config_text, encoding="utf-8")
+            registry = discover_provider_registry(
+                user_config=UserConfig.defaults(),
+                config_path=config_path,
+                include_history=False,
+            )
+            payload = _provider_registry_payload(
+                SimpleNamespace(provider_registry=registry)
+            )
+
+        self.assertEqual(payload["token-x-copy"]["apiKey"], "inline-secret")
+        self.assertEqual(payload["token-x-copy"]["envKey"], "TOKEN_X_COPY_API_KEY")
+        self.assertTrue(payload["token-x-copy"]["hasApiKey"])
+        self.assertTrue(payload["token-x-copy"]["usesExperimentalBearer"])
 
     def test_registry_uses_base_provider_profiles_saved_settings_and_recent_history(self) -> None:
         now = datetime(2026, 7, 16, tzinfo=timezone.utc)

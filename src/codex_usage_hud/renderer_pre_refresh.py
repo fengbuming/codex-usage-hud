@@ -48,6 +48,8 @@ class RendererPreRefreshExecutor:
     _CODEX_CLI_LAUNCH_ACTION = "codexCliLaunch"
     _CODEX_CLI_LAUNCH_PENDING_ACTION = "codexCliLaunchPending"
     _CODEX_CLI_LAUNCH_CANCEL_ACTION = "codexCliLaunchCancel"
+    _PROVIDER_CLONE_ACTION = "providerCloneSwitch"
+    _PROVIDER_CLONE_PENDING_ACTION = "providerCloneSwitchPending"
     _BACKGROUND_QUERY_ACTIONS = frozenset(
         {
             "openBackgroundUsage",
@@ -80,6 +82,8 @@ class RendererPreRefreshExecutor:
         self._codex_cli_launch_cancel_event: Event | None = None
         self._codex_cli_launch_phase = ""
         self._codex_cli_launch_results: deque[tuple[str, dict[str, object]]] = deque()
+        self._provider_clone_request_id = ""
+        self._provider_clone_results: deque[tuple[str, dict[str, object]]] = deque()
 
     def close(self) -> None:
         """Stop accepting launch results and bound the worker during shutdown."""
@@ -97,6 +101,8 @@ class RendererPreRefreshExecutor:
             self._codex_cli_launch_thread = None
             self._codex_cli_launch_cancel_event = None
             self._codex_cli_launch_phase = ""
+            self._provider_clone_results.clear()
+            self._provider_clone_request_id = ""
 
     def apply(self, inputs: RendererTickInputs) -> None:
         self.apply_async_command_results(inputs)
@@ -109,6 +115,8 @@ class RendererPreRefreshExecutor:
         with self._async_lock:
             results = list(self._codex_cli_launch_results)
             self._codex_cli_launch_results.clear()
+            provider_clone_results = list(self._provider_clone_results)
+            self._provider_clone_results.clear()
         for request_id, status in results:
             with self._async_lock:
                 if request_id != self._codex_cli_launch_request_id:
@@ -117,6 +125,14 @@ class RendererPreRefreshExecutor:
                 self._codex_cli_launch_thread = None
                 self._codex_cli_launch_cancel_event = None
                 self._codex_cli_launch_phase = ""
+            self.state.settings_command_status = dict(status)
+            inputs.update_state = self.ports.update_status()
+            self._request_settings_domain(inputs)
+        for request_id, status in provider_clone_results:
+            with self._async_lock:
+                if request_id != self._provider_clone_request_id:
+                    continue
+                self._provider_clone_request_id = ""
             self.state.settings_command_status = dict(status)
             inputs.update_state = self.ports.update_status()
             self._request_settings_domain(inputs)
@@ -205,6 +221,70 @@ class RendererPreRefreshExecutor:
                 kind="error",
             )
             self._request_settings_domain(inputs)
+
+    def _start_provider_clone(
+        self,
+        command: dict[str, object],
+        inputs: RendererTickInputs,
+    ) -> None:
+        request_id = str(
+            command.get("requestId") or command.get("id") or "provider-clone"
+        ).strip()
+        with self._async_lock:
+            if self._closed:
+                self.state.settings_command_status = self._command_status(
+                    action=self._PROVIDER_CLONE_ACTION,
+                    request_id=request_id,
+                    message="供应商克隆工作流已停止。",
+                    kind="error",
+                )
+                self._request_settings_domain(inputs)
+                return
+            if self._provider_clone_request_id:
+                self.state.settings_command_status = self._command_status(
+                    action=self._PROVIDER_CLONE_ACTION,
+                    request_id=request_id,
+                    message="上一次供应商克隆仍在进行，请稍候。",
+                    kind="error",
+                )
+                self._request_settings_domain(inputs)
+                return
+            self._provider_clone_request_id = request_id
+        self.state.settings_command_status = self._command_status(
+            action=self._PROVIDER_CLONE_PENDING_ACTION,
+            request_id=request_id,
+            message="正在写入供应商配置、复制模型单价并切换默认供应商...",
+        )
+        inputs.update_state = self.ports.update_status()
+        self._request_settings_domain(inputs)
+        _LOGGER.info("renderer_provider_clone_started request_id=%s", request_id)
+        try:
+            status = dict(self.ports.execute_command(command))
+        except Exception as exc:
+            _LOGGER.exception(
+                "renderer_provider_clone_failed request_id=%s",
+                request_id,
+            )
+            status = self._command_status(
+                action=self._PROVIDER_CLONE_ACTION,
+                request_id=request_id,
+                message=f"供应商克隆失败：{exc}",
+                kind="error",
+            )
+        status.setdefault("action", self._PROVIDER_CLONE_ACTION)
+        status.setdefault("requestId", request_id)
+        with self._async_lock:
+            if self._closed or request_id != self._provider_clone_request_id:
+                return
+            self._provider_clone_results.append((request_id, status))
+        wake = self.ports.wake
+        if callable(wake):
+            wake()
+        _LOGGER.info(
+            "renderer_provider_clone_finished request_id=%s kind=%s",
+            request_id,
+            str(status.get("kind") or "ok"),
+        )
 
     def _run_codex_cli_launch(
         self,
@@ -348,6 +428,9 @@ class RendererPreRefreshExecutor:
             return
         if action == self._CODEX_CLI_LAUNCH_ACTION:
             self._start_codex_cli_launch(dict(inputs.command), inputs)
+            return
+        if action == self._PROVIDER_CLONE_ACTION:
+            self._start_provider_clone(dict(inputs.command), inputs)
             return
         if action == self._CODEX_CLI_LAUNCH_CANCEL_ACTION:
             self._cancel_codex_cli_launch(dict(inputs.command), inputs)
