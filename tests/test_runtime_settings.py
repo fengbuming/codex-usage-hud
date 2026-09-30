@@ -151,3 +151,25 @@ def test_changed_model_price_rebuilds_budget_snapshot() -> None:
             previous_config=previous,
             current_config=current,
         ) is None
+
+
+def test_pricing_import_commit_reuses_current_session_snapshot() -> None:
+    previous = UserConfig.defaults()
+    current = replace(
+        previous,
+        provider_settings={
+            "custom": ProviderSettings(
+                model_prices={
+                    "gpt-imported": ModelPrice(
+                        1.0, 0.1, 0.0, 2.0, 2.0,
+                        model="gpt-imported", provider="custom",
+                    )
+                }
+            )
+        },
+    )
+    assert partial_domains_for_command(
+        {"action": "pricingImportCommit"},
+        previous_config=previous,
+        current_config=current,
+    ) == {"settings", "currentSession"}

@@ -7,6 +7,16 @@ and this repository follows Semantic Versioning for release tags.
 
 ## [Unreleased]
 
+## [1.3.3] - 2026-09-30
+
+### Fixed
+
+- Removed deleted providers from the live HUD registry and provider switch menu.
+- Prevented stale pricing mirrors from producing incomplete model price tables.
+- Kept the HUD totals visible while applying confirmed pricing updates instead of showing a full recalculation state.
+- Closed the duplicate session transfer dialog after a slow provider migration completes and added missing-credential guidance.
+- Fixed cross-platform CI failures in provider notification tests and pricing synchronization coverage.
+
 ## [1.3.2] - 2026-09-29
 
 ### Changed

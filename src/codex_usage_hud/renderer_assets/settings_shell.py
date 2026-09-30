@@ -97,6 +97,7 @@ _TEXT_PREFIX = r"""
         result: null,
         thresholdTimer: 0,
         startedAt: 0,
+        fallbackOpened: false,
       };
 
       function codexCliLaunchStateKey(optionsValue = codexCliState.options || {}, providerValue = codexCliState.provider) {
@@ -1948,7 +1949,11 @@ _TEXT_PREFIX = r"""
       }
 
       function settingsProviderNames(settings) {
-        const registry = settings.provider_registry && typeof settings.provider_registry === "object" ? settings.provider_registry : {};
+        const rawRegistry = settings.provider_registry && typeof settings.provider_registry === "object" ? settings.provider_registry : {};
+        // Recent-session discovery is useful for accounting, but a provider
+        // that has no persisted config must not return to the switch menu after
+        // the user deleted it.
+        const registry = Object.fromEntries(Object.entries(rawRegistry).filter(([, entry]) => entry?.historicalOnly !== true));
         const providerSettings = settings.provider_settings && typeof settings.provider_settings === "object" ? settings.provider_settings : {};
         // config.toml 顶层 model_provider（稳定默认）优先；app_provider 会被
         // 活跃会话供应商观察覆盖，不用于「默认」语义。
@@ -5600,6 +5605,16 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
         if (!settingsProviderDraft) return;
         provider = String(provider || "").trim().toLowerCase();
         if (!provider || !settingsProviderDraft.providers?.[provider]) return;
+        const liveSettings = hudSettingsFromPayload();
+        if (liveSettings?.provider_registry && typeof liveSettings.provider_registry === "object") {
+          delete liveSettings.provider_registry[provider];
+        }
+        if (liveSettings?.provider_settings && typeof liveSettings.provider_settings === "object") {
+          delete liveSettings.provider_settings[provider];
+        }
+        if (Array.isArray(liveSettings?.provider_order)) {
+          liveSettings.provider_order = liveSettings.provider_order.filter((item) => String(item || "").trim().toLowerCase() !== provider);
+        }
         delete settingsProviderDraft.providers?.[provider];
         settingsProviderDraft.order = settingsProviderDraft.order.filter(
           (item) => item !== provider,
@@ -7940,9 +7955,24 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
         const target = state.targetProvider;
         const sourceId = state.activeSessionId;
         if (!target || !sourceId) return;
+        const targetEntry = hudSettingsFromPayload()?.provider_registry?.[target] || {};
+        if (
+          targetEntry.requiresOpenaiAuth !== true
+          && targetEntry.envKey
+          && targetEntry.hasApiKey !== true
+          && targetEntry.bearerToken !== true
+        ) {
+          state.result = {
+            ok: false,
+            error: `目标供应商缺少环境变量 ${String(targetEntry.envKey)}，请先保存 API key 并重启 Codex Desktop 后再迁移。`,
+          };
+          renderCodexProviderMigrateDialog();
+          return;
+        }
         state.busy = true;
         state.result = null;
         state.startedAt = Date.now();
+        state.fallbackOpened = false;
         sessionTransferState.providerForkTask = {
           active: true,
           startedAt: state.startedAt,
@@ -7956,6 +7986,7 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
           state.thresholdTimer = 0;
           const source = state.activeProvider;
           const targetProvider = state.targetProvider;
+          state.fallbackOpened = true;
           closeCodexProviderMigrateDialog();
           const modal = document.getElementById(settingsModalId);
           if (!modal || modal.hidden) renderSettingsModal("settings", "", {});
@@ -7976,10 +8007,13 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
           const newId = String(thread?.id || response?.result?.threadId || response?.result?.id || "");
           const got = String(thread?.modelProvider || response?.result?.modelProvider || "").trim().toLowerCase();
           if (error || !newId || (got && got !== target)) {
+            const rawError = error ? String(error?.message || "未知错误") : "";
             state.result = {
               ok: false,
               error: error
-                ? String(error?.message || "未知错误")
+                ? (/Missing environment variable:/i.test(rawError)
+                    ? `${rawError} 请先保存目标供应商 API key 并重启 Codex Desktop 后再迁移。`
+                    : rawError)
                 : (!newId
                     ? "Codex 未返回新会话。"
                     : `新会话使用了「${got}」，未按目标迁移。`),
@@ -7999,7 +8033,13 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
               sessionTransferState.providerForkTask.result = detail;
             }
             if (codexProviderMigrateDialogState.layer) renderCodexProviderMigrateDialog();
-            if (sessionTransferState.open) renderSessionTransferDialog();
+            if (detail?.ok && state.fallbackOpened && sessionTransferState.open) {
+              // The slow-request fallback is only a secondary surface. Once
+              // the original fork completes, close the duplicate dialog.
+              closeSessionTransferDialog();
+            } else if (sessionTransferState.open) {
+              renderSessionTransferDialog();
+            }
           };
           codexSourceSessionTitle(sourceId).then((sourceTitle) => {
             const title = `${(sourceTitle || "复制会话")}（副本）`;

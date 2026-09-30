@@ -15,6 +15,11 @@ from urllib.error import URLError, HTTPError
 from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
+# ``ctypes.windll`` is absent on POSIX. Keep a patchable sentinel so tests
+# simulating the Windows notification path reach the function under test.
+if not hasattr(ctypes, "windll"):
+    ctypes.windll = None  # type: ignore[attr-defined]
+
 
 PROVIDER_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 ENVIRONMENT_KEY_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")

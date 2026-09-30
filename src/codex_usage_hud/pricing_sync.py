@@ -198,7 +198,19 @@ def fetch_pricing_snapshot(
             for pending in futures:
                 if pending is not future:
                     pending.cancel()
-            return result
+            # Mirrors can lag the repository snapshot. Preserve any model rows
+            # present in the bundled snapshot so a stale mirror can never
+            # produce an apparently successful but incomplete price table.
+            prices, metadata = result
+            bundled = Path(__file__).resolve().parent / "assets" / "openai-pricing-snapshot.json"
+            try:
+                bundled_payload = json.loads(bundled.read_text(encoding="utf-8"))
+                bundled_prices = _parse_snapshot_prices(bundled_payload)
+                for model, price in bundled_prices.items():
+                    prices.setdefault(model, price)
+            except (OSError, ValueError, KeyError, json.JSONDecodeError):
+                pass
+            return prices, metadata
     finally:
         executor.shutdown(wait=False, cancel_futures=True)
     bundled = Path(__file__).resolve().parent / "assets" / "openai-pricing-snapshot.json"

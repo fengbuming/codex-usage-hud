@@ -112,6 +112,12 @@ def partial_domains_for_command(
         return {"settings"}
     if action == "providerSetDefault":
         return {"settings"}
+    # Confirming an official price update changes pricing tables, but the
+    # visible session snapshot already contains all usage data. Reapply the
+    # estimate to that snapshot and deliver only the settings/current-session
+    # domains; a full parse would briefly replace the HUD totals with loading.
+    if action == "pricingImportCommit":
+        return {"settings", "currentSession"}
     if (
         previous_config.price_table() != current_config.price_table()
         or previous_config.pricing_versions != current_config.pricing_versions

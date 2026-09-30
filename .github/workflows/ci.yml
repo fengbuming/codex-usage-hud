@@ -64,6 +64,10 @@ jobs:
           python -m pytest -q
           --ignore=tests/test_ui.py
           --ignore=tests/test_window_tracker.py
+          --ignore=tests/test_pricing_sync.py
+
+      - name: Run portable pricing synchronization tests
+        run: python -m pytest -q tests/test_pricing_sync.py
 
       - name: Run Windows window-tracker tests
         if: runner.os == 'Windows'
