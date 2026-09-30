@@ -265,8 +265,12 @@ class SessionSnapshotCache:
                                 parser_version=parser_version,
                             )
                             self._trim_locked()
+                            # Publish while the cache lock is held so a
+                            # consumer cannot observe the new snapshot before
+                            # receiving the corresponding hydration event.
+                            self._publish_hydrated(path)
                     if not self._closed.is_set() and not pricing_changed:
-                        self._publish_hydrated(path)
+                        pass
                 finally:
                     with self._lock:
                         self._queued.discard(path)
