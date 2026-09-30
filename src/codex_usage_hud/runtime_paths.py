@@ -191,6 +191,11 @@ def codex_app_executable_candidates(
             app_dir = base / relative
             candidates.extend([app_dir / "ChatGPT.exe", app_dir / "Codex.exe"])
 
+    # 商店更新可能留下旧版本目录；优先使用当前用户注册的安装路径，目录扫描只作兜底。
+    for install_location in appx_install_locations:
+        app_dir = Path(install_location) / "app"
+        candidates.extend([app_dir / "ChatGPT.exe", app_dir / "Codex.exe"])
+
     program_files = values.get("ProgramFiles")
     if program_files:
         windows_apps = Path(program_files) / "WindowsApps"
@@ -203,9 +208,6 @@ def codex_app_executable_candidates(
             )
         except OSError:
             pass
-    for install_location in appx_install_locations:
-        app_dir = Path(install_location) / "app"
-        candidates.extend([app_dir / "ChatGPT.exe", app_dir / "Codex.exe"])
     existing = [path for path in candidates if path.exists()]
     return [Path(item) for item in _unique_strings(str(path) for path in existing)]
 

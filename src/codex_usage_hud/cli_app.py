@@ -48,6 +48,8 @@ class CliAppServices:
     parser_factory: Callable[[], argparse.ArgumentParser] | None = None
     update_check: Callable[[], int] | None = None
     update_install: Callable[[], int] | None = None
+    detach_daemon: Callable[[Sequence[str]], int | None] | None = None
+    resume_broker: Callable[[str, str], int] | None = None
 
 
 def configure_stdout() -> None:
@@ -225,6 +227,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--loading-feedback-state-file", default="", help=argparse.SUPPRESS)
     parser.add_argument("--work-overlay-helper", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--work-overlay-state-file", default="", help=argparse.SUPPRESS)
+    parser.add_argument("--daemon-launch-broker", nargs=2, help=argparse.SUPPRESS)
     return parser
 
 
@@ -280,6 +283,10 @@ def main(
     configure_stdout()
     parser = (services.parser_factory or build_parser)()
     args = parser.parse_args(argv)
+    if getattr(args, "daemon_launch_broker", None) is not None:
+        if services.resume_broker is None:
+            parser.error("independent daemon broker is unavailable")
+        return services.resume_broker(*args.daemon_launch_broker)
     services.enable_crash_diagnostics()
     services.init_overlay_dependency_override()
     if getattr(args, "loading_feedback_helper", False):
@@ -305,6 +312,10 @@ def main(
         parser.error("--daemon cannot be combined with --once")
     if args.once:
         return services.run_once(args)
+    if services.detach_daemon is not None:
+        launch_result = services.detach_daemon(list(sys.argv[1:] if argv is None else argv))
+        if launch_result is not None:
+            return launch_result
     return services.run_daemon(args)
 
 

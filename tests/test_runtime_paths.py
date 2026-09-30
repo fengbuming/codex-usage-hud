@@ -116,6 +116,23 @@ def test_codex_shell_targets_keep_configured_values_ahead_of_default() -> None:
     ]
 
 
+def test_codex_executable_candidates_prefer_registered_package_over_old_version(
+    tmp_path: Path,
+) -> None:
+    program_files = tmp_path / "Program Files"
+    old = program_files / "WindowsApps" / "OpenAI.Codex_26.901.0.0_x64__2p2nqsd0c76g0"
+    current = program_files / "WindowsApps" / "OpenAI.Codex_26.928.1915.0_x64__2p2nqsd0c76g0"
+    for package in (old, current):
+        executable = package / "app" / "ChatGPT.exe"
+        executable.parent.mkdir(parents=True)
+        executable.touch()
+    candidates = codex_app_executable_candidates(
+        appx_install_locations=[current],
+        environ={"ProgramFiles": str(program_files)},
+    )
+    assert candidates == [current / "app" / "ChatGPT.exe", old / "app" / "ChatGPT.exe"]
+
+
 def test_codex_executable_candidates_preserve_configured_and_relocated_priority(
     tmp_path: Path,
 ) -> None:

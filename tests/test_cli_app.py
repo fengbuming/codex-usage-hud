@@ -63,3 +63,31 @@ def test_main_default_uses_persistent_daemon() -> None:
 
     services.run_daemon.assert_called_once()
     services.run_once.assert_not_called()
+
+
+def test_main_detaches_only_persistent_daemon() -> None:
+    for argv in (["--once"], ["--stop"], ["--work-overlay-helper"]):
+        detach = MagicMock(return_value=0)
+        cli_app.main(argv, services=_services(detach_daemon=detach))
+        detach.assert_not_called()
+    detach = MagicMock(return_value=0)
+    services = _services(detach_daemon=detach)
+    assert cli_app.main(["--daemon"], services=services) == 0
+    detach.assert_called_once_with(["--daemon"])
+    services.run_daemon.assert_not_called()
+
+
+def test_main_continues_in_independent_child() -> None:
+    services = _services(detach_daemon=MagicMock(return_value=None))
+    assert cli_app.main(["--daemon"], services=services) == 0
+    services.run_daemon.assert_called_once()
+
+
+def test_broker_restores_environment_before_initializing_services() -> None:
+    resume = MagicMock(return_value=7)
+    services = _services(resume_broker=resume)
+    assert cli_app.main(["--daemon-launch-broker", "pipe", "token"], services=services) == 7
+    resume.assert_called_once_with("pipe", "token")
+    services.enable_crash_diagnostics.assert_not_called()
+    services.cleanup_overlay.assert_not_called()
+    services.run_daemon.assert_not_called()

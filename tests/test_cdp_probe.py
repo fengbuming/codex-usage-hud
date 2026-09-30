@@ -105,6 +105,20 @@ class CdpProbeTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "No main Codex CDP page target found"):
             pick_page_target(targets)
 
+    def test_pick_page_target_rejects_avatar_overlay_without_main(self) -> None:
+        for route in ("%2Favatar-overlay", "/avatar-overlay"):
+            with self.subTest(route=route):
+                avatar = {
+                    "type": "page",
+                    "title": "ChatGPT",
+                    "url": f"app://-/index.html?initialRoute={route}",
+                    "webSocketDebuggerUrl": "ws://127.0.0.1/avatar",
+                }
+                with self.assertRaisesRegex(RuntimeError, "No main Codex"):
+                    pick_page_target([avatar])
+                main = dict(avatar, title="Current task", url="app://-/index.html")
+                self.assertIs(pick_page_target([avatar, main]), main)
+
     def test_pick_page_target_rejects_non_codex_pages(self) -> None:
         targets = [
             {

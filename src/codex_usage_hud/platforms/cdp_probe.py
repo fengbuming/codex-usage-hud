@@ -16,7 +16,7 @@ import socket
 import struct
 import time
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 from urllib.request import ProxyHandler, Request, build_opener
 
 
@@ -1163,7 +1163,7 @@ def pick_page_target(targets: list[dict[str, Any]]) -> dict[str, Any]:
     main_pages = [
         target
         for target in codex_pages
-        if not _is_hotkey_window_target(target)
+        if not _is_auxiliary_window_target(target)
     ]
     ranked_pages = sorted(
         main_pages,
@@ -1202,6 +1202,15 @@ def _is_hotkey_window_target(target: dict[str, Any]) -> bool:
         "initialroute=%2fhotkey-window" in url
         or "initialroute=/hotkey-window" in url
         or "hotkey" in title
+    )
+
+
+def _is_auxiliary_window_target(target: dict[str, Any]) -> bool:
+    # 新版头像窗口也使用 index.html；它不承载会话，不能作为启动接入成功的依据。
+    query = parse_qs(urlparse(str(target.get("url") or "")).query)
+    routes = query.get("initialRoute", [])
+    return _is_hotkey_window_target(target) or any(
+        route.rstrip("/").casefold() == "/avatar-overlay" for route in routes
     )
 
 

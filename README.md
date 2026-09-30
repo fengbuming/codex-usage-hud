@@ -43,6 +43,8 @@ codex-hud --update
 
 `codex-hud` 的普通持久启动默认进入 daemon；`--daemon` 作为显式兼容写法保留。
 
+Windows 下从 Codex 内置终端等受 Job 生命周期管理的环境启动时，HUD 会通过桌面 Explorer 启动独立常驻进程，并确认其不受“启动者退出时一并终止”的限制。启动参数和环境通过本机认证管道传递，不写入临时文件。`--once`、`--stop` 等一次性命令仍在当前进程执行。若桌面 Shell 不可用，会明确提示改从外部终端或桌面快捷方式启动。
+
 ## 赞助商
 
 [想显示在下方？](https://github.com/fengbuming/codex-usage-hud/issues)

@@ -422,6 +422,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     from .core import session_search as _session_search
 
     _session_search._enable_frozen_process_pool()
+    from .daemon_launch import detach_daemon_if_needed, resume_brokered_daemon
+
     services = _cli_app_owner.CliAppServices(
         run_daemon=run_daemon, run_once=run_once_snapshot, stop=stop_running_hud,
         run_loading_helper=loading_feedback.run_loading_feedback_helper,
@@ -432,6 +434,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         init_overlay_dependency_override=_init_force_desktop_overlay_missing_from_env,
         config_store_factory=UserConfigStore, parser_factory=build_parser,
         update_check=run_update_check, update_install=run_update_install,
+        detach_daemon=detach_daemon_if_needed,
+        resume_broker=lambda address, token: resume_brokered_daemon(address, token, main),
     )
     return _cli_app_owner.main(argv, services=services)
 
