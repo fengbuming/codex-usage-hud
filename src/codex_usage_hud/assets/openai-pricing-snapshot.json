@@ -1,12 +1,14 @@
 {
-  "checked_at": "2026-09-24T01:12:55.994754Z",
+  "checked_at": "2026-10-03T19:13:48.037397Z",
   "currency": "USD",
   "prices": [
     {
       "cache_write": 12.5,
       "cached_input": 1.0,
+      "catalog_status": "active",
       "currency": "USD",
       "input": 10.0,
+      "last_seen_at": "2026-10-03T19:13:48.037397Z",
       "model": "gpt-6-astra",
       "output": 50.0,
       "reasoning": 50.0,
@@ -14,10 +16,12 @@
     },
     {
       "cache_write": 2.5,
-      "cached_input": 0.2,
+      "cached_input": 0.1,
+      "catalog_status": "active",
       "currency": "USD",
       "input": 2.0,
-      "model": "gpt-6-sol",
+      "last_seen_at": "2026-10-03T19:13:48.037397Z",
+      "model": "gpt-6.1-sol",
       "output": 10.0,
       "reasoning": 10.0,
       "unit": "USD_per_1M_tokens"
@@ -25,8 +29,10 @@
     {
       "cache_write": 0.125,
       "cached_input": 0.01,
+      "catalog_status": "active",
       "currency": "USD",
       "input": 0.1,
+      "last_seen_at": "2026-10-03T19:13:48.037397Z",
       "model": "gpt-6-luna",
       "output": 0.5,
       "reasoning": 0.5,
@@ -97,11 +103,11 @@
   "schema_version": 2,
   "sources": [
     {
-      "sha256": "02e52e6ad8af66882d8c41d1c874370c8bf5dacd9e1e612e62f08d8d9930e38c",
+      "sha256": "649dc090b4a05aaf897931124b71901eb250a96e46803f16ad26adb9567313f7",
       "url": "https://developers.openai.com/api/docs/models"
     },
     {
-      "sha256": "c29e14ca0c46699a017fab5cfd8f2c9e8a84a08590a2186f913763c423316d91",
+      "sha256": "c3795e3949d7f969f16afa6f4e4310b266a9a554e0febf1f32c886b9f804cf4c",
       "url": "https://platform.openai.com/docs/pricing"
     }
   ],
