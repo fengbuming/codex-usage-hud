@@ -519,3 +519,105 @@ def test_deleted_unpriced_usage_can_use_new_unscoped_price(tmp_path: Path) -> No
     priced, _ = cache.summarize(sessions, day, week, allow_stale=True)
     assert (priced.priced_event_count, priced.total_event_count) == (1, 1)
     assert priced.cost_usd == 2
+
+
+def test_recent_window_totals_match_full_scan_on_cold_store(tmp_path: Path) -> None:
+    """The cold-start fast path must equal the full scan for day/week.
+
+    A session file's usage events are always written at or before the file's
+    last modification, so files older than the window contribute nothing to
+    the day/week totals. The fast path relies on that to avoid the historical
+    re-parse; if the invariant were wrong the numbers would drift.
+    """
+    sessions = tmp_path / "sessions"
+    sessions.mkdir()
+    day = datetime(2026, 7, 30, tzinfo=timezone.utc)
+    week = datetime(2026, 7, 27, tzinfo=timezone.utc)
+
+    old_path = sessions / "old.jsonl"
+    recent_path = sessions / "recent.jsonl"
+    for path, session_id, when, tokens in (
+        (old_path, "old", day - timedelta(days=60), 1_000),
+        (recent_path, "recent", day + timedelta(hours=1), 2_000),
+    ):
+        path.write_text(
+            json.dumps(
+                _record(
+                    when.isoformat(),
+                    "session_meta",
+                    {"id": session_id, "model_provider": "custom"},
+                )
+            )
+            + "\n"
+            + json.dumps(_token_count(when.isoformat(), tokens))
+            + "\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+
+    # The old file predates the window; the recent file is inside it.
+    import os
+
+    os.utime(old_path, ((day - timedelta(days=60)).timestamp(),) * 2)
+    os.utime(recent_path, ((day + timedelta(hours=1)).timestamp(),) * 2)
+
+    fast_cache = UsageSummaryCache(
+        JsonlSessionParser(),
+        summary_store=UsageSummaryStore(tmp_path / "fast.sqlite3"),
+    )
+    assert not fast_cache.is_warm_for(sessions, day, week)
+
+    fast = fast_cache.recent_window_totals(sessions, day, week)
+
+    assert fast is not None
+    fast_day, fast_week = fast
+    # The fast path must not pretend the cache is warm: month/lifetime still
+    # need the full historical scan.
+    assert not fast_cache.is_warm_for(sessions, day, week)
+
+    full_cache = UsageSummaryCache(
+        JsonlSessionParser(),
+        summary_store=UsageSummaryStore(tmp_path / "full.sqlite3"),
+    )
+    full_day, full_week = full_cache.summarize(sessions, day, week, force_rescan=True)
+
+    assert fast_day == full_day
+    assert fast_week == full_week
+    assert fast_day.tokens == 2_000
+
+
+def test_recent_window_totals_memoises_repeat_calls(tmp_path: Path) -> None:
+    """Repeated cold frames must not re-stat the whole tree every tick."""
+    sessions = tmp_path / "sessions"
+    sessions.mkdir()
+    path = sessions / "recent.jsonl"
+    day = datetime(2026, 7, 30, tzinfo=timezone.utc)
+    week = datetime(2026, 7, 27, tzinfo=timezone.utc)
+    path.write_text(
+        json.dumps(
+            _record(
+                (day + timedelta(hours=1)).isoformat(),
+                "session_meta",
+                {"id": "recent", "model_provider": "custom"},
+            )
+        )
+        + "\n"
+        + json.dumps(_token_count((day + timedelta(hours=1)).isoformat(), 500))
+        + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+
+    cache = UsageSummaryCache(
+        JsonlSessionParser(),
+        summary_store=UsageSummaryStore(tmp_path / "usage.sqlite3"),
+    )
+    first = cache.recent_window_totals(sessions, day, week)
+    second = cache.recent_window_totals(sessions, day, week)
+
+    assert first is not None and second is not None
+    assert first[0] == second[0]
+    assert first[1] == second[1]
+    # A full scan supersedes the memo.
+    cache.summarize(sessions, day, week)
+    assert cache._recent_window_memo is None

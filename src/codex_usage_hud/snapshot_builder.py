@@ -6,6 +6,7 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import datetime
 import json
+import logging
 import time
 from pathlib import Path
 from typing import Any
@@ -23,6 +24,8 @@ from . import runtime_policies, runtime_usage
 from . import session_snapshots
 
 VISIBLE_APP_ERROR_HOLD_SECONDS = 60.0
+
+_LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -275,6 +278,38 @@ def _reuse_budget(
         ports.apply_family_usage(context.usage_cache, snapshot, scope)
 
 
+def _recent_window_totals(
+    context: object,
+    day_start: datetime,
+    week_start: datetime,
+    scope: Iterable[str] | None,
+) -> tuple[UsageSummary, UsageSummary] | None:
+    """Day/week totals from the recent-only fast path, or ``None``.
+
+    Used while the cold-start budget is deferred: the full historical scan is
+    still pending, but the day/week windows only depend on files written since
+    the window opened, so real numbers are already knowable.
+    """
+    recent = getattr(
+        getattr(context, "usage_cache", None), "recent_window_totals", None
+    )
+    if not callable(recent):
+        return None
+    try:
+        totals = recent(
+            context.sessions_root,
+            day_start,
+            week_start,
+            included_providers=scope,
+        )
+    except Exception:
+        _LOGGER.exception("usage_recent_window_totals_failed")
+        return None
+    if totals is None:
+        return None
+    return totals
+
+
 def _summarize_budget(
     context: object,
     snapshot: ParsedSession,
@@ -296,9 +331,18 @@ def _summarize_budget(
         paths = (session_path,)
     scope = ports.provider_scope(context, snapshot)
     deferred = _should_defer_cold_renderer_budget(context, day_start, week_start)
+    window_measured = not deferred
     if deferred:
         # The first renderer frame must not parse every historical session.
-        today_total, week_total = UsageSummary(), UsageSummary()
+        # The day/week windows, however, only depend on files written since the
+        # window opened, so publish those real totals immediately instead of
+        # leaving the top bar on "今日 计算中…" until the full scan lands.
+        recent_totals = _recent_window_totals(context, day_start, week_start, scope)
+        if recent_totals is None:
+            today_total, week_total = UsageSummary(), UsageSummary()
+        else:
+            today_total, week_total = recent_totals
+            window_measured = True
     else:
         today_total, week_total = context.usage_cache.summarize(
             context.sessions_root,
@@ -337,9 +381,11 @@ def _summarize_budget(
     )
     snapshot.budget_error = "" if context.sessions_root.exists() else snapshot.error
     if not deferred:
+        # Insights still need the full scan (they cover month/lifetime), so do
+        # not publish them from the recent-only window tier.
         ports.refresh_usage_insights(context)
     ports.apply_family_usage(context.usage_cache, snapshot, scope)
-    return not deferred
+    return window_measured
 
 
 def apply_pre_send_pricing(
@@ -459,6 +505,11 @@ def build_snapshot(
     budget_ready = True
     if reuse_budget_from is not None:
         _reuse_budget(context, snapshot, reuse_budget_from, ports)
+        # A reused budget is only as trustworthy as its source. A deferred
+        # cold-start frame carries placeholder zeros, and re-publishing those
+        # as measured usage would flash "今日 ¥0.00" instead of the honest
+        # "今日 计算中…" label.
+        budget_ready = bool(getattr(reuse_budget_from, "budget_ready", True))
     else:
         budget_ready = _summarize_budget(
             context,

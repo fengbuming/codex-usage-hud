@@ -316,8 +316,13 @@ def _renderer_event_idle_wait_enabled(
     *,
     force_fast: bool,
 ) -> bool:
-    del snapshot, delay
+    del delay
     if file_events is None or not file_events.event_driven or force_fast:
+        return False
+    # A cold-start budget scan leaves the top bar parked on the "今日 计算中…"
+    # placeholder. The long idle wait must not extend that placeholder past the
+    # scan itself, so keep polling at the fast cadence until the budget lands.
+    if not bool(getattr(snapshot, "budget_ready", True)):
         return False
     update_phase = str(update_state.get("phase") or "")
     return update_phase not in {"checking", "downloading"}

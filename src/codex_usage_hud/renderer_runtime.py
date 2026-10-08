@@ -361,6 +361,24 @@ def run_renderer_hud_session(args: argparse.Namespace, *, lock_already_held: boo
             snapshot_or_error = assembly.snapshot_or_error
             bridge_callbacks = assembly.resources.bridge_callbacks
 
+            # Warm the rolling day/week usage cache *before* the multi-second
+            # window-prepare/CDP-attach wait below. The attach path builds and
+            # pushes the first HUD payload, and that payload can only carry real
+            # today/week numbers once `usage_cache.is_warm_for()` is true.
+            # Requesting the scan here (instead of after the attach) lets it
+            # finish in parallel with the attach, so a normal restart renders
+            # numbers on the very first frame instead of parking on
+            # "今日 计算中 本周 计算中" until the scan lands.
+            startup_usage_worker = getattr(context, "usage_insights_worker", None)
+            startup_usage_refresh = getattr(
+                startup_usage_worker, "request_refresh", None
+            )
+            if callable(startup_usage_refresh):
+                try:
+                    startup_usage_refresh(request_id="startup")
+                except Exception:
+                    ports._LOGGER.exception("renderer_startup_usage_refresh_failed")
+
             def request_external_shutdown() -> None:
                 if exit_requested.is_set():
                     return
@@ -529,10 +547,9 @@ def run_renderer_hud_session(args: argparse.Namespace, *, lock_already_held: boo
                     clear_action = getattr(work_overlay, 'clear_system_action', None)
                     if callable(clear_action):
                         clear_action()
-                usage_insights_worker = getattr(context, 'usage_insights_worker', None)
-                request_usage_refresh = getattr(usage_insights_worker, 'request_refresh', None)
-                if callable(request_usage_refresh):
-                    request_usage_refresh(request_id='startup')
+                # The startup budget warm-up was already requested before the
+                # attach wait; re-requesting here would queue a second full
+                # scan for no benefit.
                 session_controller = ports._build_session_switch_controller(getattr(context, 'platform', get_current_platform()), prefer_native_search=False, cdp_port=getattr(client, 'port', None))
                 command_pump_factory = services.command_pump_factory or WorkOverlayCommandPump
                 file_event_source_factory = services.file_event_source_factory or ports._RendererFileEventSource

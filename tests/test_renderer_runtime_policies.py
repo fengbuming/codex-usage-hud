@@ -117,6 +117,28 @@ def test_policy_idle_wait_adapter_only_wakes_for_event_driven_idle_state() -> No
     )
 
 
+def test_policy_idle_wait_disabled_while_budget_is_unmeasured() -> None:
+    """A pending cold-start budget must not wait a full idle interval."""
+    file_events = SimpleNamespace(event_driven=True)
+    pending = SimpleNamespace(budget_ready=False)
+    measured = SimpleNamespace(budget_ready=True)
+
+    assert not renderer_runtime_policies._renderer_event_idle_wait_enabled(
+        file_events,
+        pending,
+        {"phase": "idle"},
+        1.0,
+        force_fast=False,
+    )
+    assert renderer_runtime_policies._renderer_event_idle_wait_enabled(
+        file_events,
+        measured,
+        {"phase": "idle"},
+        1.0,
+        force_fast=False,
+    )
+
+
 def test_active_session_policy_deduplicates_only_after_matching_ack() -> None:
     key = (7, "session-1", "renderer-1", "Session", False, False)
 

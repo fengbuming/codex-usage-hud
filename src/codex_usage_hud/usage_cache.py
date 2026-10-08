@@ -94,6 +94,9 @@ class UsageSummaryCache:
         self._last_scan_at = 0.0
         self._last_day_total = UsageSummary()
         self._last_week_total = UsageSummary()
+        self._recent_window_memo: (
+            tuple[object, UsageSummary, UsageSummary] | None
+        ) = None
         self._insights_revision = 0
         self._insights_generated_at: datetime | None = None
         self._insights_projector = UsageInsightsProjector(self)
@@ -171,6 +174,7 @@ class UsageSummaryCache:
         self._last_scan_at = 0.0
         self._last_day_total = UsageSummary()
         self._last_week_total = UsageSummary()
+        self._recent_window_memo = None
         self._touch_insights()
 
     def is_warm_for(
@@ -524,6 +528,8 @@ class UsageSummaryCache:
     ) -> tuple[UsageSummary, UsageSummary]:
         now = time.monotonic()
         self._refresh_parser_version()
+        # Any full or incremental scan supersedes the recent-window fast path.
+        self._recent_window_memo = None
         sessions_root = self._cache_path(sessions_root)
         scan_roots = self._scan_roots(sessions_root)
         self._hydrate_persisted_entries(scan_roots, day_start, week_start)
@@ -652,6 +658,110 @@ class UsageSummaryCache:
             week_start,
             included_providers,
         )
+
+    def recent_window_totals(
+        self,
+        sessions_root: Path,
+        day_start: datetime,
+        week_start: datetime,
+        *,
+        included_providers: Iterable[str] | None = None,
+        safety_margin: timedelta = timedelta(days=1),
+    ) -> tuple[UsageSummary, UsageSummary] | None:
+        """Day/week totals from only the files that can still affect the window.
+
+        A session JSONL's usage events are always written at or before the
+        file's last modification, so a file older than ``week_start``
+        contributes exactly zero to the day/week windows. Reading just the
+        recent files therefore yields the *same* day/week totals as the full
+        scan while skipping the historical bulk of the tree.
+
+        This exists for the cold-start budget: a pricing or parser change
+        invalidates every persisted contribution, and the resulting full
+        re-parse (measured at ~26 s for a 1.9 GiB sessions tree) otherwise
+        parks the HUD on "今日 计算中…" long after the window numbers were
+        already knowable. The full scan still runs afterwards; it supersedes
+        this result and restores month/lifetime coverage.
+
+        Returns ``None`` when the caller must fall back to the full scan
+        (no scan root exists yet, or the window totals are not knowable from
+        the recent tier alone).
+        """
+        self._refresh_parser_version()
+        sessions_root = self._cache_path(sessions_root)
+        scan_roots = self._scan_roots(sessions_root)
+        self._hydrate_persisted_entries(scan_roots, day_start, week_start)
+        existing_roots = [root for root in scan_roots if root.exists()]
+        if not existing_roots:
+            return None
+        memo_key = (
+            scan_roots,
+            day_start,
+            week_start,
+            self._last_parser_version,
+            tuple(
+                sorted(
+                    str(provider or "").strip().lower()
+                    for provider in (included_providers or ())
+                )
+            )
+            if included_providers is not None
+            else None,
+        )
+        memo = self._recent_window_memo
+        if memo is not None and memo[0] == memo_key:
+            return replace(memo[1]), replace(memo[2])
+
+        cutoff = (week_start - safety_margin).timestamp()
+        for root in existing_roots:
+            archived = root.name.casefold() == "archived_sessions"
+            for path in iter_usage_jsonl_files(root):
+                path = self._cache_path(path)
+                try:
+                    if path.stat().st_mtime < cutoff:
+                        continue
+                except OSError:
+                    continue
+                self._summaries_for_file(
+                    path,
+                    day_start,
+                    week_start,
+                    archived=archived,
+                )
+
+        live_session_ids = {
+            entry.session_id for entry in self._entries.values() if entry.session_id
+        }
+        deleted_entries = self._deleted_usage_entries(
+            day_start,
+            week_start,
+            live_session_ids,
+        )
+        providers: set[str] | None = None
+        if included_providers is not None:
+            providers = {
+                str(provider or "").strip().lower()
+                for provider in included_providers
+                if str(provider or "").strip()
+            }
+        day_total = UsageSummary()
+        week_total = UsageSummary()
+        for path, entry in self._deduplicated_entries(self._entries.items()):
+            if entry.day_start != day_start or entry.week_start != week_start:
+                continue
+            if not self._path_under_scan_roots(path, scan_roots):
+                continue
+            if providers is not None and entry.model_provider not in providers:
+                continue
+            _merge_usage(day_total, entry.summary_day)
+            _merge_usage(week_total, entry.summary_week)
+        for entry in deleted_entries:
+            if providers is not None and entry.model_provider not in providers:
+                continue
+            _merge_usage(day_total, entry.summary_day)
+            _merge_usage(week_total, entry.summary_week)
+        self._recent_window_memo = (memo_key, replace(day_total), replace(week_total))
+        return day_total, week_total
 
     def _totals_for_providers(
         self,
