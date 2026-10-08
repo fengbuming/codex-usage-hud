@@ -63,6 +63,33 @@ class ProviderRegistry:
         # settings instead of re-sorting tabs alphabetically.
         return tuple(self.entries)
 
+    def materializable_providers(self) -> tuple[str, ...]:
+        """Providers that may be written back into the HUD settings store.
+
+        Recent-session discovery keeps accounting aware of a provider that has
+        no persisted configuration left.  Such an entry must stay read-only:
+        materializing it into ``provider_settings``/``provider_order`` would
+        resurrect a provider the user deleted in the settings tabs and in the
+        provider switch menu, because the renderer lists those two sources
+        directly.
+        """
+        return tuple(
+            provider
+            for provider, entry in self.entries.items()
+            if not entry.historical_only
+        )
+
+
+def materializable_provider_names(registry: object) -> tuple[str, ...]:
+    """Resolve materializable provider ids from any registry-like object."""
+    getter = getattr(registry, "materializable_providers", None)
+    if callable(getter):
+        return tuple(getter())
+    providers = getattr(registry, "providers", None)
+    if callable(providers):
+        return tuple(providers())
+    return ()
+
 
 def discover_provider_registry(
     *,
@@ -233,4 +260,5 @@ __all__ = [
     "UNKNOWN_PROVIDER",
     "discover_provider_registry",
     "discover_recent_session_providers",
+    "materializable_provider_names",
 ]

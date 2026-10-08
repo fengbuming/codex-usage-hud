@@ -15327,7 +15327,7 @@ class DaemonLifecycleTests(unittest.TestCase):
             "deleteModelPrices": False,
         }
 
-        # config.toml 删除在同步请求阶段完成（patch 掉真实文件操作），历史清理才入队。
+        # 前台只入队；配置删除必须等待后台历史清理完成。
         with patch(
             "codex_usage_hud.runtime_commands.delete_provider_for_context",
             return_value={
@@ -15337,7 +15337,7 @@ class DaemonLifecycleTests(unittest.TestCase):
                 "config": {},
                 "pricing": {},
             },
-        ):
+        ) as delete_config:
             status = _handle_renderer_settings_command(
                 command,
                 context,
@@ -15348,6 +15348,8 @@ class DaemonLifecycleTests(unittest.TestCase):
         self.assertEqual(status["providerDeleteRequestId"], "provider-delete-1")
         self.assertEqual(status["providerId"], "muyuan")
         self.assertEqual(status["action"], "deleteProvider")
+        self.assertTrue(status["providerDeletePending"])
+        delete_config.assert_not_called()
         worker.enqueue.assert_called_once_with(
             {
                 **command,
@@ -15355,7 +15357,7 @@ class DaemonLifecycleTests(unittest.TestCase):
             }
         )
 
-    def test_renderer_provider_delete_keeps_config_success_when_history_enqueue_fails(self) -> None:
+    def test_renderer_provider_delete_preserves_config_when_history_enqueue_fails(self) -> None:
         worker = SimpleNamespace(
             enqueue=MagicMock(side_effect=RuntimeError("worker unavailable"))
         )
@@ -15375,7 +15377,7 @@ class DaemonLifecycleTests(unittest.TestCase):
                 "providerId": "muyuan",
                 "message": "供应商 muyuan 已删除。",
             },
-        ):
+        ) as delete_config:
             status = _handle_renderer_settings_command(
                 command,
                 context,
@@ -15383,9 +15385,9 @@ class DaemonLifecycleTests(unittest.TestCase):
                 MagicMock(),
             )
 
-        self.assertEqual(status["status"], "ok")
-        self.assertEqual(status["kind"], "warning")
+        self.assertEqual(status["kind"], "error")
         self.assertTrue(status["providerDeleteHistoryEnqueueFailed"])
+        delete_config.assert_not_called()
 
     def test_session_cleanup_manager_uses_local_store_without_cli_lookup(self) -> None:
         context = SimpleNamespace(

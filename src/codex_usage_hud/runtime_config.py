@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, TYPE_CHECKING
 
 from .config import UserConfig, normalize_display_mode, parse_thresholds
+from .provider_registry import materializable_provider_names
 
 if TYPE_CHECKING:
     from .runtime_context import RuntimeContext
@@ -105,7 +106,8 @@ def apply_to_context(
             include_history=include_history,
         )
         next_config = next_config.migrate_legacy_provider_settings(
-            registry.providers(), app_provider=registry.app_provider
+            materializable_provider_names(registry),
+            app_provider=registry.app_provider,
         )
         registry = ports.discover_providers(
             user_config=next_config,

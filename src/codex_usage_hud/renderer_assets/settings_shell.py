@@ -3405,7 +3405,7 @@ _TEXT_PREFIX = r"""
             <div class="codex-usage-hud-settings-confirm-body">默认会删除 config.toml 中该供应商的相关配置，引用它的 Provider profile，以及响应的 API key 用户环境变量。下面两项为可选删除内容，默认不勾选。</div>
             <div class="codex-usage-hud-provider-delete-options">
               <label><input type="checkbox" data-provider-delete-model-prices="true"><span>同时删除模型单价配置</span></label>
-              <label><input type="checkbox" data-provider-delete-session-history="true"><span>同时删除会话历史记录</span></label>
+              <label><input type="checkbox" data-provider-delete-session-history="true"><span>强制删除全部会话（包括当前、运行中和已归档会话）</span></label>
             </div>
             <div class="codex-usage-hud-settings-confirm-actions">
               <button type="button" class="codex-usage-hud-settings-action" data-action="settings-provider-delete-cancel" data-variant="ghost">取消</button>
@@ -5440,10 +5440,9 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
                 status.provider || pricingWorkflowState.providerDeleteProvider || "",
               ).trim().toLowerCase();
               const terminalError = String(status.kind || "") === "error";
-              // config.toml / 单价删除已在 daemon 同步请求阶段完成，status 即是
-              // "供应商已删除" 的确认信号。这里统一关闭全屏 loading 遮罩、从设置
-              // 界面移除该供应商并释放 workflow；历史会话清理若勾选则已在后台线程
-              // 执行，不影响删除速度，也不等到历史清理完成才反映删除结果。
+              // 入队只是开始，保留关联信息直到后台清理和配置删除均完成。
+              const pendingHistory = Boolean(status.providerDeletePending) && !terminalError;
+              // 前台提交后立即关闭遮罩；后台清理期间仍保留供应商及结果关联。
               const providerToRemove = String(
                 status.provider || status.providerId || pricingWorkflowState.providerDeleteProvider || "",
               ).trim().toLowerCase();
@@ -5455,10 +5454,10 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
               ) {
                 closeSettingsConfirm();
               }
-              if (!terminalError) {
+              if (!terminalError && !pendingHistory) {
                 removeProviderFromSettingsUi(providerToRemove);
               }
-              clearProviderDeleteWorkflow();
+              if (!pendingHistory) clearProviderDeleteWorkflow();
             }
           }
           if (!providerDeleteTerminalHandled) {
@@ -5709,7 +5708,7 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
           kicker: "正在删除",
           title: "正在删除供应商",
           body: deleteSessionHistory
-            ? "正在更新 config.toml 和模型单价配置；会话历史较多时会在后台清理，可关闭此窗口继续操作。"
+            ? "正在停止并删除全部相关会话；清理完成后移除供应商配置。"
             : "正在更新 config.toml 和模型单价配置，请勿关闭此窗口。",
           mode: "provider-delete",
         });

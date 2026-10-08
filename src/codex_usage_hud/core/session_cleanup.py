@@ -83,6 +83,7 @@ class _ThreadRecord:
     # name is what the Codex session list shows and what a user copies when
     # looking for a session, while ``title`` is only the opening prompt.
     name: str = ""
+    model_provider: str = ""
 
 
 @dataclass(frozen=True)
@@ -1548,7 +1549,10 @@ class SessionCleanupManager:
                         if missing_history_source
                         else ""
                     ),
-                    model_provider=metadata.model_provider,
+                    model_provider=(
+                        root.model_provider if root.model_provider not in {"", "unknown"}
+                        else metadata.model_provider
+                    ),
                     client_kind=metadata.client_kind,
                     _session_id=root_id,
                     _cwd=root.cwd,
@@ -1609,7 +1613,9 @@ class SessionCleanupManager:
         found — never raises, because a corrupt rollout must not block
         provider-scoped deletion of other sessions.
         """
-        root_path = item._rollout_paths[0] if item._rollout_paths else None
+        return self._deep_provider_for_path(item._rollout_paths[0] if item._rollout_paths else None)
+
+    def _deep_provider_for_path(self, root_path: Path | None) -> str:
         if root_path is None:
             return "unknown"
         try:
@@ -1648,6 +1654,8 @@ class SessionCleanupManager:
         provider: str,
         *,
         request_id: str = "",
+        force: bool = False,
+        desktop_lifecycle: Callable[[SessionCleanupItem], Mapping[str, object]] | None = None,
     ) -> dict[str, object]:
         """Delete every safe session tree whose root belongs to one provider.
 
@@ -1659,6 +1667,12 @@ class SessionCleanupManager:
         normalized_provider = str(provider or "").strip().casefold()
         if not normalized_provider:
             raise SessionCleanupError("Provider history deletion requires a provider.")
+        if force:
+            return self._force_delete_provider_history(
+                normalized_provider,
+                request_id=request_id,
+                desktop_lifecycle=desktop_lifecycle,
+            )
         inventory = self.scan(request_id=request_id)
         capability = inventory.get("capability")
         if not isinstance(capability, Mapping) or not bool(capability.get("available")):
@@ -1757,6 +1771,180 @@ class SessionCleanupManager:
             failedCount=0,
             actualBytes=actual_bytes,
             unresolvedUnknownCount=unresolved_unknown,
+        )
+
+    def _provider_history_items(self, provider: str) -> list[SessionCleanupItem]:
+        records, _parents, _states, _unsafe, _unresolved = self._load_state()
+        allowed = self._allowed_rollout_roots()
+        selected: dict[str, tuple[_ThreadRecord, list[Path]]] = {}
+        owners: dict[str, str] = {}
+        mapped_paths: set[str] = set()
+        for record in records.values():
+            path = record.rollout_path
+            if path is not None:
+                mapped_paths.add(_search_path_key(path))
+            # 数据库归属优先，文件缺失仍可识别；迁移后的新归属不能被旧文件元数据覆盖。
+            owner = (
+                record.model_provider
+                if record.model_provider not in {"", "unknown"}
+                else _session_metadata(path).model_provider
+            )
+            if owner == "unknown":
+                owner = self._deep_provider_for_path(path)
+            owners[record.session_id] = owner
+            if owner != provider:
+                continue
+            if path is not None and not _path_under(path, allowed):
+                raise SessionCleanupError("Provider 会话文件不在允许的会话目录内。")
+            if path is not None:
+                file_id = _canonical_uuid(path.stem[-36:])
+                if file_id and file_id != record.session_id:
+                    raise SessionCleanupError("Provider 会话文件与数据库身份冲突。")
+            selected[record.session_id] = (
+                record,
+                [path] if path is not None and path.is_file() else [],
+            )
+        # 同时覆盖未入库的历史文件及归档副本；只删除能确认供应商和 UUID 的文件。
+        for root in allowed:
+            if not root.is_dir():
+                continue
+            for path in root.rglob("*.jsonl"):
+                if _search_path_key(path) in mapped_paths:
+                    continue
+                owner = _session_metadata(path).model_provider
+                if owner == "unknown":
+                    owner = self._deep_provider_for_path(path)
+                if owner != provider:
+                    continue
+                session_id = _canonical_uuid(path.stem[-36:])
+                if not session_id or not _path_under(path, allowed):
+                    raise SessionCleanupError(
+                        "Provider 历史文件的会话身份或路径无法确认。"
+                    )
+                if session_id in records and owners[session_id] not in {
+                    "",
+                    "unknown",
+                    provider,
+                }:
+                    raise SessionCleanupError("Provider 历史文件与数据库归属冲突。")
+                if session_id not in selected:
+                    selected[session_id] = (
+                        records.get(session_id)
+                        or _ThreadRecord(
+                            session_id=session_id,
+                            rollout_path=path,
+                            title=path.stem,
+                            cwd="",
+                            archived=root.name == "archived_sessions",
+                            updated_at_ms=0,
+                            model_provider=provider,
+                        ),
+                        [],
+                    )
+                selected[session_id][1].append(path)
+        return [
+            SessionCleanupItem(
+                id=f"provider-{session_id}",
+                title=_visible_session_title(record, None),
+                workdir_name=_workdir_leaf(record.cwd),
+                updated_at=_updated_at_iso(record.updated_at_ms),
+                status="idle",
+                archived=record.archived,
+                size=sum(path.stat().st_size for path in paths),
+                descendant_count=0,
+                selectable=True,
+                blocked_reason="",
+                model_provider=provider,
+                _session_id=session_id,
+                _cwd=record.cwd,
+                _rollout_paths=tuple(paths),
+            )
+            for session_id, (record, paths) in selected.items()
+        ]
+
+    def _force_delete_provider_history(
+        self,
+        provider: str,
+        *,
+        request_id: str,
+        desktop_lifecycle: Callable[[SessionCleanupItem], Mapping[str, object]] | None,
+    ) -> dict[str, object]:
+        capability = self.probe_capability()
+        if not capability.available:
+            raise SessionCleanupError(capability.reason)
+        if desktop_lifecycle is None:
+            raise SessionCleanupError("强制删除需要 Codex 会话停止及删除通道。")
+        items = self._provider_history_items(provider)
+        results: list[dict[str, object]] = []
+        publisher = getattr(self, "progress_publisher", None)
+        for index, item in enumerate(items, 1):
+            receipt: object = None
+            deleted = False
+            try:
+                if self.usage_snapshot_prepare is not None:
+                    receipt = self.usage_snapshot_prepare(item)
+                report = desktop_lifecycle(item)
+                # 当前和运行中会话必须先经 Desktop 停止；孤立记录仅允许在确认卸载后本地清理。
+                if not bool(report.get("verified")) and not (
+                    not any(path.exists() for path in item._rollout_paths)
+                    and bool(report.get("quiesced"))
+                    and bool(report.get("localOnly"))
+                ):
+                    raise SessionCleanupError(
+                        str(report.get("error") or "Codex 会话未能停止或删除。")
+                    )
+                deleted = bool(report.get("verified"))
+                self._delete_local_batch([item], allow_missing=True)
+                deleted = True
+                self._verify_deleted_batch([item], verify_history=True)
+                if receipt and self.usage_snapshot_commit is not None:
+                    self.usage_snapshot_commit(receipt)
+                results.append(
+                    {
+                        "id": item.id,
+                        "state": "deleted",
+                        "actualBytes": item.size,
+                        "error": "",
+                    }
+                )
+            except Exception as exc:
+                error = str(exc)
+                if receipt and not deleted and self.usage_snapshot_discard is not None:
+                    try:
+                        self.usage_snapshot_discard(receipt)
+                    except Exception as discard_error:
+                        error += f"；用量快照回滚失败：{type(discard_error).__name__}"
+                results.append(self._failed_result(item, error))
+            snapshot = self.mark_operation(
+                request_id=request_id,
+                action="providerHistoryDelete",
+                state="running",
+                provider=provider,
+                progress=int(index * 99 / max(1, len(items))),
+                sessionCount=len(items),
+                deletedCount=sum(r["state"] == "deleted" for r in results),
+            )
+            if callable(publisher):
+                publisher(snapshot)
+        # 重新按归属扫描，不能只检查最初选中的记录；并发生成的残留必须导致失败。
+        remaining = self._provider_history_items(provider)
+        deleted_count = sum(row["state"] == "deleted" for row in results)
+        errors = [str(row["error"]) for row in results if row["state"] != "deleted"]
+        self._reload_after_execute()
+        return self.mark_operation(
+            request_id=request_id,
+            action="providerHistoryDelete",
+            state="completed" if not remaining and not errors else "failed",
+            progress=100,
+            provider=provider,
+            sessionCount=len(items),
+            deletedCount=deleted_count,
+            failedCount=len(errors),
+            remainingCount=len(remaining),
+            results=results,
+            actualBytes=sum(int(row["actualBytes"]) for row in results),
+            error="；".join(errors[:2])
+            or ("清理期间出现新的供应商会话，请重试。" if remaining else ""),
         )
 
     def materialize_target_rollouts(
@@ -3202,6 +3390,7 @@ class SessionCleanupManager:
                         "updated_at_ms",
                         "updated_at",
                         "recency_at_ms",
+                        "model_provider",
                     )
                     if name in columns
                 ]
@@ -3241,6 +3430,7 @@ class SessionCleanupManager:
                 archived=bool(values.get("archived")),
                 updated_at_ms=max(0, updated_at_ms),
                 name=str(values.get("name") or "").strip(),
+                model_provider=str(values.get("model_provider") or "").strip().casefold(),
             )
         parents: dict[str, set[str]] = defaultdict(set)
         edge_states: dict[str, str] = {}
@@ -3448,7 +3638,9 @@ class SessionCleanupManager:
         except OSError:
             pass
 
-    def _delete_local_batch(self, items: Sequence[SessionCleanupItem]) -> None:
+    def _delete_local_batch(
+        self, items: Sequence[SessionCleanupItem], *, allow_missing: bool = False
+    ) -> None:
         session_ids = tuple(
             dict.fromkeys(
                 session_id
@@ -3459,7 +3651,7 @@ class SessionCleanupManager:
         rollout_paths = tuple(
             dict.fromkeys(path for item in items for path in item._rollout_paths)
         )
-        if not session_ids or not rollout_paths:
+        if not session_ids or (not rollout_paths and not allow_missing):
             raise SessionCleanupError("Session deletion target is incomplete.")
         retained_index_lines: list[str] | None = None
         if self.session_index_path.is_file():
@@ -3492,6 +3684,8 @@ class SessionCleanupManager:
         try:
             staging.mkdir(parents=True, exist_ok=False)
             for index, path in enumerate(rollout_paths, start=1):
+                if allow_missing and not path.exists():
+                    continue
                 staged_path = staging / f"{index:04d}-{path.name}"
                 os.replace(path, staged_path)
                 moved.append((path, staged_path))
@@ -3503,6 +3697,23 @@ class SessionCleanupManager:
                     encoding="utf-8",
                 )
             with closing(_read_write_connection(self.state_db_path)) as connection:
+                history_tables: set[str] = set()
+                history_path = (
+                    self.thread_history_db_path
+                    or self.state_db_path.parent / "thread_history_1.sqlite"
+                ).resolve()
+                if allow_missing and history_path.is_file():
+                    # 新版 Codex 将正文保存在独立历史库，孤立记录也必须同时清理，防止保留可恢复的正文。
+                    connection.execute(
+                        "ATTACH DATABASE ? AS hud_history",
+                        (history_path.as_uri() + "?mode=rw",),
+                    )
+                    history_tables = {
+                        str(row[0])
+                        for row in connection.execute(
+                            "SELECT name FROM hud_history.sqlite_master WHERE type='table'"
+                        )
+                    }
                 tables = {
                     str(row[0])
                     for row in connection.execute(
@@ -3524,6 +3735,7 @@ class SessionCleanupManager:
                         ("thread_dynamic_tools", "thread_id"),
                         ("thread_goals", "thread_id"),
                         ("stage1_outputs", "thread_id"),
+                        ("thread_attachments", "thread_id"),
                     ):
                         if table in tables and column in columns[table]:
                             connection.execute(
@@ -3554,6 +3766,17 @@ class SessionCleanupManager:
                         f"DELETE FROM threads WHERE id IN ({placeholders})",
                         session_ids,
                     )
+                    for table in (
+                        "thread_turns",
+                        "thread_items",
+                        "thread_history_projection_state",
+                        "thread_realtime_items",
+                    ):
+                        if table in history_tables:
+                            connection.execute(
+                                f"DELETE FROM hud_history.{table} WHERE thread_id IN ({placeholders})",
+                                session_ids,
+                            )
             database_committed = True
             # The database transaction is committed.  Staging cleanup is
             # best-effort: a transient file lock (Windows AV, indexer) must
@@ -3654,7 +3877,9 @@ class SessionCleanupManager:
             if family & active_ids:
                 raise SessionCleanupError("The session tree still has active work.")
 
-    def _verify_deleted_batch(self, items: Sequence[SessionCleanupItem]) -> None:
+    def _verify_deleted_batch(
+        self, items: Sequence[SessionCleanupItem], *, verify_history: bool = False
+    ) -> None:
         family = {
             session_id
             for item in items
@@ -3676,6 +3901,28 @@ class SessionCleanupManager:
         remaining_index_ids = self._session_index_ids(strict=True)
         if family & remaining_index_ids:
             raise SessionCleanupError("Codex session index still contains the session.")
+        history_path = (
+            self.thread_history_db_path
+            or self.state_db_path.parent / "thread_history_1.sqlite"
+        )
+        if verify_history and history_path.is_file():
+            with closing(_read_only_connection(history_path)) as connection:
+                tables = {
+                    str(row[0])
+                    for row in connection.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table'"
+                    )
+                }
+                placeholders = ",".join("?" for _ in family)
+                for table in (
+                    "thread_turns", "thread_items",
+                    "thread_history_projection_state", "thread_realtime_items",
+                ):
+                    if table in tables and connection.execute(
+                        f"SELECT 1 FROM {table} WHERE thread_id IN ({placeholders}) LIMIT 1",
+                        tuple(family),
+                    ).fetchone():
+                        raise SessionCleanupError("Codex 会话历史库仍有残留记录。")
 
     def _reload_after_execute(self) -> None:
         try:

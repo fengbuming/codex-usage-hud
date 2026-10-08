@@ -1895,6 +1895,59 @@ class RendererHudPayloadTests(unittest.TestCase):
         self.assertIn("delete settingsProviderDraft.providers?.[provider];", removal)
         self.assertNotIn("settingsProviderNames(settings)", removal)
 
+    def test_provider_delete_background_submission_releases_overlay_and_keeps_terminal_results(self) -> None:
+        node = shutil.which("node")
+        if node is None:
+            self.skipTest("Node.js is needed to exercise provider deletion UI")
+        script = renderer_hud.RENDERER_HUD_SCRIPT
+        start = script.index('if (String(status.action || "") === "deleteProvider" && !providerDeleteTerminalHandled)')
+        accepted = script[start:script.index("if (!providerDeleteTerminalHandled)", start)]
+        start = script.index("let providerDeleteTerminalHandled = false;")
+        terminal = script[start:script.index('if (status && typeof status === "object"', start)]
+        probe = r'''
+const vm = require("node:vm");
+const fs = require("node:fs");
+const source = JSON.parse(fs.readFileSync(0, "utf8"));
+const results = ["completed", "failed"].map(state => {
+  const observed = {closed: 0, removed: 0, messages: []};
+  const pricingWorkflowState = {providerDeleteRequestId: "req-1", providerDeleteProvider: "token-x"};
+  const context = {
+    String, Boolean,
+    status: {action: "deleteProvider", requestId: "req-1", providerId: "token-x", providerDeletePending: true},
+    pricingWorkflowState, providerDeleteTerminalHandled: false,
+    modal: {querySelector: () => ({dataset: {providerDeleteRequestId: "req-1", providerDeleteProvider: "token-x"}})},
+    closeSettingsConfirm: () => observed.closed++,
+    removeProviderFromSettingsUi: () => observed.removed++,
+    clearProviderDeleteWorkflow: () => {pricingWorkflowState.providerDeleteRequestId = ""; pricingWorkflowState.providerDeleteProvider = "";},
+    setSettingsStatus: (message, kind) => observed.messages.push({message, kind}),
+    hudSettingsFromPayload: () => ({}), providerDisplayName: (_settings, provider) => provider,
+  };
+  vm.createContext(context);
+  vm.runInContext(source.accepted, context);
+  const pending = {closed: observed.closed, removed: observed.removed, requestId: pricingWorkflowState.providerDeleteRequestId};
+  delete context.providerDeleteTerminalHandled;
+  context.payload = {sessionCleanup: {operation: {
+    action: "providerDelete", requestId: "req-1", provider: "token-x", state,
+    error: "stop-failed", providerResult: {message: "deleted"},
+  }}};
+  vm.runInContext(source.terminal, context);
+  return {state, pending, ...observed, requestId: pricingWorkflowState.providerDeleteRequestId};
+});
+console.log(JSON.stringify(results));
+'''
+        completed = subprocess.run(
+            [node, "-e", probe], input=json.dumps({"accepted": accepted, "terminal": terminal}),
+            capture_output=True, text=True, encoding="utf-8", check=True, timeout=5,
+        )
+        results = json.loads(completed.stdout)
+        for observed in results:
+            self.assertEqual(observed["pending"], {"closed": 1, "removed": 0, "requestId": "req-1"})
+            self.assertEqual(observed["requestId"], "")
+        self.assertEqual(results[0]["removed"], 1)
+        self.assertEqual(results[1]["removed"], 0)
+        self.assertEqual(results[1]["messages"][-1]["kind"], "error")
+        self.assertIn("stop-failed", results[1]["messages"][-1]["message"])
+
     def test_renderer_payload_can_emit_domain_only_update(self) -> None:
         payload = payload_from_snapshot(
             ParsedSession(status="parsed"),

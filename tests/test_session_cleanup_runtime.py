@@ -247,7 +247,9 @@ def test_session_cleanup_worker_publishes_matching_terminal_state_before_refresh
         assert worker.close()
 
 
-def test_session_cleanup_worker_deletes_provider_history_only_for_background_cleanup() -> None:
+def test_session_cleanup_worker_deletes_provider_history_before_config(monkeypatch) -> None:
+    delete_config = MagicMock(return_value={"status": "ok", "providerId": "muyuan"})
+    monkeypatch.setattr("codex_usage_hud.session_cleanup_runtime.delete_provider_for_context", delete_config)
     manager = MagicMock()
     manager.mark_operation.side_effect = lambda **values: _operation(
         str(values["request_id"]), str(values["action"]), str(values["state"])
@@ -259,8 +261,7 @@ def test_session_cleanup_worker_deletes_provider_history_only_for_background_cle
         deletedCount=2,
         actualBytes=1234,
     )
-    # 未配置 config 删除回调：config.toml 删除已由 dispatch 同步阶段完成，
-    # worker 后台任务只负责历史清理，不应再调用 config 删除。
+    # 历史成功之后才能删除配置，避免留下无法续跑的历史。
     context = SimpleNamespace(
         session_cleanup_payload={}, runtime_events=RuntimeEventBus()
     )
@@ -284,8 +285,10 @@ def test_session_cleanup_worker_deletes_provider_history_only_for_background_cle
             time.sleep(0.01)
 
         manager.delete_provider_history.assert_called_once_with(
-            "muyuan", request_id="provider-request"
+            "muyuan", request_id="provider-request", force=True,
+            desktop_lifecycle=worker._force_delete_provider_session,
         )
+        delete_config.assert_called_once()
         final_operation = manager.mark_operation.call_args_list[-1].kwargs
         assert final_operation["actualBytes"] == 1234
         assert final_operation["deletedCount"] == 2
@@ -293,7 +296,8 @@ def test_session_cleanup_worker_deletes_provider_history_only_for_background_cle
         assert worker.close()
 
 
-def test_session_cleanup_worker_skips_provider_history_when_not_requested() -> None:
+def test_session_cleanup_worker_skips_provider_history_when_not_requested(monkeypatch) -> None:
+    monkeypatch.setattr("codex_usage_hud.session_cleanup_runtime.delete_provider_for_context", lambda *_args: {})
     manager = MagicMock()
     manager.mark_operation.side_effect = lambda **values: _operation(
         str(values["request_id"]), str(values["action"]), str(values["state"])
@@ -325,7 +329,8 @@ def test_session_cleanup_worker_skips_provider_history_when_not_requested() -> N
         assert worker.close()
 
 
-def test_session_cleanup_worker_accepts_renderer_provider_delete_alias() -> None:
+def test_session_cleanup_worker_accepts_renderer_provider_delete_alias(monkeypatch) -> None:
+    monkeypatch.setattr("codex_usage_hud.session_cleanup_runtime.delete_provider_for_context", lambda *_args: {})
     manager = MagicMock()
     manager.mark_operation.side_effect = lambda **values: _operation(
         str(values["request_id"]), str(values["action"]), str(values["state"])
@@ -355,6 +360,163 @@ def test_session_cleanup_worker_accepts_renderer_provider_delete_alias() -> None
             time.sleep(0.01)
 
         assert context.session_cleanup_payload["operation"]["action"] == "providerDelete"
+    finally:
+        assert worker.close()
+
+
+def test_provider_delete_returns_within_one_second_while_cleanup_runs_in_background(
+    monkeypatch, record_property
+) -> None:
+    from threading import Event
+    from codex_usage_hud.runtime_commands import _handle_renderer_settings_command
+
+    release = Event()
+    started = Event()
+    manager = MagicMock()
+    manager.mark_operation.side_effect = lambda **values: _operation(
+        str(values["request_id"]), str(values["action"]), str(values["state"])
+    )
+
+    def cleanup(*_args, **_kwargs):
+        started.set()
+        assert release.wait(2)
+        return _operation(
+            "fast-delete", "providerHistoryDelete", "completed", deletedCount=2
+        )
+
+    manager.delete_provider_history.side_effect = cleanup
+    delete_config = MagicMock(return_value={"status": "ok"})
+    monkeypatch.setattr(
+        "codex_usage_hud.session_cleanup_runtime.delete_provider_for_context",
+        delete_config,
+    )
+    context = SimpleNamespace(
+        app_provider="custom",
+        session_cleanup_payload={},
+        runtime_events=RuntimeEventBus(),
+    )
+    worker = SessionCleanupWorker(context, manager, on_deleted=lambda *_args: None)
+    context.session_cleanup_worker = worker
+    try:
+        begin = time.monotonic()
+        result = _handle_renderer_settings_command(
+            {
+                "action": "deleteProvider",
+                "provider": "token-x",
+                "requestId": "fast-delete",
+                "deleteSessionHistory": True,
+            },
+            context,
+            MagicMock(),
+            MagicMock(),
+        )
+        elapsed = time.monotonic() - begin
+        record_property("foreground_ms", round(elapsed * 1000, 3))
+        assert elapsed < 1
+        assert result["providerDeletePending"] is True
+        assert started.wait(1)
+        delete_config.assert_not_called()
+        release.set()
+        deadline = time.monotonic() + 2
+        while (
+            context.session_cleanup_payload.get("operation", {}).get("state")
+            != "completed"
+        ):
+            assert time.monotonic() < deadline
+            time.sleep(0.01)
+        delete_config.assert_called_once()
+    finally:
+        release.set()
+        assert worker.close()
+
+
+def test_provider_delete_preserves_config_when_history_remains(monkeypatch) -> None:
+    from codex_usage_hud.core.runtime_errors import RuntimeErrorRegistry
+
+    manager = MagicMock()
+    manager.mark_operation.side_effect = lambda **values: _operation(
+        str(values["request_id"]), str(values["action"]), str(values["state"])
+    )
+    manager.delete_provider_history.return_value = _operation(
+        "failed-delete",
+        "providerHistoryDelete",
+        "failed",
+        remainingCount=1,
+        error="thread-still-loaded",
+    )
+    delete_config = MagicMock()
+    monkeypatch.setattr(
+        "codex_usage_hud.session_cleanup_runtime.delete_provider_for_context",
+        delete_config,
+    )
+    context = SimpleNamespace(
+        app_provider="custom",
+        session_cleanup_payload={},
+        runtime_events=RuntimeEventBus(),
+        runtime_errors=RuntimeErrorRegistry(),
+    )
+    worker = SessionCleanupWorker(context, manager, on_deleted=lambda *_args: None)
+    try:
+        worker.enqueue(
+            {
+                "action": "providerDelete",
+                "provider": "token-x",
+                "requestId": "failed-delete",
+                "deleteSessionHistory": True,
+            }
+        )
+        deadline = time.monotonic() + 2
+        while (
+            context.session_cleanup_payload.get("operation", {}).get("state")
+            != "failed"
+        ):
+            assert time.monotonic() < deadline
+            time.sleep(0.01)
+        delete_config.assert_not_called()
+        assert context.runtime_errors.to_payload()
+    finally:
+        assert worker.close()
+
+
+def test_forced_provider_delete_uses_the_live_renderer_port(
+    monkeypatch, tmp_path
+) -> None:
+    import json
+    from codex_usage_hud.core.session_cleanup import SessionCleanupItem
+
+    monkeypatch.setattr(
+        "codex_usage_hud.session_cleanup_runtime.hud_runtime_dir", lambda: tmp_path
+    )
+    (tmp_path / "renderer_cdp_state.json").write_text(
+        json.dumps({"lastSuccessfulPort": 51852}), encoding="utf-8"
+    )
+    context = SimpleNamespace(
+        session_cleanup_payload={}, runtime_events=RuntimeEventBus()
+    )
+    manager = MagicMock()
+    worker = SessionCleanupWorker(context, manager, on_deleted=lambda *_args: None)
+    lifecycle = SimpleNamespace(port=9229, archive_then_delete=MagicMock())
+    worker._desktop_thread_lifecycle = lifecycle
+    item = SessionCleanupItem(
+        id="orphan",
+        title="orphan",
+        workdir_name="",
+        updated_at="",
+        status="current",
+        archived=False,
+        size=0,
+        descendant_count=0,
+        selectable=False,
+        blocked_reason="current",
+        _session_id="10000000-0000-4000-8000-000000000001",
+    )
+    try:
+        worker._force_delete_provider_session(item)
+        assert lifecycle.port == 51852
+        lifecycle.archive_then_delete.assert_called_once_with(
+            item._session_id, cwd="", force=True, missing_rollout=True,
+            already_archived=False, provider="unknown",
+        )
     finally:
         assert worker.close()
 

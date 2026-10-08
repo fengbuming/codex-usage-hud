@@ -285,6 +285,44 @@ model_provider = "custom"
 
         self.assertNotIn("history-only", registry.entries)
 
+    def test_materializable_providers_exclude_history_only_entries(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            config_path = root / "config.toml"
+            config_path.write_text(
+                'model_provider = "custom"\n'
+                "[model_providers.custom]\n"
+                'name = "OpenAI"\n'
+                'base_url = "https://api.example/v1"\n'
+                'wire_api = "responses"\n',
+                encoding="utf-8",
+            )
+            session_path = root / "sessions" / "2026" / "recent.jsonl"
+            session_path.parent.mkdir(parents=True)
+            session_path.write_text(
+                json.dumps(
+                    {
+                        "timestamp": (
+                            datetime.now(timezone.utc) - timedelta(days=1)
+                        ).isoformat(),
+                        "type": "session_meta",
+                        "payload": {"model_provider": "history-only"},
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            registry = discover_provider_registry(
+                user_config=UserConfig.defaults(),
+                config_path=config_path,
+                sessions_root=root / "sessions",
+                include_history=True,
+            )
+
+        self.assertIn("history-only", registry.providers())
+        self.assertTrue(registry.entries["history-only"].historical_only)
+        self.assertEqual(registry.materializable_providers(), ("custom",))
+
 
 if __name__ == "__main__":
     unittest.main()

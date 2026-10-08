@@ -126,7 +126,7 @@ def delete_provider_for_context(
     context: object,
     command: Mapping[str, Any],
 ) -> dict[str, object]:
-    """Delete provider config/pricing synchronously; history is a background job."""
+    """Delete provider config/pricing after the caller coordinates history cleanup."""
     provider = normalize_provider(command.get("provider") or command.get("providerId"))
     if not provider:
         raise ValueError("Provider ID 不能为空。")
@@ -171,9 +171,8 @@ def delete_provider_for_context(
 
     # ``config.toml`` is separate from the HUD settings store.  Refresh the
     # in-memory provider registry so the Codex config deletion is visible even
-    # when no HUD price option was selected.  This command is on the foreground
-    # delete path, so skip the optional 30-day JSONL history discovery here;
-    # deleting history itself is queued to SessionCleanupWorker below.
+    # when no HUD price option was selected. The caller handles history separately,
+    # so skip the optional 30-day JSONL history discovery during config cleanup.
     try:
         context.settings_mtime = None
     except Exception:

@@ -510,7 +510,8 @@ def build_runtime_context(args: argparse.Namespace) -> RuntimeContext:
         sessions_root=sessions_root,
     )
     user_config = user_config.migrate_legacy_provider_settings(
-        provider_registry.providers(), app_provider=provider_registry.app_provider
+        provider_registry.materializable_providers(),
+        app_provider=provider_registry.app_provider,
     )
     provider_registry = discover_provider_registry(
         user_config=user_config,

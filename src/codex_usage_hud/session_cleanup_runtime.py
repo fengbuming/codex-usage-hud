@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 import logging
+import json
 import queue
 from pathlib import Path
 import sqlite3
@@ -21,6 +22,7 @@ from .core.session_cleanup import (
 from .core.session_search import DEFAULT_RANGE
 from .core.session_transfer import CodexAppServerClient
 from .core.deleted_usage import DeletedUsageLedger, DeletedUsageLedgerError
+from .provider_cleanup import delete_provider_for_context
 from .platforms.codex_desktop_threads import CodexDesktopThreadLifecycle
 from .platforms.file_watcher import FileChangeWatcher, FileWatchSpec
 from .runtime_paths import SESSION_SEARCH_DATABASE_FILENAME, hud_runtime_dir
@@ -253,7 +255,7 @@ class SessionCleanupWorker:
                     action=action,
                     state="scanning" if action == "sessionCleanupScan" else "accepted",
                     progress=0,
-                    include_sessions=action != "sessionCleanupSearch",
+                    include_sessions=action not in {"sessionCleanupSearch", "providerDelete"},
                     **accepted_values,
                 )
             )
@@ -696,8 +698,7 @@ class SessionCleanupWorker:
                         request_id=request_id,
                     )
                 elif action == "providerDelete":
-                    # config.toml / 单价删除已在 dispatch 同步请求阶段完成；此处只负责
-                    # 后台清理该供应商的会话历史，避免历史较多时阻塞前端删除反馈。
+                    # 强制清理及校验全部完成后再删配置；失败时保留配置供重试。
                     provider_id = (
                         str(command.get("provider") or command.get("providerId") or "")
                         .strip()
@@ -717,6 +718,8 @@ class SessionCleanupWorker:
                         history_snapshot = self.manager.delete_provider_history(
                             provider_id,
                             request_id=request_id,
+                            force=True,
+                            desktop_lifecycle=self._force_delete_provider_session,
                         )
                     history_operation = (
                         history_snapshot.get("operation")
@@ -733,12 +736,31 @@ class SessionCleanupWorker:
                         if isinstance(history_operation, Mapping)
                         else 0
                     )
+                    if bool(command.get("deleteSessionHistory")) and (
+                        not isinstance(history_operation, Mapping)
+                        or history_operation.get("state") != "completed"
+                    ):
+                        raise SessionCleanupError(
+                            f"会话清理未完成（已删除 {history_deleted} 条），供应商配置已保留："
+                            f"{history_operation.get('error') if isinstance(history_operation, Mapping) else '结果不可用'}"
+                        )
+                    provider_result = delete_provider_for_context(self._context, command)
+                    if bool(command.get("deleteSessionHistory")):
+                        message = str(provider_result.get("message") or f"供应商 {provider_id} 已删除。")
+                        provider_result = {
+                            **provider_result,
+                            "message": message.rstrip("。") + f"；已强制删除 {history_deleted} 条会话记录。",
+                        }
+                    errors = getattr(self._context, "runtime_errors", None)
+                    if errors is not None:
+                        errors.resolve(source="session_cleanup", code=f"provider_delete_failed.{provider_id}")
                     snapshot = self.manager.mark_operation(
                         request_id=request_id,
                         action=action,
                         state="completed",
                         progress=100,
                         provider=provider_id,
+                        providerResult=provider_result,
                         historyDeletedCount=history_deleted,
                         deletedCount=history_deleted,
                         actualBytes=history_actual_bytes,
@@ -918,6 +940,17 @@ class SessionCleanupWorker:
                     ):
                         refresh_after_delete = True
             except Exception as exc:
+                if action == "providerDelete":
+                    _LOGGER.exception("provider_history_delete_failed")
+                    # 后台失败进入 HUD 诊断，即使设置窗口已关闭也不能丢失错误。
+                    errors = getattr(self._context, "runtime_errors", None)
+                    if errors is not None:
+                        errors.record(
+                            source="session_cleanup",
+                            code=f"provider_delete_failed.{str(command.get('provider') or command.get('providerId') or '').strip().casefold()}",
+                            message=str(exc)[:1200],
+                            context={"requestId": request_id, "provider": command.get("provider") or command.get("providerId")},
+                        )
                 failure_values: dict[str, object] = {}
                 if action == "providerDelete":
                     failure_values["provider"] = (
@@ -925,6 +958,11 @@ class SessionCleanupWorker:
                         .strip()
                         .lower()
                     )
+                    previous = self.manager.snapshot(include_sessions=False).get("operation", {})
+                    if isinstance(previous, Mapping):
+                        for key in ("deletedCount", "failedCount", "remainingCount", "actualBytes"):
+                            if key in previous:
+                                failure_values[key] = previous[key]
                 elif action == "sessionTransfer":
                     failure_values.update(transfer_values)
                     if command.get("startedAt"):
@@ -961,6 +999,26 @@ class SessionCleanupWorker:
                     name="codex-usage-hud-deleted-usage-refresh",
                     daemon=True,
                 ).start()
+
+    def _force_delete_provider_session(
+        self, item: SessionCleanupItem
+    ) -> Mapping[str, object]:
+        # Renderer 的 CDP 端口可能随机变化，复用最近实际连通的端口，避免使用启动默认值。
+        try:
+            state = json.loads((hud_runtime_dir() / "renderer_cdp_state.json").read_text(encoding="utf-8"))
+            port = int(state.get("lastSuccessfulPort") or 0)
+            if 0 < port < 65536:
+                self._desktop_thread_lifecycle.port = port
+        except (OSError, ValueError, TypeError, AttributeError):
+            pass
+        return self._desktop_thread_lifecycle.archive_then_delete(
+            item._session_id,
+            cwd=item._cwd,
+            force=True,
+            missing_rollout=not any(path.is_file() for path in item._rollout_paths),
+            already_archived=item.archived,
+            provider=item.model_provider,
+        ).to_payload()
 
     def _validate_transfer_provider(self, source: str, target: str) -> None:
         if not source or not target:

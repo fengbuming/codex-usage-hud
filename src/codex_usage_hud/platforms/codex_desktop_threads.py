@@ -45,6 +45,10 @@ def _desktop_thread_lifecycle_script(
     cwd: str,
     *,
     timeout_ms: int,
+    force: bool = False,
+    missing_rollout: bool = False,
+    already_archived: bool = False,
+    provider: str = "",
 ) -> str:
     """Build one Desktop-owned archive-then-delete transaction.
 
@@ -57,6 +61,10 @@ def _desktop_thread_lifecycle_script(
         {
             "threadId": thread_id,
             "cwd": str(cwd or "").strip() or "/",
+            "force": bool(force),
+            "missingRollout": bool(missing_rollout),
+            "alreadyArchived": bool(already_archived),
+            "provider": str(provider or "").strip().casefold(),
         },
         ensure_ascii=False,
     )
@@ -68,7 +76,8 @@ def _desktop_thread_lifecycle_script(
   if (!bridge || typeof bridge.sendMessageFromView !== "function") {{
     return {{ ok: false, threadId: input.threadId, error: "desktop-bridge-unavailable" }};
   }}
-  const notifications = {{ archived: false, deleted: false }};
+  const notifications = {{ archived: false, deleted: false, closed: false }};
+  let quiesced = false;
   const pending = new Map();
   const messageText = (value) => {{
     if (typeof value === "string") return value;
@@ -85,6 +94,7 @@ def _desktop_thread_lifecycle_script(
       if (threadId !== input.threadId) return;
       if (data.method === "thread/archived") notifications.archived = true;
       if (data.method === "thread/deleted") notifications.deleted = true;
+      if (data.method === "thread/closed") notifications.closed = true;
       return;
     }}
     if (data.type !== "mcp-response") return;
@@ -94,7 +104,7 @@ def _desktop_thread_lifecycle_script(
     pending.delete(id);
     window.clearTimeout(waiter.timer);
     const error = messageText(data.message?.error);
-    waiter.resolve({{ ok: !error, error }});
+    waiter.resolve({{ ok: !error, error, result: data.message?.result }});
   }};
   window.addEventListener("message", onMessage);
   const waitForNotification = async (name) => {{
@@ -127,6 +137,43 @@ def _desktop_thread_lifecycle_script(
     }});
   }});
   try {{
+    if (input.force) {{
+      // 供应商强制删除先中断当前轮次并卸载会话，确认写入方退出后才删除文件。
+      const read = await request("thread/read", {{ threadId: input.threadId, includeTurns: false }});
+      if (!read.ok && !input.missingRollout && !input.alreadyArchived) {{
+        return {{ ok: false, threadId: input.threadId, error: read.error }};
+      }}
+      if (read.ok && input.provider && read.result?.thread?.modelProvider
+        && String(read.result.thread.modelProvider).trim().toLowerCase() !== input.provider) {{
+        return {{ ok: false, threadId: input.threadId, error: "thread-provider-changed" }};
+      }}
+      if (read.result?.thread?.status?.type === "active") {{
+        const turns = await request("thread/turns/list", {{
+          threadId: input.threadId, sortDirection: "desc", limit: 1, itemsView: "notLoaded",
+        }});
+        const turn = turns.result?.data?.find((value) => value.status === "inProgress");
+        // 轮次可能在查询期间结束；仍继续卸载，由关闭通知确认写入已停止。
+        if (turns.ok && turn?.id) {{
+          await request("turn/interrupt", {{ threadId: input.threadId, turnId: turn.id }});
+        }}
+      }}
+      const unload = await request("thread/unsubscribe", {{ threadId: input.threadId }});
+      if (!unload.ok) {{
+        return {{ ok: false, threadId: input.threadId, error: unload.error }};
+      }}
+      quiesced = unload.result?.status === "notLoaded";
+      if (!quiesced && unload.result?.status === "unsubscribed") {{
+        quiesced = await waitForNotification("closed");
+      }}
+      if (!quiesced) {{
+        const unloaded = await request("thread/read", {{ threadId: input.threadId, includeTurns: false }});
+        quiesced = unloaded.ok && unloaded.result?.thread?.status?.type === "notLoaded";
+        // 其他连接仍订阅但已空闲时，交给官方归档/删除收尾；活动写入不可本地强删。
+        if (!unloaded.ok || unloaded.result?.thread?.status?.type === "active") {{
+          return {{ ok: false, threadId: input.threadId, error: "thread-still-loaded" }};
+        }}
+      }}
+    }}
     // This is the companion registration sent by Desktop's archive command.
     // It lets the same App Server connection apply its normal archive side
     // effects, while explicitly avoiding any worktree cleanup.
@@ -139,8 +186,15 @@ def _desktop_thread_lifecycle_script(
       replacementOwnerThreadId: null,
       replacementOwnerCwd: null,
     }}));
-    const archive = await request("thread/archive", {{ threadId: input.threadId }});
+    // 数据库已确认归档的会话直接删除，不能等待不会再次发送的归档通知。
+    const archive = input.alreadyArchived
+      ? {{ ok: true }}
+      : await request("thread/archive", {{ threadId: input.threadId }});
     if (!archive.ok) {{
+      // 文件已丢失的孤立记录无法归档；确认卸载后交给调用方清理数据库与索引。
+      if (input.force && input.missingRollout && quiesced) {{
+        return {{ ok: true, threadId: input.threadId, quiesced: true, localOnly: true, error: "" }};
+      }}
       return {{
         ok: false,
         threadId: input.threadId,
@@ -151,7 +205,7 @@ def _desktop_thread_lifecycle_script(
         error: archive.error || "desktop-archive-failed",
       }};
     }}
-    if (!await waitForNotification("archived")) {{
+    if (!input.alreadyArchived && !await waitForNotification("archived")) {{
       return {{
         ok: false,
         threadId: input.threadId,
@@ -164,12 +218,15 @@ def _desktop_thread_lifecycle_script(
     }}
     const deletion = await request("thread/delete", {{ threadId: input.threadId }});
     if (!deletion.ok) {{
+      if (input.force && input.missingRollout && quiesced) {{
+        return {{ ok: true, threadId: input.threadId, quiesced: true, localOnly: true, error: "" }};
+      }}
       return {{
         ok: false,
         threadId: input.threadId,
         archived: true,
         deleted: false,
-        archiveNotification: true,
+        archiveNotification: notifications.archived,
         deleteNotification: notifications.deleted,
         error: deletion.error || "desktop-delete-failed",
       }};
@@ -180,7 +237,7 @@ def _desktop_thread_lifecycle_script(
         threadId: input.threadId,
         archived: true,
         deleted: true,
-        archiveNotification: true,
+        archiveNotification: notifications.archived,
         deleteNotification: false,
         error: "desktop-delete-notification-timeout",
       }};
@@ -190,9 +247,10 @@ def _desktop_thread_lifecycle_script(
       threadId: input.threadId,
       archived: true,
       deleted: true,
-      archiveNotification: true,
+      archiveNotification: notifications.archived,
       deleteNotification: true,
       error: "",
+      quiesced,
     }};
   }} finally {{
     for (const waiter of pending.values()) {{
@@ -322,13 +380,16 @@ class DesktopThreadLifecycleReport:
     archive_notification: bool
     delete_notification: bool
     error: str = ""
+    quiesced: bool = False
+    local_only: bool = False
+    already_archived: bool = False
 
     @property
     def verified(self) -> bool:
         return (
             self.archived
             and self.deleted
-            and self.archive_notification
+            and (self.archive_notification or self.already_archived)
             and self.delete_notification
             and not self.error
         )
@@ -342,6 +403,9 @@ class DesktopThreadLifecycleReport:
             "deleteNotification": self.delete_notification,
             "verified": self.verified,
             "error": self.error,
+            "quiesced": self.quiesced,
+            "localOnly": self.local_only,
+            "alreadyArchived": self.already_archived,
         }
 
 
@@ -432,6 +496,10 @@ class CodexDesktopThreadLifecycle:
         thread_id: str,
         *,
         cwd: str = "",
+        force: bool = False,
+        missing_rollout: bool = False,
+        already_archived: bool = False,
+        provider: str = "",
     ) -> DesktopThreadLifecycleReport:
         normalized_id = _canonical_uuid(thread_id)
         if not normalized_id:
@@ -443,6 +511,10 @@ class CodexDesktopThreadLifecycle:
                 normalized_id,
                 cwd,
                 timeout_ms=max(500, int(self.timeout_seconds * 1000) - 250),
+                force=force,
+                missing_rollout=missing_rollout,
+                already_archived=already_archived,
+                provider=provider,
             )
         )
         reported_id = _canonical_uuid(value.get("threadId"))
@@ -457,6 +529,9 @@ class CodexDesktopThreadLifecycle:
             archive_notification=bool(value.get("archiveNotification")),
             delete_notification=bool(value.get("deleteNotification")),
             error=str(value.get("error") or "").strip(),
+            quiesced=bool(value.get("quiesced")),
+            local_only=bool(value.get("localOnly")),
+            already_archived=already_archived,
         )
 
 
