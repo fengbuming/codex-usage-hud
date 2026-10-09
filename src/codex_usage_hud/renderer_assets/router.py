@@ -289,7 +289,7 @@ TEXT = r"""
       sessionCleanupState.searchDraft = search;
       sessionCleanupState.indexPanelHidden = false;
       sessionCleanupState.page = 0;
-      sessionCleanupState.selectedIds.clear();
+      clearSessionCleanupSelection();
       persistSessionCleanupFilters();
       stopSessionCleanupSearchTimer();
       requestSessionCleanupSearch(search);
@@ -378,7 +378,7 @@ TEXT = r"""
         sessionCleanupState.search = search;
         sessionCleanupState.indexPanelHidden = false;
         sessionCleanupState.page = 0;
-        sessionCleanupState.selectedIds.clear();
+        clearSessionCleanupSelection();
         persistSessionCleanupFilters();
         stopSessionCleanupSearchTimer();
         sessionCleanupSearchTimer = ctx.lifecycle.timeout(
@@ -510,7 +510,7 @@ TEXT = r"""
         if (!new Set(["archive", "availability", "clientKind", "modelProvider", "sort", "workdirId"]).has(key)) return;
         sessionCleanupState[key] = String(sessionFilter.value || "all");
         sessionCleanupState.page = 0;
-        if (key !== "sort") sessionCleanupState.selectedIds.clear();
+        if (key !== "sort") clearSessionCleanupSelection();
         persistSessionCleanupFilters();
         if (key === "workdirId") {
           stopSessionCleanupSearchTimer();
@@ -523,20 +523,16 @@ TEXT = r"""
 
       const sessionSelectAll = event.target?.closest?.('[data-session-cleanup-select-all="true"]');
       if (sessionSelectAll && root.contains(sessionSelectAll)) {
-        for (const item of sessionCleanupPageRows()) {
-          const id = String(item?.id || "");
-          if (!id || item?.selectable !== true) continue;
-          if (sessionSelectAll.checked) sessionCleanupState.selectedIds.add(id);
-          else sessionCleanupState.selectedIds.delete(id);
-        }
+        if (sessionSelectAll.disabled) return;
+        selectSessionCleanupPage(sessionSelectAll.checked);
         renderSettingsModal("storage");
         return;
       }
       const sessionItem = event.target?.closest?.('[data-session-cleanup-id]');
       if (sessionItem && root.contains(sessionItem)) {
+        if (sessionItem.disabled) return;
         const id = String(sessionItem.dataset.sessionCleanupId || "");
-        if (sessionItem.checked) sessionCleanupState.selectedIds.add(id);
-        else sessionCleanupState.selectedIds.delete(id);
+        setSessionCleanupItemSelected(id, sessionItem.checked);
         renderSettingsModal("storage");
         return;
       }
@@ -889,6 +885,20 @@ TEXT = r"""
         moveSessionCleanupPage(action.dataset.direction === "prev" ? -1 : 1);
         return;
       }
+      if (action.dataset.action === "session-cleanup-select-filtered") {
+        event.preventDefault();
+        event.stopPropagation();
+        if (!action.disabled && selectAllSessionCleanupRows()) renderSettingsModal("storage");
+        return;
+      }
+      if (action.dataset.action === "session-cleanup-selection-clear") {
+        event.preventDefault();
+        event.stopPropagation();
+        if (action.disabled) return;
+        clearSessionCleanupSelection();
+        renderSettingsModal("storage");
+        return;
+      }
       if (action.dataset.action === "session-cleanup-date-toggle") {
         event.preventDefault();
         event.stopPropagation();
@@ -919,7 +929,7 @@ TEXT = r"""
         sessionCleanupState.dateDraftEnd = "";
         sessionCleanupState.datePickerOpen = false;
         sessionCleanupState.page = 0;
-        sessionCleanupState.selectedIds.clear();
+        clearSessionCleanupSelection();
         persistSessionCleanupFilters();
         renderSettingsModal("storage");
         return;
@@ -935,7 +945,7 @@ TEXT = r"""
         sessionCleanupState.dateEnd = sessionCleanupState.dateDraftEnd;
         sessionCleanupState.datePickerOpen = false;
         sessionCleanupState.page = 0;
-        sessionCleanupState.selectedIds.clear();
+        clearSessionCleanupSelection();
         persistSessionCleanupFilters();
         renderSettingsModal("storage");
         return;
@@ -966,7 +976,7 @@ TEXT = r"""
         sessionCleanupState.clientKind = "all";
         sessionCleanupState.modelProvider = "all";
         sessionCleanupState.sort = "recent";
-        sessionCleanupState.selectedIds.clear();
+        clearSessionCleanupSelection();
         persistSessionCleanupFilters();
         renderSettingsModal("storage");
         return;

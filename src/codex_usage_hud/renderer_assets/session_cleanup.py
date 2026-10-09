@@ -64,7 +64,7 @@ TEXT = r"""
         const busy = new Set(["scanning", "accepted", "running"]).has(state)
           || !!sessionCleanupState.pendingRequestId;
         const selectedCount = sessionCleanupState.selectedIds.size;
-        const selectedRows = sessionCleanupRows(sessionData)
+        const selectedRows = (Array.isArray(sessionData?.sessions) ? sessionData.sessions : [])
           .filter((item) => sessionCleanupState.selectedIds.has(String(item?.id || "")));
         const descendants = selectedRows.reduce(
           (sum, item) => sum + Math.max(0, Number(item?.descendantCount || 0)),
@@ -182,6 +182,89 @@ TEXT = r"""
 
       function sessionCleanupPageCount(rowCount) {
         return Math.max(1, Math.ceil(Math.max(0, Number(rowCount || 0)) / SESSION_CLEANUP_PAGE_SIZE));
+      }
+
+      function clearSessionCleanupSelection() {
+        sessionCleanupState.selectedIds.clear();
+        sessionCleanupState.selectionSnapshot = null;
+      }
+
+      function sessionCleanupSelectionReady(data = sessionCleanupFromPayload()) {
+        const state = String(data?.operation?.state || "");
+        if (!data?.revision || sessionCleanupState.pendingRequestId
+          || new Set(["scanning", "accepted", "running"]).has(state)) return false;
+        const search = String(sessionCleanupState.search || "").trim().toLowerCase();
+        if (!search) return true;
+        return !sessionCleanupSearchTimer && !sessionCleanupState.searchRequestId
+          && sessionCleanupState.searchResultState === "completed"
+          && String(sessionCleanupState.searchResultQuery || "").trim().toLowerCase() === search
+          && String(sessionCleanupState.searchResultRevision || "") === String(data.revision);
+      }
+
+      function setSessionCleanupItemSelected(id, checked) {
+        const itemId = String(id || "");
+        if (checked) {
+          const data = sessionCleanupFromPayload();
+          if (!data?.sessions?.some((item) => String(item?.id || "") === itemId && item?.selectable === true)) return;
+          if (sessionCleanupState.selectionSnapshot && !sessionCleanupState.selectionSnapshot.ids.has(itemId)) {
+            sessionCleanupState.selectionSnapshot = null;
+          }
+          sessionCleanupState.selectedIds.add(itemId);
+        } else {
+          sessionCleanupState.selectedIds.delete(itemId);
+          if (!sessionCleanupState.selectedIds.size) sessionCleanupState.selectionSnapshot = null;
+        }
+      }
+
+      function selectSessionCleanupPage(checked) {
+        for (const item of sessionCleanupPageRows()) {
+          if (item?.selectable !== true || !String(item?.id || "")) continue;
+          setSessionCleanupItemSelected(item.id, checked);
+        }
+      }
+
+      function selectAllSessionCleanupRows() {
+        const data = sessionCleanupFromPayload();
+        if (!sessionCleanupSelectionReady(data)) return false;
+        const pageItems = sessionCleanupPageRows(data).filter((item) => item?.selectable === true && item?.id);
+        if (!pageItems.length || !pageItems.every((item) => sessionCleanupState.selectedIds.has(String(item.id)))) return false;
+        const rows = sessionCleanupRows(data);
+        const ids = new Set(rows.filter((item) => item?.selectable === true && item?.id).map((item) => String(item.id)));
+        // Keep explicit targets: later inventory/search events cannot extend a destructive selection.
+        sessionCleanupState.selectedIds = new Set(ids);
+        sessionCleanupState.selectionSnapshot = {
+          ids,
+          scopeLabel: sessionCleanupScopeLabel(data),
+        };
+        return true;
+      }
+
+      function sessionCleanupSelectionHtml(data, rows, pageRows, busy) {
+        const selectable = rows.filter((item) => item?.selectable === true && item?.id);
+        const pageSelectable = pageRows.filter((item) => item?.selectable === true && item?.id);
+        const pageSelected = pageSelectable.filter((item) => sessionCleanupState.selectedIds.has(String(item.id))).length;
+        const allPageSelected = pageSelectable.length > 0 && pageSelected === pageSelectable.length;
+        const selectedCount = sessionCleanupState.selectedIds.size;
+        const snapshot = sessionCleanupState.selectionSnapshot;
+        const ready = sessionCleanupSelectionReady(data);
+        let summary = selectedCount ? `已选 ${selectedCount} 个会话` : "";
+        if (snapshot) {
+          const excluded = Array.from(snapshot.ids).filter((id) => !sessionCleanupState.selectedIds.has(id)).length;
+          const added = ready ? selectable.filter((item) => !snapshot.ids.has(String(item.id))).length : 0;
+          summary = !excluded && !added && ready
+            ? `已选全部 ${selectedCount} 个可删除会话`
+            : `已选 ${selectedCount} 个会话${excluded ? ` · 已排除 ${excluded} 个` : ""}${added ? ` · 新增 ${added} 个未选中` : ""}`;
+        } else if (allPageSelected && selectedCount === pageSelected) {
+          summary = `已选当前页 ${pageSelected} 个会话`;
+        }
+        const blocked = rows.length - selectable.length;
+        const skipped = blocked ? `<span>已跳过 ${blocked} 个受保护会话</span>` : "";
+        const canExpand = allPageSelected && selectable.some((item) => !sessionCleanupState.selectedIds.has(String(item.id)));
+        const expand = canExpand
+          ? `<button type="button" data-action="session-cleanup-select-filtered" ${!ready || busy ? "disabled" : ""}>选择当前筛选范围内全部 ${selectable.length} 个可删除会话</button>${!ready && !busy ? '<span>搜索结果更新中</span>' : ""}`
+          : "";
+        const cancel = selectedCount ? `<button type="button" data-action="session-cleanup-selection-clear" ${busy ? "disabled" : ""}>取消全部选择</button>` : "";
+        return `<div class="codex-usage-hud-session-selection" data-session-cleanup-selection="true" role="group" aria-label="会话选择"><label><input type="checkbox" data-session-cleanup-select-all="true" data-indeterminate="${pageSelected > 0 && !allPageSelected}" aria-checked="${pageSelected > 0 && !allPageSelected ? "mixed" : allPageSelected}" ${allPageSelected ? "checked" : ""} ${busy || !pageSelectable.length ? "disabled" : ""}>全选当前页</label><div class="codex-usage-hud-session-selection-status" role="status">${summary ? `<span>${summary}</span>` : ""}${skipped}</div><div class="codex-usage-hud-session-selection-actions">${expand}${cancel}</div></div>`;
       }
 
       function moveSessionCleanupPage(direction) {
@@ -317,7 +400,7 @@ TEXT = r"""
         })[String(value || "")] || "命中";
       }
 
-      function sessionCleanupFilterSummary(data, rows) {
+      function sessionCleanupFilterLabels(data, detailed = false) {
         const labels = [];
         const dateRange = sessionCleanupDateRangeLabel();
         if (dateRange !== "全部时间") labels.push(`最后活动：${dateRange}`);
@@ -326,8 +409,24 @@ TEXT = r"""
         if (sessionCleanupState.availability !== "all") labels.push(sessionCleanupAvailabilityLabel(sessionCleanupState.availability));
         if (sessionCleanupState.clientKind !== "all") labels.push(sessionCleanupClientLabel(sessionCleanupState.clientKind));
         if (sessionCleanupState.modelProvider !== "all") labels.push(`提供方：${providerRegistryDisplayName(currentPayload()?.settings, sessionCleanupState.modelProvider)}`);
-        if (String(sessionCleanupState.search || "").trim()) labels.push("搜索");
-        if (String(sessionCleanupState.workdirId || "").trim()) labels.push("工作目录");
+        const search = String(sessionCleanupState.search || "").trim();
+        if (search) labels.push(detailed ? `搜索：${search}` : "搜索");
+        const workdirId = String(sessionCleanupState.workdirId || "").trim();
+        if (workdirId) {
+          const workdirs = [...(sessionCleanupState.workdirOptions || []), ...(data?.workdirs || [])];
+          const workdir = workdirs.find((item) => String(item?.id || "") === workdirId);
+          labels.push(detailed ? `工作目录：${workdir?.label || "当前工作目录"}` : "工作目录");
+        }
+        return labels;
+      }
+
+      function sessionCleanupScopeLabel(data) {
+        const labels = sessionCleanupFilterLabels(data, true);
+        return labels.length ? `当前筛选：${labels.join(" · ")}` : "全部已扫描会话";
+      }
+
+      function sessionCleanupFilterSummary(data, rows) {
+        const labels = sessionCleanupFilterLabels(data);
         const total = Array.isArray(data?.sessions) ? data.sessions.length : 0;
         const tags = labels.map((label) => `<span class="codex-usage-hud-session-filter-summary-tag" title="${escapeHtml(label)}">${escapeHtml(label)}</span>`).join("");
         return `<div class="codex-usage-hud-session-filter-summary"><span>${rows.length} / ${total} 个会话</span><div class="codex-usage-hud-session-filter-summary-tags">${tags || '<span>未设置筛选</span>'}</div>${labels.length ? '<button type="button" class="codex-usage-hud-session-filter-summary-clear" data-action="session-cleanup-filters-clear">清除</button>' : ""}</div>`;
@@ -895,9 +994,7 @@ TEXT = r"""
               },
             ]),
         );
-        const visibleSelectable = pageRows.filter((item) => item?.selectable === true && String(item?.id || ""));
-        const allVisibleSelected = visibleSelectable.length > 0
-          && visibleSelectable.every((item) => sessionCleanupState.selectedIds.has(String(item.id)));
+        const selectionHtml = sessionCleanupSelectionHtml(data, rows, pageRows, busy);
         const rowHtml = pageRows.map((item) => {
           const id = String(item?.id || "");
           const selectable = item?.selectable === true && !!id;
@@ -999,7 +1096,7 @@ TEXT = r"""
           && new Set(["pending", "indexing"]).has(sessionCleanupState.searchResultState);
         const emptyState = rowHtml ? "" : `<div class="codex-usage-hud-cleanup-empty"><div class="codex-usage-hud-cleanup-empty-mark">${cleanupIconSvg("search", "codex-usage-hud-cleanup-icon-lg")}</div><p class="codex-usage-hud-cleanup-empty-title">${searchPreparing ? "搜索索引准备中" : "当前筛选没有会话"}</p><p class="codex-usage-hud-cleanup-empty-hint">${searchPreparing ? "准备完成后将自动更新搜索结果，无需重新打开界面" : "试试调整筛选条件，或清除筛选后重新查看"}</p></div>`;
         const indexToggle = sessionIndexToggleHtml(sessionIndex, indexVisible);
-        return `<section class="codex-usage-hud-session-cleanup" aria-label="会话管理">${unavailable}<div class="codex-usage-hud-session-tools"><div class="codex-usage-hud-session-tools-primary"><div class="codex-usage-hud-session-search">${cleanupIconSvg("search")}<input type="search" data-session-cleanup-search="true" value="${escapeHtml(sessionCleanupState.searchDraft)}" placeholder="搜索会话、内容、文件或会话 ID" aria-label="搜索会话"><button type="button" class="codex-usage-hud-session-search-submit" data-action="session-cleanup-search-submit" aria-label="开始搜索">${cleanupIconSvg("search")}<span>${searchButtonLabel}</span></button></div><div class="codex-usage-hud-session-index-workdir">${indexToggle}${workdirControl}</div><div class="codex-usage-hud-session-date-filter" data-open="${sessionCleanupState.datePickerOpen}"><button type="button" class="codex-usage-hud-session-date-trigger" data-action="session-cleanup-date-toggle" aria-expanded="${sessionCleanupState.datePickerOpen ? "true" : "false"}" aria-haspopup="dialog">${cleanupIconSvg("calendar")}<span>最后活动：${escapeHtml(sessionCleanupDateRangeLabel())}</span>${cleanupIconSvg("chevron")}</button>${datePopover}</div></div>${indexPanel}<div class="codex-usage-hud-session-filter-controls">${controls}</div>${sessionCleanupFilterSummary(data, rows)}</div><div class="codex-usage-hud-session-table"><div class="codex-usage-hud-session-head"><span><input type="checkbox" data-session-cleanup-select-all="true" ${allVisibleSelected ? "checked" : ""} ${visibleSelectable.length ? "" : "disabled"} aria-label="全选当前页"></span><span>会话</span><span aria-hidden="true"></span><span>最后活动</span><span>状态</span><span>占用</span></div>${rowHtml || emptyState}</div>${pagination}${resultHtml}</section>`;
+        return `<section class="codex-usage-hud-session-cleanup" aria-label="会话管理">${unavailable}<div class="codex-usage-hud-session-tools"><div class="codex-usage-hud-session-tools-primary"><div class="codex-usage-hud-session-search">${cleanupIconSvg("search")}<input type="search" data-session-cleanup-search="true" value="${escapeHtml(sessionCleanupState.searchDraft)}" placeholder="搜索会话、内容、文件或会话 ID" aria-label="搜索会话"><button type="button" class="codex-usage-hud-session-search-submit" data-action="session-cleanup-search-submit" aria-label="开始搜索">${cleanupIconSvg("search")}<span>${searchButtonLabel}</span></button></div><div class="codex-usage-hud-session-index-workdir">${indexToggle}${workdirControl}</div><div class="codex-usage-hud-session-date-filter" data-open="${sessionCleanupState.datePickerOpen}"><button type="button" class="codex-usage-hud-session-date-trigger" data-action="session-cleanup-date-toggle" aria-expanded="${sessionCleanupState.datePickerOpen ? "true" : "false"}" aria-haspopup="dialog">${cleanupIconSvg("calendar")}<span>最后活动：${escapeHtml(sessionCleanupDateRangeLabel())}</span>${cleanupIconSvg("chevron")}</button>${datePopover}</div></div>${indexPanel}<div class="codex-usage-hud-session-filter-controls">${controls}</div>${sessionCleanupFilterSummary(data, rows)}</div>${selectionHtml}<div class="codex-usage-hud-session-table"><div class="codex-usage-hud-session-head"><span aria-hidden="true"></span><span>会话</span><span aria-hidden="true"></span><span>最后活动</span><span>状态</span><span>占用</span></div>${rowHtml || emptyState}</div>${pagination}${resultHtml}</section>`;
       }
 
       function captureStorageUiState() {
@@ -1020,6 +1117,8 @@ TEXT = r"""
         if (cleanupContent) cleanupContent.scrollTop = cleanupContentScrollTop;
         const sessionTable = modal?.querySelector?.(".codex-usage-hud-session-table");
         if (sessionTable) sessionTable.scrollTop = sessionTableScrollTop;
+        const selectAll = modal?.querySelector?.('[data-session-cleanup-select-all="true"]');
+        if (selectAll) selectAll.indeterminate = selectAll.dataset.indeterminate === "true";
       }
 
       function captureStorageFocus(body) {
@@ -1166,7 +1265,8 @@ TEXT = r"""
         // controls and starts elapsed-time tracking.
         sessionCleanupState.pendingRequestId = requestId;
         sessionCleanupState.scanStartedAt = Date.now();
-        sessionCleanupState.selectedIds.clear();
+        clearSessionCleanupSelection();
+        sessionCleanupState.previewScope = null;
         sessionCleanupState.previewTokenShown = "";
         if (transferOpen) {
           sessionTransferState.scanRequestId = requestId;
@@ -1196,6 +1296,12 @@ TEXT = r"""
           return false;
         }
         const requestId = typedSettingsRequestId("session-cleanup-preview");
+        const selection = sessionCleanupState.selectionSnapshot;
+        sessionCleanupState.previewScope = {
+          requestId,
+          label: `${selection ? "跨页选择" : "手动选择"} · ${selection?.scopeLabel || sessionCleanupScopeLabel(data)}`,
+          blockedCount: sessionCleanupRows(data).filter((item) => item?.selectable !== true).length,
+        };
         sessionCleanupState.pendingRequestId = requestId;
         sessionCleanupState.previewTokenShown = "";
         const submitted = submitSettingsCommand({
@@ -1223,7 +1329,10 @@ TEXT = r"""
         layer.dataset.sessionCleanupConfirmToken = token;
         const descendants = Math.max(0, Number(operation?.descendantCount || 0));
         const estimatedBytes = storageFormatBytes(operation?.estimatedBytes);
-        layer.innerHTML = `<div class="codex-usage-hud-settings-confirm-card" data-tone="danger" role="alertdialog" aria-modal="true" aria-label="确认永久删除会话"><div class="codex-usage-hud-settings-confirm-main"><div class="codex-usage-hud-settings-confirm-danger-mark">${cleanupIconSvg("trash", "codex-usage-hud-cleanup-icon-lg")}</div><h2 class="codex-usage-hud-settings-confirm-title">永久删除 ${selectedIds.length} 个会话？</h2><p class="codex-usage-hud-settings-confirm-body">会话内容、索引和关联子任务将从本机移除。此操作不会进入回收站，也无法恢复。Codex App 的归档入口无法恢复这些会话。</p><div class="codex-usage-hud-settings-confirm-summary"><div><span>主会话</span><strong>${selectedIds.length}</strong></div><div><span>关联子任务</span><strong>${descendants}</strong></div><div><span>本地数据</span><strong>${escapeHtml(estimatedBytes)}</strong></div></div><div class="codex-usage-hud-settings-confirm-note">${cleanupIconSvg("alert")}<span>执行前会再次核验会话身份与运行状态；任一异常都会取消整批删除。</span></div></div><div class="codex-usage-hud-settings-confirm-actions"><button type="button" class="codex-usage-hud-settings-action" data-action="session-cleanup-confirm-cancel">取消</button><button type="button" class="codex-usage-hud-settings-action" data-action="session-cleanup-execute" data-danger="true">${cleanupIconSvg("trash")}永久删除</button></div></div>`;
+        const previewScope = sessionCleanupState.previewScope?.requestId === String(operation?.requestId || "")
+          ? sessionCleanupState.previewScope : null;
+        const scopeHtml = `<div class="codex-usage-hud-session-delete-scope"><span>选择范围</span><strong>${escapeHtml(previewScope?.label || "手动选择")}</strong>${previewScope?.blockedCount ? `<span>已跳过 ${previewScope.blockedCount} 个受保护会话</span>` : ""}</div>`;
+        layer.innerHTML = `<div class="codex-usage-hud-settings-confirm-card" data-tone="danger" role="alertdialog" aria-modal="true" aria-label="确认永久删除会话"><div class="codex-usage-hud-settings-confirm-main"><div class="codex-usage-hud-settings-confirm-danger-mark">${cleanupIconSvg("trash", "codex-usage-hud-cleanup-icon-lg")}</div><h2 class="codex-usage-hud-settings-confirm-title">永久删除 ${selectedIds.length} 个会话？</h2><p class="codex-usage-hud-settings-confirm-body">会话内容、索引和关联子任务将从本机移除。此操作不会进入回收站，也无法恢复。Codex App 的归档入口无法恢复这些会话。</p>${scopeHtml}<div class="codex-usage-hud-settings-confirm-summary"><div><span>主会话</span><strong>${selectedIds.length}</strong></div><div><span>关联子任务</span><strong>${descendants}</strong></div><div><span>预计释放</span><strong>${escapeHtml(estimatedBytes)}</strong></div></div><div class="codex-usage-hud-settings-confirm-note">${cleanupIconSvg("alert")}<span>执行前会再次核验会话身份与运行状态；任一异常都会取消整批删除。</span></div></div><div class="codex-usage-hud-settings-confirm-actions"><button type="button" class="codex-usage-hud-settings-action" data-action="session-cleanup-confirm-cancel">取消</button><button type="button" class="codex-usage-hud-settings-action" data-action="session-cleanup-execute" data-danger="true">${cleanupIconSvg("trash")}永久删除</button></div></div>`;
         dialog.appendChild(layer);
         layer.querySelector('[data-action="session-cleanup-confirm-cancel"]')?.focus?.();
       }
@@ -1479,6 +1588,9 @@ TEXT = r"""
         ) {
           sessionCleanupState.page = 0;
         }
+        if (previousRevision && previousRevision !== String(data?.revision || "")) {
+          clearSessionCleanupSelection();
+        }
         const sessions = Array.isArray(data?.sessions) ? data.sessions : [];
         let requestDetailedWorkdirs = false;
         if (
@@ -1512,16 +1624,26 @@ TEXT = r"""
           )
         ) {
           sessionCleanupState.workdirId = "";
+          clearSessionCleanupSelection();
           persistSessionCleanupFilters();
         }
         if (requestDetailedWorkdirs) requestSessionCleanupWorkdirOptions();
-        const validIds = new Set(sessions.filter((item) => item?.selectable === true).map((item) => String(item?.id || "")));
+        const search = String(sessionCleanupState.search || "").trim().toLowerCase();
+        const scopeReady = !search || (
+          sessionCleanupState.searchResultState === "completed"
+          && String(sessionCleanupState.searchResultQuery || "").trim().toLowerCase() === search
+          && String(sessionCleanupState.searchResultRevision || "") === String(data?.revision || "")
+        );
+        const selectionRows = scopeReady ? sessionCleanupRows(data) : sessions;
+        const validIds = new Set(selectionRows.filter((item) => item?.selectable === true).map((item) => String(item?.id || "")));
         sessionCleanupState.selectedIds = new Set(
           Array.from(sessionCleanupState.selectedIds).filter((id) => validIds.has(id)),
         );
+        if (!sessionCleanupState.selectedIds.size) sessionCleanupState.selectionSnapshot = null;
         const providers = new Set(sessions.map((item) => String(item?.modelProvider || "unknown")));
         if (sessionCleanupState.modelProvider !== "all" && !providers.has(sessionCleanupState.modelProvider)) {
           sessionCleanupState.modelProvider = "all";
+          clearSessionCleanupSelection();
           persistSessionCleanupFilters();
         }
         const operation = data?.operation && typeof data.operation === "object" ? data.operation : {};
@@ -1618,6 +1740,11 @@ TEXT = r"""
       sessionCleanupRows,
       sessionCleanupPageRows,
       sessionCleanupPageCount,
+      clearSessionCleanupSelection,
+      sessionCleanupSelectionReady,
+      setSessionCleanupItemSelected,
+      selectSessionCleanupPage,
+      selectAllSessionCleanupRows,
       moveSessionCleanupPage,
       sessionCleanupDateValue,
       sessionCleanupDateTimeInputValue,
@@ -1684,6 +1811,11 @@ TEXT = r"""
     sessionCleanupRows,
     sessionCleanupPageRows,
     sessionCleanupPageCount,
+    clearSessionCleanupSelection,
+    sessionCleanupSelectionReady,
+    setSessionCleanupItemSelected,
+    selectSessionCleanupPage,
+    selectAllSessionCleanupRows,
     moveSessionCleanupPage,
     sessionCleanupDateValue,
     sessionCleanupDateTimeInputValue,

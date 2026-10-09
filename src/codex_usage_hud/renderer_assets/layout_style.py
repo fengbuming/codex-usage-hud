@@ -3819,6 +3819,19 @@ TEXT = r"""
           #${rootId} .codex-usage-hud-session-cleanup:has(> .codex-usage-hud-cleanup-empty-state):not(:has(> .codex-usage-hud-cleanup-scan-strip)) {
             grid-template-rows: minmax(0, 1fr);
           }
+          #${rootId} .codex-usage-hud-session-cleanup:has(> .codex-usage-hud-session-selection) {
+            display: flex;
+            flex-direction: column;
+          }
+          #${rootId} .codex-usage-hud-session-cleanup > .codex-usage-hud-session-tools,
+          #${rootId} .codex-usage-hud-session-cleanup > .codex-usage-hud-session-selection,
+          #${rootId} .codex-usage-hud-session-cleanup > .codex-usage-hud-session-pagination,
+          #${rootId} .codex-usage-hud-session-cleanup > .codex-usage-hud-session-capability {
+            flex: 0 0 auto;
+          }
+          #${rootId} .codex-usage-hud-session-cleanup > .codex-usage-hud-session-table {
+            flex: 1 1 auto;
+          }
           #${rootId} .codex-usage-hud-session-index-drawer {
             min-width: 0;
             display: grid;
@@ -4451,6 +4464,67 @@ TEXT = r"""
             min-height: 23px;
             padding: 2px 7px;
             color: var(--codex-usage-hud-muted, #9da1a8);
+          }
+          #${rootId} .codex-usage-hud-session-selection {
+            min-width: 0;
+            min-height: 34px;
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 6px 12px;
+            border-top: 1px solid #3e4248;
+            border-bottom: 1px solid #3e4248;
+            padding: 7px 13px;
+            font-size: 10px;
+          }
+          #${rootId} .codex-usage-hud-session-selection > label {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            flex: 0 0 auto;
+            cursor: pointer;
+          }
+          #${rootId} .codex-usage-hud-session-selection input {
+            width: 13px;
+            height: 13px;
+            margin: 0;
+          }
+          #${rootId} .codex-usage-hud-session-selection-status,
+          #${rootId} .codex-usage-hud-session-selection-actions {
+            min-width: 0;
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 4px 10px;
+            overflow-wrap: anywhere;
+            color: var(--codex-usage-hud-muted, #9da1a8);
+          }
+          #${rootId} .codex-usage-hud-session-selection-status > span:first-child {
+            color: var(--codex-usage-hud-text, #e6e8eb);
+          }
+          #${rootId} .codex-usage-hud-session-selection-actions button {
+            min-width: 0;
+            max-width: 100%;
+            min-height: 26px;
+            padding: 2px 0;
+            border: 0;
+            background: transparent;
+            color: #9ccbff;
+            font: inherit;
+            text-align: left;
+            overflow-wrap: anywhere;
+            cursor: pointer;
+          }
+          #${rootId} .codex-usage-hud-session-selection-actions button:hover:not(:disabled) {
+            text-decoration: underline;
+          }
+          #${rootId} .codex-usage-hud-session-selection-actions button:disabled {
+            opacity: .45;
+            cursor: default;
+          }
+          #${rootId} .codex-usage-hud-session-selection-actions button:focus-visible {
+            outline: 2px solid #9ccbff;
+            outline-offset: 3px;
           }
           #${rootId} .codex-usage-hud-session-table {
             min-width: 0;
@@ -5478,6 +5552,21 @@ TEXT = r"""
             background: #2b191b;
             color: #ff858a;
             margin-bottom: 12px;
+          }
+          #${rootId} .codex-usage-hud-session-delete-scope {
+            min-width: 0;
+            margin-top: 12px;
+            display: grid;
+            gap: 4px;
+            font-size: 10px;
+            line-height: 1.5;
+            overflow-wrap: anywhere;
+          }
+          #${rootId} .codex-usage-hud-session-delete-scope > span {
+            color: var(--codex-usage-hud-muted, #9da1a8);
+          }
+          #${rootId} .codex-usage-hud-session-delete-scope > strong {
+            font-weight: 500;
           }
           #${rootId} .codex-usage-hud-settings-confirm-summary {
             margin-top: 13px;
@@ -6832,6 +6921,13 @@ TEXT = r"""
             }
             #${rootId} .codex-usage-hud-session-filter-summary-tags {
               width: 100%;
+            }
+            #${rootId} .codex-usage-hud-session-cleanup:has(> .codex-usage-hud-session-selection) {
+              height: auto;
+            }
+            #${rootId} .codex-usage-hud-session-cleanup > .codex-usage-hud-session-table {
+              flex: 0 0 auto;
+              max-height: 360px;
             }
             #${rootId} .codex-usage-hud-session-head { display: none; }
             #${rootId} .codex-usage-hud-session-row {
