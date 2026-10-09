@@ -1532,6 +1532,50 @@ class ActiveSessionTrackerTests(unittest.TestCase):
             self.assertEqual(tracker.renderer_draft_text, "Draft text")
             self.assertTrue(tracker.renderer_send_requested)
 
+    def test_renderer_send_pulse_survives_resolved_session_until_followup(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            sessions_root = root / "sessions"
+            sessions_root.mkdir()
+            session_path = sessions_root / "rollout-thread-1.jsonl"
+            session_path.write_text("{}\n", encoding="utf-8")
+            tracker = ActiveSessionTracker(
+                platform=FakePlatform(),
+                state_db=root / "state_5.sqlite",
+                sessions_root=sessions_root,
+                session_index_path=root / "session_index.jsonl",
+                poll_ms=250,
+                enabled=True,
+                start_background_watcher=False,
+            )
+            observation = {
+                "session_id": "thread-1",
+                "title": "Existing Thread",
+                "source": "renderer",
+                "renderer_session_id": "thread-1",
+                "selection_seq": 1,
+            }
+
+            with patch.object(
+                tracker,
+                "path_from_renderer_thread_id",
+                return_value=session_path,
+            ):
+                self.assertTrue(
+                    tracker.observe_conversation_ref(
+                        **observation,
+                        send_requested=True,
+                    )
+                )
+                self.assertTrue(tracker.renderer_send_requested)
+                self.assertTrue(
+                    tracker.observe_conversation_ref(
+                        **observation,
+                        send_requested=False,
+                    )
+                )
+                self.assertFalse(tracker.renderer_send_requested)
+
     def test_active_session_change_callback_runs_for_background_event(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

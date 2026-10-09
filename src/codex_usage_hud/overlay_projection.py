@@ -34,7 +34,7 @@ def _iso_or_empty(value: datetime | None) -> str:
 
 def work_item_to_overlay_dict(item: WorkStatusItem) -> dict[str, object]:
     activity_steps = getattr(item, "activity_steps", ())
-    return {
+    payload = {
         "kind": item.kind,
         "eventId": item.event_id,
         "id": item.id,
@@ -78,6 +78,10 @@ def work_item_to_overlay_dict(item: WorkStatusItem) -> dict[str, object]:
             if isinstance(step, Mapping)
         ],
     }
+    user_steer_at = getattr(item, "user_steer_at", None)
+    if user_steer_at is not None:
+        payload["userSteerAt"] = _iso_or_empty(user_steer_at)
+    return payload
 
 
 def background_usage_to_work_item(
@@ -337,7 +341,7 @@ def select_visible_items(
     stale_seconds: float,
     runtime_started_at: datetime | None = None,
 ) -> list[WorkStatusItem]:
-    del now, stale_seconds, runtime_started_at
+    del now, stale_seconds
     previously_seen = set(seen_task_keys)
     visible: list[WorkStatusItem] = []
     for item in items:
@@ -345,6 +349,16 @@ def select_visible_items(
             break
         task_key = runtime_task_key(item)
         if item.status == "recent":
+            completed_at = item.completed_at or item.updated_at
+            if runtime_started_at is not None and completed_at is not None:
+                try:
+                    completed_before_runtime = (
+                        completed_at.timestamp() < runtime_started_at.timestamp()
+                    )
+                except (OverflowError, OSError, ValueError):
+                    completed_before_runtime = False
+                if completed_before_runtime:
+                    continue
             # Completion is a state transition, not a recent-history notice.
             # A session must have been observed as active in this runtime
             # before its terminal state can become a circular completion bubble.

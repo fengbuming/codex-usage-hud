@@ -1244,16 +1244,16 @@ def _work_overlay_item_with_live_elapsed_text(
 def _item_dismiss_key(item: Mapping[str, object]) -> str:
     status = str(item.get("status") or "")
     error_text = str(item.get("statusText") or item.get("detail") or "") if status == "error" else ""
-    return json.dumps(
-        {
-            "id": item.get("id"),
-            "errorText": error_text,
-            "status": "error" if status == "error" else "work",
-            "taskStartedAt": item.get("taskStartedAt") or item.get("startedAt") or "",
-        },
-        ensure_ascii=False,
-        sort_keys=True,
-    )
+    dismissal_key: dict[str, object] = {
+        "id": item.get("id"),
+        "errorText": error_text,
+        "status": "error" if status == "error" else "work",
+        "taskStartedAt": item.get("taskStartedAt") or item.get("startedAt") or "",
+    }
+    user_steer_at = str(item.get("userSteerAt") or "").strip()
+    if user_steer_at:
+        dismissal_key["userSteerAt"] = user_steer_at
+    return json.dumps(dismissal_key, ensure_ascii=False, sort_keys=True)
 
 def _mark_item_dismissed(
     dismissed_instances: MutableMapping[str, str],

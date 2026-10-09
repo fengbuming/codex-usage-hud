@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
@@ -7,8 +8,9 @@ from codex_usage_hud.active_work import (
     _refresh_visible_current_work_item,
     _work_item_from_snapshot,
 )
-from codex_usage_hud.core import Activity, ParsedSession, RequestTokens
+from codex_usage_hud.core import Activity, ParsedSession, RequestTokens, WorkStatusItem
 from codex_usage_hud.core.parser import JsonlSessionParser
+from codex_usage_hud.overlay_projection import _select_runtime_work_overlay_items
 
 
 def _record(at, kind, payload):
@@ -117,3 +119,43 @@ def test_background_cli_started_before_restart_keeps_completion(tmp_path, monkey
         work_overlay_started_at=now,
     )
     assert active_work.active_work_items_for_snapshot(cold, desktop, None) == []
+
+
+def test_pre_runtime_completion_stays_hidden_after_current_session_wakeup():
+    runtime_started_at = datetime.now(timezone.utc)
+    task_started_at = runtime_started_at - timedelta(minutes=5)
+    completed_at = runtime_started_at - timedelta(minutes=1)
+    running = WorkStatusItem(
+        id="selected-old-session",
+        session_id="selected-old-session",
+        title="Old completed session",
+        status="running",
+        status_label="处理中",
+        detail="selection refresh",
+        task_started_at=task_started_at,
+        started_at=task_started_at,
+        updated_at=runtime_started_at,
+        current=True,
+    )
+    completed = replace(
+        running,
+        status="recent",
+        status_label="刚完成",
+        completed_at=completed_at,
+        updated_at=runtime_started_at + timedelta(seconds=1),
+    )
+    context = SimpleNamespace(work_overlay_started_at=runtime_started_at)
+
+    assert _select_runtime_work_overlay_items(context, [running], item_limit=4) == [running]
+    assert _select_runtime_work_overlay_items(context, [completed], item_limit=4) == []
+
+    completed_during_runtime = replace(
+        completed,
+        completed_at=runtime_started_at + timedelta(seconds=2),
+        updated_at=runtime_started_at + timedelta(seconds=2),
+    )
+    assert _select_runtime_work_overlay_items(
+        context,
+        [completed_during_runtime],
+        item_limit=4,
+    ) == [completed_during_runtime]

@@ -1159,12 +1159,12 @@ class ActiveSessionTracker:
                 path is None and (new_session or pending_session)
             )
             if path is not None:
-                # Once the durable JSONL mapping exists, task_prompt/activity
-                # become authoritative and the browser draft must not shadow
-                # them on later refreshes.
+                # The send pulse must reach the current-session refresh even
+                # after its JSONL path is known. A later non-send observation
+                # clears it; browser draft content still yields to JSONL.
                 next_draft = ""
                 next_draft_updated_at_ms = 0
-                next_send_requested = False
+                next_send_requested = incoming_send_requested
             elif selection_changed and not provisional_selection:
                 # A switch to a different unresolved/ordinary selection cannot
                 # inherit the previous conversation's draft.

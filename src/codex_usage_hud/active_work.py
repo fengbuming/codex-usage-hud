@@ -328,6 +328,10 @@ def _work_status_text(
     status_label: str,
 ) -> str:
     activity = snapshot.activity
+    if snapshot.composer_send_requested and (
+        snapshot.task_completed_at is not None or snapshot.final_answer_at is not None
+    ):
+        return "正在发送请求"
     if _is_renderer_provisional_selection(snapshot):
         return "正在发送请求" if snapshot.composer_send_requested else "等待发送"
     if status_value == "recent":
@@ -492,6 +496,10 @@ def _work_status_from_snapshot(
             # the JSONL file or exposed its canonical thread id.
             return "running", "发送中", False
         return "draft", "待发送", False
+    if snapshot.composer_send_requested and (
+        snapshot.task_completed_at is not None or snapshot.final_answer_at is not None
+    ):
+        return "running", "发送中", False
     if snapshot.task_completed_at is not None:
         return "recent", "刚完成", False
     if snapshot.final_answer_at is not None and (
@@ -658,6 +666,12 @@ def _clear_terminal_item_task_for_new_segment(
     if not session_id:
         return False
     terminal_tasks = _work_overlay_terminal_item_tasks(context)
+    if snapshot.composer_send_requested and (
+        snapshot.task_completed_at is not None or snapshot.final_answer_at is not None
+    ):
+        terminal_tasks.pop(session_id, None)
+        _terminal_completion_prompts(context).pop(session_id, None)
+        return True
     prompt = str(getattr(snapshot, "task_prompt", "") or "").strip()
     previous_prompt = _terminal_completion_prompts(context).get(session_id, "")
     if prompt and previous_prompt and prompt != previous_prompt:
@@ -679,6 +693,35 @@ def _latest_work_activity_at(snapshot: ParsedSession, *, now: datetime) -> datet
         key=lambda value: _datetime_age_seconds(value, now),
         default=snapshot.refreshed_at,
     )
+
+
+def _user_steer_is_current_runtime(
+    context: object | None,
+    user_steer_at: datetime,
+) -> bool:
+    runtime_started_at = getattr(context, "work_overlay_started_at", None)
+    if not isinstance(runtime_started_at, datetime):
+        return True
+    return _datetime_age_seconds(user_steer_at, runtime_started_at) <= 0
+
+
+def _pending_composer_send_at(snapshot: ParsedSession) -> datetime | None:
+    if not snapshot.composer_send_requested or not (
+        snapshot.task_completed_at is not None or snapshot.final_answer_at is not None
+    ):
+        return None
+    timestamp_ms = int(
+        getattr(snapshot, "composer_draft_updated_at_ms", 0)
+        or getattr(snapshot, "selection_observed_at_ms", 0)
+        or 0
+    )
+    if timestamp_ms <= 0:
+        return None
+    timezone = snapshot.refreshed_at.tzinfo or datetime.now().astimezone().tzinfo
+    try:
+        return datetime.fromtimestamp(timestamp_ms / 1000.0, tz=timezone)
+    except (OverflowError, OSError, ValueError):
+        return None
 
 
 def _work_item_model_startup_timed_out(
@@ -807,6 +850,14 @@ def _work_item_from_snapshot(
         if _is_renderer_provisional_selection(snapshot) and draft_text
         else snapshot.last_output.detail.strip()
     )
+    user_steer_at = getattr(snapshot, "user_steer_at", None)
+    if not isinstance(user_steer_at, datetime):
+        user_steer_at = _pending_composer_send_at(snapshot)
+    if isinstance(user_steer_at, datetime) and not _user_steer_is_current_runtime(
+        context,
+        user_steer_at,
+    ):
+        user_steer_at = None
     started_at = (
         snapshot.task_started_at
         or snapshot.request.started_at
@@ -816,6 +867,11 @@ def _work_item_from_snapshot(
         snapshot.task_completed_at
         if status_value == "recent" and snapshot.task_completed_at is not None
         else current_time
+    )
+    completed_at = (
+        snapshot.task_completed_at or snapshot.final_answer_at
+        if status_value == "recent"
+        else None
     )
     elapsed = _elapsed_compact(started_at, now=elapsed_reference)
     elapsed_text = f"已处理 {elapsed}" if elapsed else ""
@@ -859,6 +915,8 @@ def _work_item_from_snapshot(
         parent_thread_id=str(getattr(snapshot, "parent_thread_id", "") or "").strip(),
         session_started_at=snapshot.session_started_at,
         task_started_at=snapshot.task_started_at,
+        completed_at=completed_at,
+        user_steer_at=user_steer_at,
         started_at=started_at,
         updated_at=updated_at,
         last_output_at=getattr(snapshot.last_output, "timestamp", None),

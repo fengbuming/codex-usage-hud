@@ -876,6 +876,8 @@ class WorkStatusItem:
     parent_thread_id: str = ""
     session_started_at: datetime | None = None
     task_started_at: datetime | None = None
+    completed_at: datetime | None = None
+    user_steer_at: datetime | None = None
     started_at: datetime | None = None
     updated_at: datetime | None = None
     # Timestamp of the newest assistant output; the bubble feed compares it
@@ -1009,6 +1011,7 @@ class ParsedSession:
     line_count: int = 0
     token_events: int = 0
     task_started_at: datetime | None = None
+    user_steer_at: datetime | None = None
     task_completed_at: datetime | None = None
     task_aborted_at: datetime | None = None
     final_answer_at: datetime | None = None
@@ -1436,6 +1439,10 @@ class JsonlSessionParser:
 
         task_started_index, task_started_at = self.latest_task_started(records)
         parsed.task_started_at = task_started_at
+        parsed.user_steer_at = self.pending_user_steer_at(
+            records,
+            task_started_index,
+        )
         parsed.task_turn_id = self.task_turn_id(records, task_started_index)
         parsed.task_prompt = self.latest_task_prompt(records, task_started_index)
         parsed.task_index, parsed.task_count = self.task_ordinal(
@@ -1587,6 +1594,60 @@ class JsonlSessionParser:
             ):
                 return index, record.get("_dt")
         return None, None
+
+    def pending_user_steer_at(
+        self,
+        records: Sequence[Mapping[str, Any]],
+        task_started_index: int | None,
+    ) -> datetime | None:
+        """Return a post-completion user request not followed by task_started."""
+        user_index: int | None = None
+        user_timestamp: datetime | None = None
+        for index in range(len(records) - 1, -1, -1):
+            record = records[index]
+            if not _user_message_text(record):
+                continue
+            timestamp = record.get("_dt")
+            if isinstance(timestamp, datetime):
+                user_index = index
+                user_timestamp = timestamp
+            break
+        if user_index is None or user_timestamp is None:
+            return None
+        if task_started_index is not None and task_started_index > user_index:
+            return None
+
+        for index in range(user_index - 1, -1, -1):
+            record = records[index]
+            payload = record.get("payload") or {}
+            payload_type = (
+                payload.get("type") if isinstance(payload, Mapping) else None
+            )
+            if record.get("type") == "event_msg":
+                if payload_type == "task_started":
+                    return None
+                if payload_type in {"task_complete", "turn_aborted"}:
+                    return user_timestamp
+            if (
+                record.get("type") == "event_msg"
+                and payload_type == "agent_message"
+                and isinstance(payload, Mapping)
+                and str(payload.get("phase") or "") == "final_answer"
+                and compact_text(payload.get("message"), 8)
+            ):
+                return user_timestamp
+            if (
+                record.get("type") == "response_item"
+                and payload_type == "message"
+                and isinstance(payload, Mapping)
+            ):
+                if (
+                    str(payload.get("phase") or "") == "final_answer"
+                    and response_message_role(payload) in {"", "assistant"}
+                    and compact_text(message_text(payload), 8)
+                ):
+                    return user_timestamp
+        return None
 
     def latest_task_prompt(
         self,

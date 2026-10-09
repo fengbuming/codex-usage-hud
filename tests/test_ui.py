@@ -7172,7 +7172,6 @@ with tempfile.TemporaryDirectory() as temp_dir:
             steered_rows = [
                 *completed_rows,
                 row(-1, "event_msg", {"type": "user_message", "message": "keep going"}),
-                row(0, "event_msg", {"type": "agent_reasoning", "text": "continuing"}),
             ]
             path.write_text(
                 "\n".join(json.dumps(item, ensure_ascii=False) for item in steered_rows),
@@ -7191,6 +7190,146 @@ with tempfile.TemporaryDirectory() as temp_dir:
         self.assertIsNone(steered_snapshot.task_completed_at)
         self.assertIn(steered_items[0].status, {"running", "active"})
         self.assertNotEqual(steered_items[0].status_text, "已完成")
+        self.assertEqual(steered_items[0].user_steer_at, now - timedelta(seconds=1))
+
+        completed_payload = work_item_to_overlay_dict(completed_items[0])
+        steered_payload = work_item_to_overlay_dict(steered_items[0])
+        self.assertNotIn("userSteerAt", work_item_to_overlay_dict(running_items[0]))
+        self.assertNotIn("userSteerAt", completed_payload)
+        self.assertEqual(
+            steered_payload["userSteerAt"],
+            (now - timedelta(seconds=1)).isoformat(),
+        )
+        dismissed: dict[str, str] = {}
+        _mark_item_dismissed(dismissed, completed_payload)
+        self.assertEqual(
+            _visible_overlay_items([completed_payload], dismissed, item_limit=4),
+            [],
+        )
+        self.assertEqual(
+            _visible_overlay_items([steered_payload], dismissed, item_limit=4),
+            [steered_payload],
+        )
+
+    def test_renderer_send_reopens_current_completed_bubble_before_jsonl_update(self) -> None:
+        now = datetime.now().astimezone()
+        started_at = now - timedelta(minutes=2)
+        completed_at = now - timedelta(seconds=2)
+        send_at_ms = int(now.timestamp() * 1000)
+        session_id = "session-current"
+        context = SimpleNamespace(
+            user_config=UserConfig.defaults(),
+            app_provider="custom",
+            _work_overlay_terminal_item_tasks={
+                session_id: started_at.isoformat(),
+            },
+            _work_overlay_terminal_completion_prompts={
+                session_id: "previous request",
+            },
+        )
+        completed = WorkStatusItem(
+            id=session_id,
+            session_id=session_id,
+            title="Live Thread",
+            status="recent",
+            status_label="刚完成",
+            detail="previous response",
+            session_started_at=started_at,
+            task_started_at=started_at,
+            started_at=started_at,
+            updated_at=completed_at,
+            current=True,
+        )
+        snapshot = ParsedSession(
+            status="parsed",
+            session_id=session_id,
+            session_title="Live Thread",
+            session_started_at=started_at,
+            task_started_at=started_at,
+            task_completed_at=completed_at,
+            final_answer_at=completed_at,
+            selection_source="renderer:Live Thread",
+            composer_send_requested=True,
+            selection_observed_at_ms=send_at_ms,
+        )
+        snapshot.request.status = "confirmed"
+        snapshot.task_prompt = "previous request"
+
+        refreshed = active_work._refresh_visible_current_work_item(
+            context,
+            [completed],
+            snapshot,
+        )
+        completed_payload = work_item_to_overlay_dict(completed)
+        sending_payload = work_item_to_overlay_dict(refreshed[0])
+        dismissed: dict[str, str] = {}
+        _mark_item_dismissed(dismissed, completed_payload)
+
+        self.assertEqual(len(refreshed), 1)
+        self.assertEqual(refreshed[0].status, "running")
+        self.assertEqual(refreshed[0].status_text, "正在发送请求")
+        self.assertEqual(refreshed[0].user_steer_at.timestamp() * 1000, send_at_ms)
+        self.assertEqual(context._work_overlay_terminal_item_tasks, {})
+        self.assertEqual(
+            _visible_overlay_items([completed_payload], dismissed, item_limit=4),
+            [],
+        )
+        self.assertEqual(
+            _visible_overlay_items([sending_payload], dismissed, item_limit=4),
+            [sending_payload],
+        )
+
+    def test_pre_runtime_user_steer_keeps_legacy_completed_dismissal_key(self) -> None:
+        now = datetime.now().astimezone()
+        task_started_at = now - timedelta(hours=2)
+        user_steer_at = now - timedelta(hours=1)
+        completed_at = now - timedelta(minutes=30)
+        session_id = "session-before-runtime"
+        context = SimpleNamespace(work_overlay_started_at=now)
+        snapshot = ParsedSession(
+            status="parsed",
+            session_id=session_id,
+            session_title="Old Thread",
+            task_started_at=task_started_at,
+            user_steer_at=user_steer_at,
+            task_completed_at=completed_at,
+            final_answer_at=completed_at,
+        )
+        snapshot.request.status = "confirmed"
+        snapshot.task_prompt = "historical continuation"
+
+        self.assertEqual(
+            active_work_items_for_snapshot(
+                context,
+                snapshot,
+                None,
+                scan_candidates=False,
+            ),
+            [],
+        )
+
+        item = active_work._work_item_from_snapshot(
+            snapshot,
+            current=True,
+            title=snapshot.session_title,
+            source="activity",
+            context=context,
+            now=now,
+        )
+        payload = work_item_to_overlay_dict(item)
+        old_dismissal_payload = {
+            "id": session_id,
+            "status": "recent",
+            "taskStartedAt": task_started_at.isoformat(),
+        }
+        dismissed: dict[str, str] = {}
+        _mark_item_dismissed(dismissed, old_dismissal_payload)
+
+        self.assertNotIn("userSteerAt", payload)
+        self.assertEqual(
+            _visible_overlay_items([payload], dismissed, item_limit=4),
+            [],
+        )
 
     def test_work_overlay_compaction_handoff_keeps_running_card(self) -> None:
         parser = JsonlSessionParser()
