@@ -6,8 +6,8 @@
   },
   "currentBundle": {
     "phase": "P6.7",
-    "sha256": "ee73e9a31ea3a4de7c7907abad9cbf07419afdab1f4db132622173fe98bf04b9",
-    "byteLength": 1384533
+    "sha256": "f39c65fab4ecc880da0305ad7dc44576305dc8b5dbaa4f11bdd620375c8dc4b4",
+    "byteLength": 1393525
   },
   "sha256": "f83d65265c55143fa775f509f09ce109c2aa75a03946b42cf462cb6cbd4ea637",
   "byteLength": 548705,
@@ -42,9 +42,9 @@
   ],
   "lifecycleCounts": {
     "mutationObservers": 8,
-    "resizeObservers": 2,
+    "resizeObservers": 3,
     "setIntervals": 6,
-    "setTimeouts": 42,
+    "setTimeouts": 44,
     "kernelSetIntervals": 1,
     "kernelSetTimeouts": 11
   },
@@ -129,6 +129,7 @@
     {"kind": "MutationObserver", "owner": "layout", "creation": "ctx.observers.set(\"layout\", new MutationObserver", "startCondition": "header or composer layout anchor is available", "cleanup": "ctx.observers.clear(\"layout\")"},
     {"kind": "MutationObserver", "owner": "layout_bootstrap", "creation": "ctx.observers.set(\"layout_bootstrap\", new MutationObserver", "startCondition": "layout anchors are not both available", "cleanup": "ctx.observers.clear(\"layout_bootstrap\")"},
     {"kind": "ResizeObserver", "owner": "layout", "creation": "ctx.observers.set(\"layout_resize\", new ResizeObserver", "startCondition": "ResizeObserver exists and a layout anchor is available", "cleanup": "ctx.observers.clear(\"layout_resize\")"},
+    {"kind": "ResizeObserver", "owner": "native_title_reveal", "creation": "ctx.observers.set(\"native_title_reveal\", new ResizeObserver", "startCondition": "native-title hover handling is installed and header, title, and top HUD are measured", "cleanup": "ctx.observers.clear(\"native_title_reveal\")"},
     {"kind": "setInterval", "owner": "rest_reminder_settings", "creation": "ctx.lifecycle.interval(", "startCondition": "rest-reminder settings countdown is visible", "cleanup": "ctx.lifecycle.clearInterval(restReminderCountdownTimer)"},
     {"kind": "setInterval", "owner": "session_view", "creation": "ctx.lifecycle.interval(\"session_view\"", "startCondition": "at least one rendered session row is running", "cleanup": "ctx.lifecycle.clearInterval(window[runningTimerName])"},
     {"kind": "setInterval", "owner": "rest_reminder_overlay", "creation": "ctx.lifecycle.interval(", "startCondition": "rest-reminder overlay countdown is visible", "cleanup": "ctx.lifecycle.clearInterval(restReminderOverlayTimer)"},
@@ -142,11 +143,12 @@
     "session_cleanup_scan_watchdog", "storage", "session_index_control_watchdog",
     "background_usage_policy", "background_usage_request", "background_usage_fetch",
     "codex_cli_launch_timeout", "codex_cli_launch_min_visible", "session_index_status_watchdog",
-    "settings_restart", "layout_settle", "layout_settle", "layout_settle", "composer_layout",
-    "layout_bootstrap", "layout_bootstrap", "composer_attachments", "layout_report",
-    "active_session", "active_session", "active_session", "active_session",
-    "active_session_bootstrap", "session_cleanup_search", "session_transfer_selection",
-    "session_transfer_select_all", "session_transfer_selection", "stale_guard"
+    "settings_restart", "native_title_restore", "native_title_reveal", "layout_settle",
+    "layout_settle", "layout_settle", "composer_layout", "layout_bootstrap", "layout_bootstrap",
+    "composer_attachments", "layout_report", "active_session", "active_session", "active_session",
+    "active_session", "active_session_bootstrap", "session_cleanup_search",
+    "session_transfer_selection", "session_transfer_select_all", "session_transfer_selection",
+    "stale_guard"
   ],
   "timeoutInventory": [
     {"owner": "model_picker", "creation": "ctx.lifecycle.timeout(\"model_picker\", patchCodexModelPicker, delay)", "cleanup": "ctx.lifecycle.clearTimeout(timer)"},
@@ -173,7 +175,9 @@
     {"owner": "session_cleanup_scan_watchdog", "creation": "ctx.lifecycle.timeout(\n          \"session_cleanup_scan_watchdog\"", "cleanup": "ctx.lifecycle.clearTimeout(sessionCleanupScanWatchdogTimer)"},
     {"owner": "session_transfer_selection", "creation": "ctx.lifecycle.timeout(\"session_transfer_selection\"", "cleanup": "lifecycle teardown"},
     {"owner": "session_transfer_select_all", "creation": "ctx.lifecycle.timeout(\"session_transfer_select_all\"", "cleanup": "lifecycle teardown"},
-    {"owner": "session_transfer_selection", "creation": "ctx.lifecycle.timeout(\"session_transfer_selection\"", "cleanup": "lifecycle teardown"}
+    {"owner": "session_transfer_selection", "creation": "ctx.lifecycle.timeout(\"session_transfer_selection\"", "cleanup": "lifecycle teardown"},
+    {"owner": "native_title_reveal", "creation": "ctx.lifecycle.timeout(\"native_title_reveal\"", "cleanup": "ctx.lifecycle.clearTimeout(nativeTitleRevealTimer)"},
+    {"owner": "native_title_restore", "creation": "ctx.lifecycle.timeout(\"native_title_restore\"", "cleanup": "ctx.lifecycle.clearTimeout(nativeTitleRevealTimer)"}
   ],
   "bindingInventory": [
     {"name": "codexUsageHudActiveSession", "installOrder": 1, "owner": "active_session", "startCondition": "active-session callback is configured", "cleanup": "self._active_session_binding.close()"},

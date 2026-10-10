@@ -151,6 +151,176 @@ TEXT = r"""
         gestureScope.listen(document, "pointerup", done, true);
         gestureScope.listen(document, "pointercancel", done, true);
       }
+
+      let nativeTitleRevealGeometry;
+      let nativeTitleRevealPanel = null;
+      let nativeTitleRevealPointer = null;
+      let nativeTitleRevealTimer = 0;
+      let nativeTitleRevealObserver = null;
+      let nativeTitleRevealObserved = [];
+
+      function clearNativeTitleReveal() {
+        ctx.lifecycle.clearTimeout(nativeTitleRevealTimer);
+        nativeTitleRevealTimer = 0;
+        nativeTitleRevealPanel?.removeAttribute("data-native-title-reveal");
+        nativeTitleRevealPanel = null;
+      }
+
+      function resetNativeTitleReveal() {
+        clearNativeTitleReveal();
+        nativeTitleRevealPointer = null;
+        nativeTitleRevealGeometry = undefined;
+        ctx.frames.cancel("native_title_reveal");
+      }
+
+      function invalidateNativeTitleReveal() {
+        clearNativeTitleReveal();
+        nativeTitleRevealGeometry = undefined;
+        if (nativeTitleRevealPointer) {
+          ctx.frames.schedule("native_title_reveal", updateNativeTitleReveal);
+        }
+      }
+
+      function nativeTitleRectIntersection(left, right) {
+        const rect = {
+          left: Math.max(left.left, right.left),
+          top: Math.max(left.top, right.top),
+          right: Math.min(left.right, right.right),
+          bottom: Math.min(left.bottom, right.bottom),
+        };
+        return rect.right - rect.left > 1 && rect.bottom - rect.top > 1 ? rect : null;
+      }
+
+      function nativeTitlePointInside(point, rect) {
+        return point && rect && point.x >= rect.left && point.x < rect.right
+          && point.y >= rect.top && point.y < rect.bottom;
+      }
+
+      function measureNativeTitleReveal() {
+        const panel = document.querySelector(`#${rootId} [data-panel="top"]`);
+        const header = conversationHeaderElement();
+        if (!visible(panel) || !visible(header)) return null;
+        const candidates = Array.from(header.querySelectorAll([
+          "[data-thread-title]",
+          "[data-testid*='thread-title' i]",
+          "[data-testid*='conversation-title' i]",
+          ".truncate", "h1", "h2",
+        ].join(", "))).filter((node) => (
+          visible(node) && !node.closest(`#${rootId}`) && normalize(node.textContent)
+        ));
+        const titles = candidates.filter((node) => !candidates.some((other) => (
+          other !== node && node.contains(other)
+        )));
+        // Ambiguous chrome must never make an unrelated HUD disappear.
+        if (titles.length !== 1) return null;
+        const title = titles[0];
+        const observed = [header, title, panel];
+        if (observed.some((node, index) => node !== nativeTitleRevealObserved[index])) {
+          nativeTitleRevealObserver?.disconnect();
+          observed.forEach((node) => nativeTitleRevealObserver?.observe(node));
+          nativeTitleRevealObserved = observed;
+        }
+        let clip = nativeTitleRectIntersection(title.getBoundingClientRect(), {
+          left: 0, top: 0, right: innerWidth, bottom: innerHeight,
+        });
+        for (let node = title.parentElement; clip && node; node = node.parentElement) {
+          const style = getComputedStyle(node);
+          if (style.display === "none" || style.visibility === "hidden" || style.opacity === "0") return null;
+          const rect = node.getBoundingClientRect();
+          clip = nativeTitleRectIntersection(clip, {
+            left: /hidden|clip|auto|scroll/.test(style.overflowX) ? rect.left : clip.left,
+            right: /hidden|clip|auto|scroll/.test(style.overflowX) ? rect.right : clip.right,
+            top: /hidden|clip|auto|scroll/.test(style.overflowY) ? rect.top : clip.top,
+            bottom: /hidden|clip|auto|scroll/.test(style.overflowY) ? rect.bottom : clip.bottom,
+          });
+        }
+        if (!clip) return null;
+        // Measure glyphs rather than a flex title container's empty space.
+        // Clip intrinsic text widths to the native ellipsis/overflow region;
+        // revealing the HUD never changes Desktop's own truncation.
+        const walker = document.createTreeWalker(title, NodeFilter.SHOW_TEXT);
+        const range = document.createRange();
+        const textRects = [];
+        for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+          if (!normalize(node.nodeValue) || node.parentElement?.closest("svg")) continue;
+          range.selectNodeContents(node);
+          for (const rect of range.getClientRects()) {
+            const clipped = nativeTitleRectIntersection(rect, clip);
+            if (clipped) textRects.push(clipped);
+          }
+        }
+        const cover = panel.getBoundingClientRect();
+        if (!textRects.some((rect) => nativeTitleRectIntersection(rect, cover))) return null;
+        return { title, panel, textRects, cover };
+      }
+
+      function updateNativeTitleReveal() {
+        const point = nativeTitleRevealPointer;
+        if (!point || !ctx.lifecycle.active() || !runtimeIsCurrent()) return;
+        if (nativeTitleRevealGeometry?.title.isConnected === false
+          || nativeTitleRevealGeometry?.panel.isConnected === false) {
+          clearNativeTitleReveal();
+          nativeTitleRevealGeometry = undefined;
+        }
+        if (nativeTitleRevealGeometry === undefined) {
+          nativeTitleRevealGeometry = measureNativeTitleReveal();
+        }
+        const geometry = nativeTitleRevealGeometry;
+        const hit = document.elementFromPoint(point.x, point.y);
+        const blocked = hit?.closest(`#${rootId}, [role="dialog"], [role="menu"]`);
+        const overTitle = geometry && !blocked
+          && geometry.textRects.some((rect) => nativeTitlePointInside(point, rect));
+        // After revealing, keep the entire native text area available as the
+        // pointer crosses into the formerly covered part. The cached cover
+        // remains authoritative even though the HUD is now transparent.
+        const reveal = overTitle && (nativeTitleRevealPanel
+          || !nativeTitlePointInside(point, geometry.cover));
+        if (!reveal) {
+          if (!nativeTitleRevealPanel) {
+            clearNativeTitleReveal();
+          } else if (!nativeTitleRevealTimer) {
+            nativeTitleRevealTimer = ctx.lifecycle.timeout("native_title_restore", () => {
+              clearNativeTitleReveal();
+            }, 150);
+          }
+          return;
+        }
+        if (nativeTitleRevealPanel) {
+          ctx.lifecycle.clearTimeout(nativeTitleRevealTimer);
+          nativeTitleRevealTimer = 0;
+        } else if (!nativeTitleRevealTimer) {
+          nativeTitleRevealTimer = ctx.lifecycle.timeout("native_title_reveal", () => {
+            nativeTitleRevealTimer = 0;
+            if (!geometry.title.isConnected || !geometry.panel.isConnected) return;
+            nativeTitleRevealPanel = geometry.panel;
+            nativeTitleRevealPanel.dataset.nativeTitleReveal = "true";
+          }, 150);
+        }
+      }
+
+      function installNativeTitleReveal() {
+        const scope = ctx.lifecycle.scope("native_title_reveal");
+        nativeTitleRevealObserver = ctx.observers.set("native_title_reveal", new ResizeObserver(invalidateNativeTitleReveal));
+        scope.listen(document, "pointermove", (event) => {
+          if (event.buttons || (event.pointerType && event.pointerType !== "mouse")) {
+            resetNativeTitleReveal();
+            return;
+          }
+          nativeTitleRevealPointer = { x: event.clientX, y: event.clientY };
+          updateNativeTitleReveal();
+        }, { capture: true, passive: true });
+        scope.listen(document, "pointerout", (event) => {
+          if (!event.relatedTarget) resetNativeTitleReveal();
+        }, true);
+        scope.listen(document, "pointerdown", resetNativeTitleReveal, true);
+        scope.listen(document, "pointercancel", resetNativeTitleReveal, true);
+        scope.listen(window, "blur", resetNativeTitleReveal);
+        scope.listen(window, "resize", invalidateNativeTitleReveal);
+        scope.listen(window, "scroll", invalidateNativeTitleReveal, true);
+        scope.listen(document, "visibilitychange", () => {
+          if (document.hidden) resetNativeTitleReveal();
+        });
+      }
 """
 
 __all__ = ["TEXT"]

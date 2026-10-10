@@ -129,6 +129,7 @@ TEXT = r"""
           "[data-thread-title]",
           "[data-testid*='thread-title' i]",
           "[data-testid*='conversation-title' i]",
+          "[data-testid='app-shell-header-context-menu-surface'] .truncate",
           // Codex Desktop's current title button is nested under the title
           // row. Keep this structural fallback narrow so arbitrary header
           // headings and truncation changes do not retrigger layout.
@@ -258,6 +259,7 @@ TEXT = r"""
         // Legacy contract markers: scheduleForPanels(["top"], { invalidateTop: true });
         // scheduleForPanels(["request"]);
         // Legacy contract marker: if (!layoutMutationTouchesTextInput(mutation) && mutationTouchesComposerModeControl(mutation))
+        if (touchesHeaderTitle) invalidateNativeTitleReveal();
         if (touchesHeaderTitle && !getPanelState("top").manual) {
           invalidateHeaderAnchor();
           scheduleForPanels(["top"], { invalidateTop: true });
@@ -417,6 +419,7 @@ TEXT = r"""
       }
 
     function install() {
+      installNativeTitleReveal();
       return true;
     }
 
@@ -425,6 +428,9 @@ TEXT = r"""
     }
 
     function dispose() {
+      resetNativeTitleReveal();
+      ctx.lifecycle.disposeScope("native_title_reveal");
+      ctx.observers.clear("native_title_reveal");
       return true;
     }
 

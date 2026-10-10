@@ -184,6 +184,17 @@ TEXT = r"""
           }
           #${rootId} .${topClass} {
             background: rgba(16, 22, 29, .94);
+            transition: opacity .12s ease;
+          }
+          #${rootId} .${topClass}[data-native-title-reveal="true"] {
+            opacity: 0;
+          }
+          #${rootId} .${topClass}[data-native-title-reveal="true"],
+          #${rootId} .${topClass}[data-native-title-reveal="true"] * {
+            pointer-events: none !important;
+          }
+          @media (prefers-reduced-motion: reduce) {
+            #${rootId} .${topClass} { transition: none; }
           }
           #${rootId} .${requestClass} {
             background: rgba(11, 16, 22, .92);

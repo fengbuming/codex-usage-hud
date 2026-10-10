@@ -53,6 +53,7 @@ TEXT = r"""
         panel.style.bottom = "auto";
         panel.style.width = px(width);
         panel.style.height = px(height);
+        if (panel.dataset.panel === "top") invalidateNativeTitleReveal();
       }
 
       function applyRuntimeErrorsPanelState(panel = document.querySelector(`#${rootId} [data-field="runtimeErrorsPanel"]`)) {
@@ -80,6 +81,7 @@ TEXT = r"""
       }
 
       function invalidateHeaderAnchor() {
+        resetNativeTitleReveal();
         cachedHeaderNode = null;
         topSlotCache = null;
       }
