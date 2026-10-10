@@ -15,6 +15,8 @@ from urllib.error import URLError, HTTPError
 from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
+from .provider_proxy import proxy_metadata, with_proxy_metadata, provider_proxy_relay
+
 # ``ctypes.windll`` is absent on POSIX. Keep a patchable sentinel so tests
 # simulating the Windows notification path reach the function under test.
 if not hasattr(ctypes, "windll"):
@@ -61,6 +63,8 @@ class CodexProviderDefinition:
     has_api_key: bool = False
     bearer_token: str = ""
     section_text: str = ""
+    use_proxy: bool = False
+    proxy_port: int = 7897
 
 
 def default_codex_config_path() -> Path:
@@ -621,10 +625,26 @@ def read_provider_definitions(
         official_account = bool(
             auth_key and codex_auth_uses_official_account(path)
         )
+        section_text = _provider_section_text(text, provider_id)
+        metadata = proxy_metadata(section_text)
+        raw_base_url = str(raw_value.get("base_url") or "").strip()
+        if metadata:
+            raw_url = urlsplit(raw_base_url)
+            is_relay_url = raw_url.hostname == "127.0.0.1" and raw_url.path.split("/")[1:2] == [metadata.get("token")]
+            if not is_relay_url and raw_base_url != metadata.get("base_url"):
+                # Respect an external edit instead of resurrecting the old upstream URL.
+                metadata["base_url"] = raw_base_url
+        display_base_url = str(metadata.get("base_url") or raw_base_url).strip()
+        if metadata:
+            section_body = _section_range(text, provider_id)[2]
+            section_text = f"[model_providers.{provider_id}]\n" + _set_quoted_value(
+                section_body, "base_url", display_base_url, "\n"
+            )
+            section_text = with_proxy_metadata(section_text, metadata, "\n")
         result[provider_id.casefold()] = CodexProviderDefinition(
             provider_id=provider_id,
             name=str(raw_value.get("name") or "").strip(),
-            base_url=str(raw_value.get("base_url") or "").strip(),
+            base_url=display_base_url,
             env_key=env_key,
             auth_key=auth_key,
             official_account=official_account,
@@ -638,7 +658,9 @@ def read_provider_definitions(
                 or (bool(_user_environment_value(env_key)) if env_key else False)
             ),
             bearer_token=bearer_token,
-            section_text=_provider_section_text(text, provider_id),
+            section_text=section_text,
+            use_proxy=metadata.get("enabled") is True,
+            proxy_port=int(metadata.get("port", 7897)),
         )
     return result
 
@@ -860,6 +882,30 @@ def save_provider_configs(
                 )
             candidate_text = _replace_section_body(candidate_text, provider_id, next_body)
 
+        if "use_proxy" in update:
+            section = _section_range(candidate_text, provider_id)
+            newline = _preferred_newline(candidate_text)
+            metadata = proxy_metadata(section[2])
+            # Keep the currently committed route immutable if the save rolls back.
+            metadata.pop("token", None)
+            metadata.update({"base_url": base_url, "enabled": update["use_proxy"] is True,
+                             "port": update.get("proxy_port", 7897)})
+            relay_url = provider_proxy_relay.route(metadata, path)
+            body = _set_quoted_value(section[2], "base_url", relay_url, newline)
+            candidate_text = _replace_section_body(
+                candidate_text, provider_id, with_proxy_metadata(body, metadata, newline)
+            )
+        elif existing and proxy_metadata(existing.section_text):
+            section = _section_range(candidate_text, provider_id)
+            metadata = proxy_metadata(existing.section_text)
+            metadata.pop("token", None)
+            metadata["base_url"] = base_url
+            newline = _preferred_newline(candidate_text)
+            body = _set_quoted_value(section[2], "base_url", provider_proxy_relay.route(metadata, path), newline)
+            candidate_text = _replace_section_body(
+                candidate_text, provider_id, with_proxy_metadata(body, metadata, newline)
+            )
+
         if is_default_app_provider:
             default_provider_before_section = _provider_section_text(
                 original_text, provider_id
@@ -1062,6 +1108,8 @@ def clone_provider_with_bearer_key(
     api_key: str,
     *,
     config_path: str | Path | None = None,
+    use_proxy: bool | None = None,
+    proxy_port: int = 7897,
 ) -> dict[str, object]:
     """Clone a provider section with a fresh bearer token and switch default.
 
@@ -1161,6 +1209,16 @@ def clone_provider_with_bearer_key(
     env_key = f"{env_key or 'CODEX_PROVIDER'}_API_KEY"
     retained_lines.append(f'env_key = "{_toml_string(env_key)}"')
     new_body = newline.join(retained_lines).strip(newline)
+    metadata = proxy_metadata(source_body)
+    if use_proxy is not None:
+        metadata.update({"base_url": metadata.get("base_url") or base_url,
+                         "enabled": use_proxy, "port": proxy_port})
+    if metadata:
+        metadata.pop("token", None)
+        new_body = _set_quoted_value(
+            new_body, "base_url", provider_proxy_relay.route(metadata, path), newline
+        )
+        new_body = with_proxy_metadata(new_body, metadata, newline)
     candidate_text = _add_provider_section_text(original_text, new_id, new_body)
     # 顶层 model_provider 切到新供应商（复用 set_default_codex_provider 的 head/tail 改写）。
     first_table = re.search(
@@ -1464,7 +1522,9 @@ def fetch_provider_models_for_cli(
     definition = definitions.get(provider.casefold())
     if definition is None:
         raise ValueError(f"未在 config.toml 中找到 Provider {provider} 的配置。")
-    base_url = definition.base_url
+    metadata = proxy_metadata(definition.section_text)
+    path = Path(config_path).expanduser() if config_path else default_codex_config_path()
+    base_url = provider_proxy_relay.route(metadata, path) if metadata else definition.base_url
     env_key = definition.env_key
     if not base_url:
         raise ValueError(f"Provider {provider} 未配置 base_url。")
@@ -1650,7 +1710,9 @@ def send_cli_chat_probe(
     definition = definitions.get(provider.casefold())
     if definition is None:
         return {"ok": False, "error": f"未在 config.toml 中找到 Provider {provider} 的配置。"}
-    base_url = definition.base_url
+    metadata = proxy_metadata(definition.section_text)
+    path = Path(config_path).expanduser() if config_path else default_codex_config_path()
+    base_url = provider_proxy_relay.route(metadata, path) if metadata else definition.base_url
     env_key = definition.env_key
     if not base_url:
         return {"ok": False, "error": f"Provider {provider} 未配置 base_url。"}

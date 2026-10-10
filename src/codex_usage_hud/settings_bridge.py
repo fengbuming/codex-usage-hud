@@ -37,8 +37,10 @@ class SettingsBridgeServer:
         background_usage_policy_set_callback: Callable[..., dict[str, object]] | None = None,
         session_index_status_callback: Callable[[], dict[str, object]] | None = None,
         session_index_control_callback: Callable[[dict[str, Any]], dict[str, object]] | None = None,
+        manage_provider_proxy: bool = False,
     ) -> None:
         self.store = store
+        self.manage_provider_proxy = manage_provider_proxy
         self.host = host
         self.port = max(0, int(port))
         self.restart_callback = restart_callback
@@ -60,6 +62,11 @@ class SettingsBridgeServer:
     def start(self) -> str:
         if self._server is not None:
             return self.url
+        from .codex_provider_config import default_codex_config_path
+        from .provider_proxy import provider_proxy_relay
+
+        if self.manage_provider_proxy:
+            provider_proxy_relay.activate(default_codex_config_path())
         handler = self._handler_type()
         try:
             self._server = ThreadingHTTPServer((self.host, self.port), handler)
@@ -96,6 +103,15 @@ class SettingsBridgeServer:
         )
 
     def close(self) -> None:
+        from .provider_proxy import provider_proxy_relay
+
+        try:
+            self._close_bridge()
+        finally:
+            if self.manage_provider_proxy:
+                provider_proxy_relay.close()
+
+    def _close_bridge(self) -> None:
         server = self._server
         thread = self._thread
         self._server = None

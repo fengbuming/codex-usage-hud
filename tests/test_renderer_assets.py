@@ -417,8 +417,9 @@ def test_codex_cli_dialog_is_compact_and_persists_profile_scoped_launches() -> N
     assert "function codexCliValidatedQuickLaunchState(" in SETTINGS_SHELL
     assert "if (saved.commandEdited === true) return null;" in SETTINGS_SHELL
     assert "applyCodexCliPersistedLaunchState(persistedLaunchState);" in SETTINGS_SHELL
-    assert "codexCliState.useProxy = false;" in SETTINGS_SHELL
-    assert 'data-codex-cli-proxy-port="true"' in form
+    assert "codexCliState.useProxy = proxy.enabled === true;" in SETTINGS_SHELL
+    assert "供应商代理：" in form
+    assert 'data-codex-cli-field="useProxy"' not in form
     assert 'proxyPort.hidden = codexCliState.useProxy !== true;' in SETTINGS_SHELL
     assert "function codexCliLaunchTitle" in SETTINGS_SHELL
     assert 'return ["启动 Codex", ...args].join(" ");' in SETTINGS_SHELL

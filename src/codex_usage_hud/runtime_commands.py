@@ -182,7 +182,7 @@ class GeneralCommandPorts:
     codex_cli_discover: Callable[[Mapping[str, object]], Mapping[str, object]] | None = None
     codex_cli_launch: Callable[[Mapping[str, object]], Mapping[str, object]] | None = None
     set_default_provider: Callable[[str], Mapping[str, object]] | None = None
-    clone_provider_with_bearer_key: Callable[[str, str], Mapping[str, object]] | None = None
+    clone_provider_with_bearer_key: Callable[..., Mapping[str, object]] | None = None
     save_config_fast: Callable[[Any], None] | None = None
 
 
@@ -1461,7 +1461,10 @@ def handle_general_command(
             source = str(command.get("provider") or command.get("sourceProvider") or "").strip()
             api_key = str(command.get("apiKey") or command.get("api_key") or "").strip()
             try:
-                result = ports.clone_provider_with_bearer_key(source, api_key)
+                proxy_options = ({"use_proxy": command["useProxy"] is True,
+                                  "proxy_port": command.get("proxyPort", 7897)}
+                                 if "useProxy" in command else {})
+                result = ports.clone_provider_with_bearer_key(source, api_key, **proxy_options)
                 new_id = str(
                     (result.get("newProviderId") if isinstance(result, Mapping) else "")
                     or ""
@@ -1498,6 +1501,14 @@ def handle_general_command(
             base_url = str(command.get("baseUrl") or command.get("base_url") or "").strip()
             api_key = str(command.get("apiKey") or command.get("api_key") or "").strip()
             try:
+                if "useProxy" in command:
+                    from .provider_proxy import provider_proxy_relay
+                    from .codex_provider_config import default_codex_config_path
+
+                    base_url = provider_proxy_relay.route({
+                        "base_url": base_url, "enabled": command["useProxy"] is True,
+                        "port": command.get("proxyPort", 7897),
+                    }, default_codex_config_path())
                 models = ports.fetch_provider_models(base_url, api_key)
             except ValueError as exc:
                 return _status(
@@ -1531,6 +1542,14 @@ def handle_general_command(
             api_key = str(command.get("apiKey") or command.get("api_key") or "").strip()
             model = str(command.get("model") or "").strip()
             message = str(command.get("message") or "hi").strip() or "hi"
+            if "useProxy" in command:
+                from .provider_proxy import provider_proxy_relay
+                from .codex_provider_config import default_codex_config_path
+
+                base_url = provider_proxy_relay.route({
+                    "base_url": base_url, "enabled": command["useProxy"] is True,
+                    "port": command.get("proxyPort", 7897),
+                }, default_codex_config_path())
             result = ports.send_provider_chat_probe(base_url, api_key, model, message)
             status = _status(
                 str(result.get("reply") or result.get("error") or "聊天测试无结果。"),
@@ -2307,6 +2326,7 @@ def _handle_renderer_settings_command(
                 resume_session_id=transfer_session_id,
                 use_proxy=bool(proxy_values.get("enabled")),
                 proxy_port=proxy_values.get("port", 7897),
+                provider_base_url=str(proxy_values.get("baseUrl") or ""),
                 workdir=str(target_path),
                 shell=shell,
             )
@@ -2418,13 +2438,13 @@ def _handle_renderer_settings_command(
             publish("settings_changed", source="provider_switch", context={})
         return result
 
-    def clone_provider_with_bearer_key(source: str, api_key: str) -> Mapping[str, object]:
+    def clone_provider_with_bearer_key(source: str, api_key: str, **proxy_options) -> Mapping[str, object]:
         # Do not reload the runtime between writing config.toml and cloning the
         # HUD price table.  That incomplete intermediate state triggers an
         # expensive provider/history refresh and can leave the renderer waiting
         # indefinitely.  The command handler saves HUD settings immediately
         # afterwards; save_config performs the single authoritative reload.
-        return clone_provider_with_bearer_key_config(source, api_key)
+        return clone_provider_with_bearer_key_config(source, api_key, **proxy_options)
 
     general_ports = GeneralCommandPorts(
         load_config=load_config,

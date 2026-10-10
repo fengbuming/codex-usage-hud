@@ -469,8 +469,8 @@ _TEXT_PREFIX = r"""
           && codexCliTransferWorkdirIdentity(workdir)
             !== codexCliTransferWorkdirIdentity(options.noProjectWorkdir)
         ) return null;
-        const proxyPort = Number.parseInt(String(saved.proxyPort || ""), 10);
-        if (saved.useProxy === true && (!Number.isInteger(proxyPort) || proxyPort < 1 || proxyPort > 65535)) return null;
+        const proxyPort = Number.parseInt(String(options.proxy?.port || "7897"), 10);
+        if (!Number.isInteger(proxyPort) || proxyPort < 1 || proxyPort > 65535) return null;
         return {
           ...saved,
           version: 2,
@@ -481,6 +481,7 @@ _TEXT_PREFIX = r"""
           workdir,
           noProject,
           proxyPort: String(Number.isInteger(proxyPort) ? proxyPort : 7897),
+          useProxy: options.proxy?.enabled === true,
           commandEdited: false,
         };
       }
@@ -512,11 +513,11 @@ _TEXT_PREFIX = r"""
         if (permissions.some((item) => String(item?.id || "") === permission)) {
           codexCliState.permission = permission;
         }
-        const proxyPort = Number.parseInt(String(saved.proxyPort || ""), 10);
+        const proxyPort = Number.parseInt(String(codexCliState.options?.proxy?.port || "7897"), 10);
         if (Number.isInteger(proxyPort) && proxyPort >= 1 && proxyPort <= 65535) {
           codexCliState.proxyPort = String(proxyPort);
         }
-        codexCliState.useProxy = saved.useProxy === true;
+        codexCliState.useProxy = codexCliState.options?.proxy?.enabled === true;
         codexCliState.resume = saved.resume === true;
         const workdir = String(saved.workdir || "").trim();
         codexCliState.noProject = saved.noProject === true;
@@ -687,6 +688,9 @@ _TEXT_PREFIX = r"""
           // 用 -c model= 覆盖 profile/顶层 model，不改任何文件，仅本次启动生效。
           args.push("--config", `model=${model}`);
         }
+        if (options.proxy?.baseUrl) {
+          args.push("--config", `model_providers.${provider}.base_url=${JSON.stringify(options.proxy.baseUrl)}`);
+        }
         args.push(...codexCliPermissionArgs(codexCliState.permission));
         if (codexCliState.resume) args.push("resume");
         const executable = String(options?.codex?.command || "codex");
@@ -694,6 +698,14 @@ _TEXT_PREFIX = r"""
           .map((value, index) => index === 0 ? value : codexCliQuote(value, shell))
           .join(" ");
         const lines = [];
+        const proxyKeys = ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy", "NO_PROXY", "no_proxy"];
+        if (shell === "powershell") {
+          lines.push(`Remove-Item ${proxyKeys.map((key) => `Env:${key}`).join(",")} -ErrorAction SilentlyContinue`);
+        } else if (shell === "cmd") {
+          lines.push(...proxyKeys.map((key) => `set "${key}="`));
+        } else {
+          lines.push(`unset ${proxyKeys.join(" ")}`);
+        }
         const port = Math.max(1, Math.min(65535, Number.parseInt(codexCliState.proxyPort, 10) || 7897));
         if (codexCliState.useProxy) {
           const proxy = `http://127.0.0.1:${port}`;
@@ -776,9 +788,8 @@ _TEXT_PREFIX = r"""
         const layer = codexCliDialogLayer();
         if (!layer) return;
         const value = (selector) => String(layer.querySelector(selector)?.value || "").trim();
-        const proxy = layer.querySelector('[data-codex-cli-field="useProxy"]');
-        codexCliState.useProxy = proxy?.checked === true;
-        codexCliState.proxyPort = value('[data-codex-cli-field="proxyPort"]') || "7897";
+        codexCliState.useProxy = codexCliState.options?.proxy?.enabled === true;
+        codexCliState.proxyPort = String(codexCliState.options?.proxy?.port || "7897");
         codexCliState.terminalId = value('[data-codex-cli-field="terminal"]');
         codexCliState.permission = value('[data-codex-cli-field="permission"]') || "full";
         codexCliState.model = value('[data-codex-cli-field="model"]');
@@ -798,9 +809,8 @@ _TEXT_PREFIX = r"""
 
       function codexCliSyncOptionsFromCommand(text) {
         const command = String(text || "");
-        const port = command.match(/127\.0\.0\.1:(\d{1,5})/);
-        codexCliState.useProxy = /HTTP_PROXY|HTTPS_PROXY|http_proxy|https_proxy/.test(command);
-        if (port) codexCliState.proxyPort = port[1];
+        codexCliState.useProxy = codexCliState.options?.proxy?.enabled === true;
+        codexCliState.proxyPort = String(codexCliState.options?.proxy?.port || "7897");
         codexCliState.permission = command.includes("--dangerously-bypass-approvals-and-sandbox")
           ? "full"
           : command.includes("--sandbox read-only")
@@ -966,13 +976,7 @@ _TEXT_PREFIX = r"""
               </label>
             </div>
             <div class="codex-usage-hud-codex-cli-proxy">
-              <label class="codex-usage-hud-codex-cli-check">
-                <input type="checkbox" data-codex-cli-field="useProxy" ${codexCliState.useProxy ? "checked" : ""}>
-                <span>使用本机代理</span>
-              </label>
-              <label class="codex-usage-hud-codex-cli-field codex-usage-hud-codex-cli-proxy-port" data-codex-cli-proxy-port="true" ${codexCliState.useProxy ? "" : "hidden"}>
-                <input data-codex-cli-field="proxyPort" inputmode="numeric" pattern="[0-9]*" value="${escapeHtml(codexCliState.proxyPort)}" aria-label="代理端口">
-              </label>
+              <span>供应商代理：${codexCliState.useProxy ? `本机端口 ${escapeHtml(codexCliState.proxyPort)}` : "不使用"} · 在供应商配置中修改</span>
             </div>
             <label class="codex-usage-hud-codex-cli-field">
               <span>启动终端</span>
@@ -1558,7 +1562,7 @@ _TEXT_PREFIX = r"""
           );
           const proxy = status.codexCli.proxy || {};
           codexCliState.terminalId = String(status.codexCli.defaultTerminal || "");
-          codexCliState.useProxy = false;
+          codexCliState.useProxy = proxy.enabled === true;
           codexCliState.proxyPort = String(proxy.port || "7897");
           codexCliState.permission = String(status.codexCli.defaultPermission || "full");
           codexCliState.resume = false;
@@ -2151,6 +2155,8 @@ _TEXT_PREFIX = r"""
               : ""),
           ),
           configText: String(detail.configText || ""),
+          useProxy: detail.useProxy === true,
+          proxyPort: String(detail.proxyPort || "7897"),
           apiKey: "",
           currentApiKey: String(detail.apiKey || ""),
           isNew: !defined,
@@ -2803,6 +2809,8 @@ _TEXT_PREFIX = r"""
             requestId: typedSettingsRequestId("provider-models"),
             baseUrl,
             apiKey: activeApiKey,
+            useProxy: layer.querySelector('[data-provider-config-field="use_proxy"]')?.checked === true,
+            proxyPort: Number(layer.querySelector('[data-provider-config-field="proxy_port"]')?.value || "7897"),
           },
           "正在测试连通性...",
           { preserveOverlay: true },
@@ -2900,6 +2908,8 @@ _TEXT_PREFIX = r"""
             apiKey,
             model,
             message: "hi",
+            useProxy: layer.querySelector('[data-provider-config-field="use_proxy"]')?.checked === true,
+            proxyPort: Number(layer.querySelector('[data-provider-config-field="proxy_port"]')?.value || "7897"),
           },
           "正在发送聊天测试...",
           { preserveOverlay: true },
@@ -3006,12 +3016,13 @@ _TEXT_PREFIX = r"""
                   <input data-provider-config-field="name" value="${escapeHtml(initialProviderName)}" ${usesCodexAuth ? "readonly" : ""} placeholder="默认与 Provider ID 相同" autocomplete="off">
                 </label>
               </div>
-              ${isNew ? `<label>复制模型列表 / 单价配置
-                <select data-provider-config-field="source_provider">
-                  <option value="">不复制，使用当前默认价格</option>
-                  ${sourceOptions}
-                </select>
-              </label>` : `<div class="codex-usage-hud-provider-config-grid-placeholder" aria-hidden="true"></div>`}
+              <div class="codex-usage-hud-provider-config-proxy">
+                <span>Desktop / CLI 请求代理</span>
+                <div>
+                  <label><input type="checkbox" data-provider-config-field="use_proxy" ${registryEntry.useProxy === true ? "checked" : ""}> 使用本机代理</label>
+                  <input data-provider-config-field="proxy_port" type="number" min="1" max="65535" value="${escapeHtml(String(registryEntry.proxyPort || "7897"))}" aria-label="代理端口" ${registryEntry.useProxy === true ? "" : "hidden"}>
+                </div>
+              </div>
               <div class="codex-usage-hud-provider-config-field">
                 <div class="codex-usage-hud-provider-config-headrow">
                   <span>Base URL</span>
@@ -3052,6 +3063,12 @@ _TEXT_PREFIX = r"""
                 <legend>统计范围</legend>
                 <label><input type="radio" name="codex-provider-scope" value="notification" checked> 仅气泡通知不统计</label>
                 <label><input type="radio" name="codex-provider-scope" value="included"> 纳入统计</label>
+                <label class="codex-usage-hud-provider-config-copy">复制模型列表 / 单价配置
+                  <select data-provider-config-field="source_provider">
+                    <option value="">不复制，使用当前默认价格</option>
+                    ${sourceOptions}
+                  </select>
+                </label>
               </fieldset>` : ""}
             </div>
             <details class="codex-usage-hud-provider-config-preview">
@@ -3069,6 +3086,7 @@ _TEXT_PREFIX = r"""
                 ? "保存设置后会更新主 config.toml 的默认 Provider 段，Base URL / 名称等修改保存后立即生效（新会话，无需重启）；API key 只写入用户环境变量，不会保存到 HUD 配置。已运行的 Codex Desktop 不会获得新的环境变量值，因此修改 API key 后会提示你选择立即重启或稍后重启。"
                 : "保存设置后会更新用户的 config.toml，保存后立即生效（新会话，无需重启）；API key 只写入用户环境变量，不会保存到 HUD 配置。编辑时已填充当前密钥，点击 👁 可查看明文。"}</div>
             <div class="codex-usage-hud-provider-config-status" data-provider-config-status="true" role="alert" aria-live="polite"></div>
+            <div class="codex-usage-hud-provider-config-proxy-note">此供应商的代理选择同时用于 Desktop 和 CLI；Desktop 使用此设置时需保持 HUD 运行。</div>
             <div class="codex-usage-hud-settings-confirm-actions">
               <button type="button" class="codex-usage-hud-settings-action" data-action="settings-provider-cancel" data-variant="ghost">取消</button>
               <button type="button" class="codex-usage-hud-settings-action" data-action="settings-provider-apply" data-primary="true">${isNew ? "添加" : "应用"}</button>
@@ -3082,6 +3100,9 @@ _TEXT_PREFIX = r"""
         const sectionNode = layer.querySelector('[data-provider-config-field="section_text"]');
         const baseUrlNode = layer.querySelector('[data-provider-config-field="base_url"]');
         const v1Node = layer.querySelector('[data-provider-config-field="base_url_v1"]');
+        const proxyNode = layer.querySelector('[data-provider-config-field="use_proxy"]');
+        const proxyPortNode = layer.querySelector('[data-provider-config-field="proxy_port"]');
+        proxyNode?.addEventListener("change", () => { if (proxyPortNode) proxyPortNode.hidden = !proxyNode.checked; });
         if (
           usesExperimentalBearer
           && envNode
@@ -3204,6 +3225,12 @@ _TEXT_PREFIX = r"""
           ? providerSectionBasicString(sectionText, "env_key").trim()
           : String(envNode?.value || "").trim();
         const apiKey = String(apiKeyNode?.value || "");
+        const useProxy = layer.querySelector('[data-provider-config-field="use_proxy"]')?.checked === true;
+        const proxyPort = Number(layer.querySelector('[data-provider-config-field="proxy_port"]')?.value || "7897");
+        if (!Number.isInteger(proxyPort) || proxyPort < 1 || proxyPort > 65535) {
+          setProviderConfigDialogError("代理端口必须为 1–65535。");
+          return false;
+        }
         if (!/^[A-Za-z0-9_-]+$/.test(provider) || (isNew && provider === "custom")) {
           setProviderConfigDialogError("Provider ID 只能使用字母、数字、连字符或下划线，且不能是 custom。");
           return false;
@@ -3261,7 +3288,7 @@ _TEXT_PREFIX = r"""
           const requestId = typedSettingsRequestId("provider-clone-switch");
           beginProviderCloneWorkflow(requestId, displayName, provider);
           const submitted = submitSettingsCommand(
-            { action: "providerCloneSwitch", provider, apiKey, requestId },
+            { action: "providerCloneSwitch", provider, apiKey, requestId, useProxy, proxyPort },
             `正在克隆供应商 ${displayName} 并切换...`,
           );
           if (submitted) {
@@ -3305,6 +3332,8 @@ _TEXT_PREFIX = r"""
           baseUrl,
           envKey,
           configText: sectionText,
+          useProxy,
+          proxyPort: String(proxyPort),
           apiKey,
           isNew: isNew || existingCodex?.isNew === true,
           hasApiKey: !!apiKey || existingCodex?.hasApiKey === true,
@@ -5847,6 +5876,8 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
             env_key: String(draft.envKey || "").trim(),
             api_key: String(draft.apiKey || ""),
             section_text: String(draft.configText || ""),
+            use_proxy: draft.useProxy === true,
+            proxy_port: Number(draft.proxyPort || "7897"),
             is_new: draft.isNew === true,
           };
         });

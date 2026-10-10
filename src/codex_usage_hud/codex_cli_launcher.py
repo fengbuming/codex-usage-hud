@@ -22,6 +22,7 @@ from .process_environment import (
     PYINSTALLER_INTERNAL_ENV_PREFIX,
     external_process_environment,
 )
+from .codex_provider_config import read_provider_definitions, default_codex_config_path
 
 
 POWERSHELL_INSTALL_URL = (
@@ -605,6 +606,7 @@ def build_codex_cli_command(
     workdir: str = "",
     shell: str = "powershell",
     executable: str = "codex",
+    provider_base_url: str = "",
 ) -> str:
     shell_name = str(shell or "powershell").strip().lower()
     if shell_name not in {"powershell", "cmd", "bash", "zsh"}:
@@ -618,6 +620,8 @@ def build_codex_cli_command(
         resume_session_id=resume_session_id,
         model=model,
     )]
+    if provider_base_url:
+        args.extend(["--config", f'model_providers.{provider}.base_url={json.dumps(provider_base_url)}'])
     command = " ".join(
         value if index == 0 and value == executable else _shell_quote(value, shell_name)
         for index, value in enumerate(args)
@@ -627,6 +631,13 @@ def build_codex_cli_command(
     except (TypeError, ValueError):
         port = DEFAULT_PROXY_PORT
     lines: list[str] = []
+    proxy_keys = "HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy NO_PROXY no_proxy".split()
+    if shell_name == "powershell":
+        lines.append("Remove-Item " + ",".join(f"Env:{key}" for key in proxy_keys) + " -ErrorAction SilentlyContinue")
+    elif shell_name == "cmd":
+        lines.extend(f'set "{key}="' for key in proxy_keys)
+    else:
+        lines.append("unset " + " ".join(proxy_keys))
     if use_proxy:
         proxy = f"http://127.0.0.1:{port}"
         if shell_name == "powershell":
@@ -686,9 +697,13 @@ def discover_codex_cli_options(
         state_db_path=state_db_path,
         current_workdir=current_workdir,
     )
-    proxy = _reference_proxy_defaults() if _platform_name(platform_name) == "windows" else {
-        "enabled": False,
-        "port": DEFAULT_PROXY_PORT,
+    definition = read_provider_definitions(
+        Path(codex_home) / "config.toml" if codex_home else default_codex_config_path()
+    ).get(normalized_provider)
+    proxy = {
+        "enabled": definition.use_proxy if definition else False,
+        "port": definition.proxy_port if definition else DEFAULT_PROXY_PORT,
+        "baseUrl": definition.base_url if definition else "",
         "profileName": "",
         "source": "",
     }

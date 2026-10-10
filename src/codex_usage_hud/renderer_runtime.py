@@ -231,7 +231,9 @@ def production_runtime_services() -> RuntimeServices:
             diagnostic_sink=_runtime_diagnostics_owner.append_renderer_diagnostic,
         ),
         update_manager_factory=lambda: AutoUpdateManager(current_version=__version__),
-        bridge_factory=SettingsBridgeServer,
+        bridge_factory=lambda *args, **kwargs: SettingsBridgeServer(
+            *args, **kwargs, manage_provider_proxy=True
+        ),
         snapshot_builder=snapshot_service_owner.build_snapshot,
         command_pump_factory=WorkOverlayCommandPump,
         file_event_source_factory=lambda context, wake_event: (

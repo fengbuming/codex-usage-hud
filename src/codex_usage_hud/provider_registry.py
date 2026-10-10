@@ -33,6 +33,8 @@ class ProviderRegistryEntry:
     has_api_key: bool = False
     bearer_token: str = ""
     config_text: str = ""
+    use_proxy: bool = False
+    proxy_port: int = 7897
     from_base_config: bool = False
     from_profile: bool = False
     from_provider_definition: bool = False
@@ -139,6 +141,8 @@ def discover_provider_registry(
                         "has_api_key": definition.has_api_key,
                         "bearer_token": definition.bearer_token,
                         "config_text": definition.section_text,
+                        "use_proxy": definition.use_proxy,
+                        "proxy_port": definition.proxy_port,
                     }
                 )
 
@@ -177,6 +181,8 @@ def discover_provider_registry(
             has_api_key=bool(state.get("has_api_key")),
             bearer_token=str(state.get("bearer_token") or ""),
             config_text=str(state.get("config_text") or ""),
+            use_proxy=bool(state.get("use_proxy")),
+            proxy_port=int(state.get("proxy_port", 7897)),
             from_base_config=bool(state.get("from_base_config")),
             from_profile=bool(state.get("from_profile")),
             from_provider_definition=bool(state.get("from_provider_definition")),
