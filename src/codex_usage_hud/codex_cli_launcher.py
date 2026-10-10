@@ -691,6 +691,7 @@ def discover_codex_cli_options(
             for item in terminals
             if item.get("recommended")
         ),
+        "",
     ) or (str(terminals[0].get("id") or "") if terminals else "")
     workdirs = discover_workdirs(
         sessions_root=sessions_root,

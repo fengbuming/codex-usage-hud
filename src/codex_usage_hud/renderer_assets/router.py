@@ -2020,10 +2020,18 @@ TEXT = r"""
     return true;
   };
 
-  // Keep user-controlled geometry stable for the lifetime of a session.
-  // Session-switch payloads explicitly request the only automatic re-fit.
+  // Viewport changes must refresh both anchors even within the same session.
+  // Keep manual geometry in state so syncPosition can adapt/clamp it without
+  // resetting the user's drag/resize preferences. Desktop chrome can finish
+  // reflowing after the resize event, so also run the bounded settle passes.
   // Legacy contract marker: window[scrollHandlerName] = () => scheduleForPanels(["request"])
-  window[scheduleName] = () => {};
+  window[scheduleName] = () => {
+    if (!runtimeIsCurrent() || !ctx.lifecycle.active()) return;
+    invalidateHeaderAnchor();
+    invalidateComposerAnchor();
+    scheduleForPanels(Object.keys(PANEL), { invalidateTop: true });
+    syncPositionSettled();
+  };
   window[resizeHandlerName] = window[scheduleName];
   window[scrollHandlerName] = () => {};
   ctx.lifecycle.listen("layout", window, "resize", window[resizeHandlerName]);

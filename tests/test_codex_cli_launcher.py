@@ -2,6 +2,8 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from codex_usage_hud import codex_cli_launcher as launcher
 from codex_usage_hud.config import UserConfig
 from codex_usage_hud.runtime_commands import GeneralCommandPorts, dispatch_command
@@ -208,6 +210,31 @@ def test_discover_codex_cli_options_does_not_choose_a_default_workdir(
     assert result["defaultWorkdir"] == ""
     assert result["noProjectWorkdir"] == str(Path.home())
     assert [item["path"] for item in result["workdirs"]] == [str(current)]
+
+
+@pytest.mark.parametrize(
+    ("terminals", "expected"),
+    [
+        ([], ""),
+        ([{"id": "shell"}], "shell"),
+        ([{"id": "shell"}, {"id": "preferred", "recommended": True}], "preferred"),
+    ],
+    ids=["no-terminals", "no-recommendation", "recommended"],
+)
+def test_discover_codex_cli_options_handles_missing_terminal_recommendation(
+    tmp_path: Path, monkeypatch, terminals, expected: str,
+) -> None:
+    monkeypatch.setattr(launcher, "discover_terminals", lambda **_: terminals)
+    monkeypatch.setattr(launcher, "_first_available", lambda *_: "")
+    result = launcher.discover_codex_cli_options(
+        provider="custom",
+        codex_home=tmp_path,
+        sessions_root=tmp_path / "sessions",
+        state_db_path=tmp_path / "state.sqlite",
+        platform_name="linux",
+    )
+    assert result["defaultTerminal"] == expected
+    assert result["terminals"] == terminals
 
 
 def test_discover_terminals_marks_powershell7_as_recommended(monkeypatch) -> None:

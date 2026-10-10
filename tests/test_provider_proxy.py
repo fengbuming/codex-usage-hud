@@ -184,8 +184,11 @@ def test_https_connect_uses_upstream_hostname_and_verified_tls(relay, upstream, 
 def test_config_roundtrip_restart_clone_and_cli_share_one_setting(relay, tmp_path):
     path = tmp_path / "config.toml"
     path.write_text('model_provider = "other"\n\n[model_providers.other]\nname = "Other"\nbase_url = "https://example.test/v1"\nenv_key = "OTHER_API_KEY"\n', encoding="utf-8")
+    environment = {"OTHER_API_KEY": "test-only"}
     with patch.object(config, "provider_proxy_relay", relay), patch.object(
-        config, "_user_environment_value", return_value="test-only"
+        config, "_user_environment_value", side_effect=environment.get
+    ), patch.object(
+        config, "_set_user_environment_value", side_effect=environment.__setitem__
     ):
         config.save_provider_configs({"provider_id": "other", "base_url": "https://example.test/v2",
                                      "env_key": "OTHER_API_KEY", "use_proxy": True,
@@ -204,6 +207,7 @@ def test_config_roundtrip_restart_clone_and_cli_share_one_setting(relay, tmp_pat
         assert "https://example.test/v2" in command
         token = proxy_metadata(definition.section_text)["token"]
         clone = config.clone_provider_with_bearer_key("other", "test-only-new", config_path=path)
+        assert environment[clone["environmentKey"]] == "test-only-new"
         cloned = config.read_provider_definitions(path)[clone["newProviderId"]]
         assert cloned.use_proxy and cloned.proxy_port == 7898
         assert proxy_metadata(cloned.section_text)["token"] != token
