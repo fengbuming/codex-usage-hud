@@ -79,6 +79,7 @@ _TEXT_PREFIX = r"""
         pendingProvider: "",
         pendingRequestId: "",
         migration: null,
+        refreshPendingRequestId: "",
         loadingTimer: 0,
         timeoutTimer: 0,
         feedbackLayer: null,
@@ -5249,12 +5250,35 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
         sessionViewDomain.applySearchJump(status?.sessionCleanupSessionJump);
         if (String(status?.action || "") === "providerSetDefault") {
           const failed = String(status?.kind || "") === "error";
-          finishDefaultProviderSwitch({
-            requestId: status?.requestId,
-            provider: status?.providerSetDefaultProvider,
-            ok: !failed && !!status?.providerSetDefaultProvider,
-            message: status?.message,
-          });
+          const requestId = String(status?.requestId || "");
+          const provider = String(status?.providerSetDefaultProvider || "").trim().toLowerCase();
+          if (!failed && requestId && provider && requestId === codexProviderSwitchMenuState.pendingRequestId) {
+            if (codexProviderSwitchMenuState.refreshPendingRequestId !== requestId) {
+              codexProviderSwitchMenuState.refreshPendingRequestId = requestId;
+              refreshCodexProviderRuntime(provider, requestId).then(() => {
+                finishDefaultProviderSwitch({
+                  requestId,
+                  provider,
+                  ok: true,
+                  message: status?.message,
+                });
+              }).catch((error) => {
+                finishDefaultProviderSwitch({
+                  requestId,
+                  provider,
+                  ok: false,
+                  message: `默认配置已保存，但 Codex 未确认切换：${String(error?.message || error)}。请重启 Codex 后新建会话。`,
+                });
+              });
+            }
+          } else {
+            finishDefaultProviderSwitch({
+              requestId,
+              provider,
+              ok: !failed && !!provider,
+              message: status?.message,
+            });
+          }
         }
         const providerCloneSwitch = status?.providerCloneSwitch;
         if (providerCloneSwitch && typeof providerCloneSwitch === "object") {
@@ -7657,6 +7681,7 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
         }
         codexProviderSwitchMenuState.pendingProvider = "";
         codexProviderSwitchMenuState.pendingRequestId = "";
+        codexProviderSwitchMenuState.refreshPendingRequestId = "";
         codexProviderSwitchMenuState.migration = null;
         syncCodexCliQuickLaunchMenu();
         if (codexProviderSwitchMenuState.open) renderCodexProviderSwitchMenu();
@@ -7665,6 +7690,63 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
           openCodexProviderMigrateDialog(migration);
         }
         return true;
+      }
+
+      async function resolveCodexProviderRuntime() {
+        // Resolve the loaded native manager by capability rather than a build's
+        // hashed asset/export names. Codex does not expose prewarm invalidation
+        // on electronBridge. This adapter must fail closed on unsupported builds.
+        const links = Array.from(document.querySelectorAll('link[href]'))
+          .map((link) => link.href)
+          .filter((href) => /\/assets\/app-shared-[^/]+\.js$/.test(href));
+        let managerForHost = null;
+        for (const href of links) {
+          const module = await import(href);
+          managerForHost = Object.values(module).find((value) => {
+            if (typeof value !== "function") return false;
+            try {
+              return Function.prototype.toString.call(value)
+                .includes("AppServerManager RPC is unavailable for hostId:");
+            } catch (_) { return false; }
+          });
+          if (managerForHost) break;
+        }
+        if (!managerForHost) throw new Error("当前版本不支持清理预热会话");
+        const root = document.getElementById("root");
+        const rootKey = root && Object.keys(root).find((key) => key.startsWith("__reactContainer$"));
+        const queue = [window.__codexRoot?._internalRoot?.current || root?.[rootKey]?.stateNode?.current];
+        const seen = new Set();
+        for (let count = 0; queue.length && count < 2000; count += 1) {
+          const fiber = queue.shift();
+          if (!fiber || seen.has(fiber)) continue;
+          seen.add(fiber);
+          queue.push(fiber.child, fiber.sibling);
+          let hook = fiber.memoizedState;
+          for (let depth = 0; hook && depth < 100; depth += 1, hook = hook.next) {
+            for (const scope of [hook.memoizedState, hook.memoizedState?.current]) {
+              if (!scope?.node || !scope.query || typeof scope.get !== "function" || typeof scope.set !== "function") continue;
+              const manager = managerForHost(scope, "local");
+              if (typeof manager?.clearPrewarmedThreads === "function" && typeof manager?.sendRequest === "function") {
+                return { manager, scope };
+              }
+            }
+          }
+        }
+        throw new Error("未找到 Codex 会话管理器");
+      }
+
+      async function refreshCodexProviderRuntime(provider, requestId = "") {
+        const { manager, scope } = await resolveCodexProviderRuntime();
+        const read = await manager.sendRequest("config/read", { includeLayers: false, cwd: null });
+        const actual = String(read?.config?.model_provider || "openai").trim().toLowerCase();
+        if (actual !== provider) throw new Error(`有效默认供应商仍为 ${actual}`);
+        // Refresh native config caches before clearing prewarm so any subsequent
+        // prewarm reads the selected provider. Keep existing threads and drafts.
+        await scope.queryClient.invalidateQueries({ queryKey: ["user-saved-config"] });
+        if (requestId && codexProviderSwitchMenuState.pendingRequestId !== requestId) {
+          throw new Error("切换请求已结束");
+        }
+        await manager.clearPrewarmedThreads();
       }
 
       function renderCodexProviderSwitchMenu() {
@@ -8194,11 +8276,6 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
               activeSessionId,
             }
             : null;
-          const currentDefault = String(settings.default_provider || settings.app_provider || "").trim().toLowerCase();
-          if (provider === currentDefault) {
-            if (migration) openCodexProviderMigrateDialog(migration);
-            return;
-          }
           if (!beginDefaultProviderSwitch({ provider, requestId, migration })) return;
           const submitted = submitSettingsCommand(
             { action: "providerSetDefault", provider, requestId },
@@ -8353,6 +8430,21 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
 
       function installCodexCliQuickLaunchMenu() {
         ensureCodexCliQuickLaunchMenuStyle();
+        const blockPendingProviderSend = (event) => {
+          if (!codexProviderSwitchMenuState.pendingRequestId) return;
+          const composer = composerElement();
+          if (!composer?.contains(event.target)) return;
+          const enter = event.type === "keydown" && event.key === "Enter"
+            && !event.shiftKey && !event.isComposing;
+          const button = event.target?.closest?.("button, [role='button']");
+          const send = event.type === "click" && activeSessionComposerSubmitButton(button);
+          if (!enter && !send) return;
+          event.preventDefault();
+          event.stopImmediatePropagation();
+          showDefaultProviderSwitchFeedback("正在确认新会话供应商，请稍候…");
+        };
+        ctx.lifecycle.listen("codex_cli_quick_launch_menu", window, "keydown", blockPendingProviderSend, true);
+        ctx.lifecycle.listen("codex_cli_quick_launch_menu", window, "click", blockPendingProviderSend, true);
         ctx.lifecycle.listen("codex_cli_quick_launch_menu", document, "click", handleCodexCliQuickLaunchMenuClick, true);
         ctx.lifecycle.listen("codex_cli_quick_launch_menu", document, "pointerdown", (event) => {
           if (!codexCliQuickLaunchMenuState.open && !codexProviderSwitchMenuState.open) return;
@@ -8429,6 +8521,7 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
       function disposeCodexCliQuickLaunchMenu() {
         clearDefaultProviderSwitchFeedback();
         codexProviderSwitchMenuState.pendingRequestId = "";
+        codexProviderSwitchMenuState.refreshPendingRequestId = "";
         codexProviderSwitchMenuState.pendingProvider = "";
         codexProviderSwitchMenuState.migration = null;
         ctx.observers.clear("codex_cli_quick_launch_menu");

@@ -1044,11 +1044,10 @@ def set_default_codex_provider(
 ) -> dict[str, object]:
     """Set the top-level ``model_provider`` key without touching other TOML.
 
-    The running Codex Desktop re-reads config.toml when a new session starts
-    (verified by a live probe: flipping ``model_provider`` took effect for the
-    next thread with no app restart), so this is the hot-switch path for new
-    App sessions.  Only the selected provider section/ID is validated; all
-    unrelated TOML is preserved byte-for-byte and written atomically.
+    Codex reads this default when starting a thread. The renderer caller must
+    also invalidate already-prewarmed threads: they retain their original
+    provider even before the first message. Only the selected provider ID is
+    validated; unrelated TOML is preserved and written atomically.
     """
     requested = str(provider_id or "").strip()
     if not requested:

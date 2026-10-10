@@ -74,3 +74,67 @@ console.log('provider switch lifecycle ok');
     path.write_text(script, encoding="utf-8")
     result = subprocess.run(["node", str(path)], capture_output=True, text=True, encoding="utf-8")
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_provider_switch_waits_for_prewarm_clear_and_deduplicates_status(tmp_path):
+    start = TEXT.index("        if (String(status?.action || \"\") === \"providerSetDefault\") {")
+    end = TEXT.index("        const providerCloneSwitch", start)
+    fragment = TEXT[start:end]
+    script = r'''
+const assert = require('node:assert/strict');
+let resolveRefresh, rejectRefresh, calls = 0;
+const finished = [];
+const codexProviderSwitchMenuState = {pendingRequestId:'one'};
+function refreshCodexProviderRuntime(provider, requestId) {
+  assert.equal(provider, 'new'); assert.equal(requestId, 'one'); calls++;
+  return new Promise((resolve, reject) => { resolveRefresh=resolve; rejectRefresh=reject; });
+}
+function finishDefaultProviderSwitch(result) { finished.push(result); }
+function apply(status) {
+''' + fragment + r'''
+}
+(async () => {
+  const status = {action:'providerSetDefault',requestId:'one',providerSetDefaultProvider:'new'};
+  apply(status); apply(status);
+  assert.equal(calls, 1); assert.equal(finished.length, 0);
+  resolveRefresh(); await new Promise(setImmediate);
+  assert.equal(finished.length, 1); assert.equal(finished[0].ok, true);
+  codexProviderSwitchMenuState.refreshPendingRequestId = '';
+  apply(status); rejectRefresh(new Error('unsupported-build'));
+  await new Promise(setImmediate);
+  assert.equal(finished[1].ok, false); assert.match(finished[1].message, /unsupported-build/);
+})().catch(e => { console.error(e); process.exitCode=1; });
+'''
+    path = tmp_path / "provider_ack.js"
+    path.write_text(script, encoding="utf-8")
+    result = subprocess.run(["node", str(path)], capture_output=True, text=True, encoding="utf-8")
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_runtime_clears_old_prewarm_only_after_verified_config(tmp_path):
+    runtime_start = TEXT.index("      async function refreshCodexProviderRuntime(")
+    runtime_end = TEXT.index("      function renderCodexProviderSwitchMenu(", runtime_start)
+    runtime = TEXT[runtime_start:runtime_end]
+    script = r'''
+const assert = require('node:assert/strict');
+let provider='new'; const order=[];
+const codexProviderSwitchMenuState={pendingRequestId:'one'};
+const manager={
+  async sendRequest(method) {assert.equal(method,'config/read');order.push('read');return {config:{model_provider:provider}};},
+  async clearPrewarmedThreads() {order.push('clear');}
+};
+const scope={queryClient:{async invalidateQueries() {order.push('cache');}}};
+async function resolveCodexProviderRuntime() {return {manager,scope};}
+''' + runtime + r'''
+(async()=>{
+ await refreshCodexProviderRuntime('new','one'); assert.deepEqual(order,['read','cache','clear']);
+ order.length=0; provider='old';
+ await assert.rejects(refreshCodexProviderRuntime('new','one')); assert.deepEqual(order,['read']);
+ order.length=0; provider='new';codexProviderSwitchMenuState.pendingRequestId='two';
+ await assert.rejects(refreshCodexProviderRuntime('new','one'));assert(!order.includes('clear'));
+})().catch(e=>{console.error(e);process.exitCode=1;});
+'''
+    path = tmp_path / "provider_runtime.js"
+    path.write_text(script, encoding="utf-8")
+    result = subprocess.run(["node", str(path)], capture_output=True, text=True, encoding="utf-8")
+    assert result.returncode == 0, result.stdout + result.stderr

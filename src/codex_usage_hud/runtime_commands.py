@@ -1450,7 +1450,7 @@ def handle_general_command(
                 (result.get("name") if isinstance(result, Mapping) else "") or provider
             )
             status = _status(
-                f"默认供应商已切换为「{display_name}」，新的 Codex 会话将使用该供应商。"
+                f"默认供应商配置已保存为「{display_name}」，正在确认 Codex 新会话配置。"
             )
             status["providerSetDefault"] = dict(result)
             status["providerSetDefaultProvider"] = str(provider).strip().lower()
@@ -2427,8 +2427,8 @@ def _handle_renderer_settings_command(
                 display_name = str(getattr(entry, "name", "") or "")
             if display_name:
                 result = {**result, "name": display_name}
-        # config.toml 已热生效（运行中的 Codex Desktop 新建会话即读取新默认值），
-        # 但 HUD 自己的 app_provider/供应商注册表需要重载一次，让菜单栏标签立即刷新。
+        # Reload HUD state after persisting config.toml. The renderer must also
+        # invalidate Codex's prewarmed threads before confirming the switch.
         context.settings_mtime = None
         context.reload_user_config(include_history=False)
         # 保存流程通过写 HUD 设置文件触发 watcher 发布 settings_changed；本流程只改
