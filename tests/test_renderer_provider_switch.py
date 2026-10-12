@@ -138,3 +138,34 @@ async function resolveCodexProviderRuntime() {return {manager,scope};}
     path.write_text(script, encoding="utf-8")
     result = subprocess.run(["node", str(path)], capture_output=True, text=True, encoding="utf-8")
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_provider_save_refreshes_once_and_reports_failure_without_restart(tmp_path):
+    start = TEXT.index('        if (status?.codexProvidersSaved && status.kind !== "error") {')
+    end = TEXT.index("        const providerCloneSwitch", start)
+    script = r'''
+const assert = require('node:assert/strict');
+let lastProviderSaveRefreshRequestId='', calls=0, cleared=0, resolveRefresh, rejectRefresh;
+const messages=[];
+function refreshCodexProviderRuntime() {calls++; return new Promise((a,b)=>{resolveRefresh=a;rejectRefresh=b;});}
+function clearSettingsRestartPrompt() {cleared++;}
+function setSettingsStatus(message,kind) {messages.push({message,kind});}
+function apply(status) {
+''' + TEXT[start:end] + r'''
+}
+(async()=>{
+ const one={requestId:'one',codexProvidersSaved:{providerIds:['qiyu']}};
+ apply(one);apply(one);assert.equal(calls,1);assert.equal(cleared,0);
+ resolveRefresh();await new Promise(setImmediate);assert.equal(cleared,1);
+ assert.match(messages[0].message,/无需重启/);
+ apply({requestId:'two',codexProvidersSaved:{}});rejectRefresh(new Error('native-cache-unavailable'));
+ await new Promise(setImmediate);assert.equal(cleared,1);assert.equal(messages[1].kind,'error');
+ assert.match(messages[1].message,/native-cache-unavailable/);
+ assert(!messages[1].message.includes('请重启'));
+ apply({requestId:'failed',kind:'error',codexProvidersSaved:{}});assert.equal(calls,2);
+})().catch(e=>{console.error(e);process.exitCode=1;});
+'''
+    path = tmp_path / "provider_save.js"
+    path.write_text(script, encoding="utf-8")
+    result = subprocess.run(["node", str(path)], capture_output=True, text=True, encoding="utf-8")
+    assert result.returncode == 0, result.stdout + result.stderr

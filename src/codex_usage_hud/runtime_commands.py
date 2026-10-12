@@ -1927,7 +1927,7 @@ def handle_general_command(
                     if str(item or "")
                 ]
                 # config.toml 会被新会话热读；auth.json 和用户环境变量不会注入
-                # 已运行的 Codex Desktop 进程。只有默认供应商凭据变化才提示重启。
+                # 已运行的 Codex Desktop 进程。新保存的凭据由原供应商配置热读。
                 if codex_provider_result.get("requiresCodexRestart"):
                     return runtime_settings.settings_status(
                         "默认 Codex App Provider 凭据已保存，需要重启 Codex Desktop 才能生效。",
@@ -1935,7 +1935,9 @@ def handle_general_command(
                         restart_codex=True,
                     )
                 suffix = f"；Codex provider 已更新：{', '.join(provider_ids)}" if provider_ids else ""
-                return _status(f"设置已保存，相关显示会自动刷新{suffix}。")
+                status = _status(f"供应商配置已保存，正在刷新 Codex 新会话配置{suffix}。")
+                status["codexProvidersSaved"] = {"providerIds": provider_ids}
+                return status
             return _status("设置已保存，相关显示会自动刷新。")
         if action.startswith("restReminder"):
             reminder = ports.rest_reminder

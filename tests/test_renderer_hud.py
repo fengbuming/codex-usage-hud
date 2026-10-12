@@ -1023,8 +1023,9 @@ class RendererHudPayloadTests(unittest.TestCase):
             ": '<button type=\"button\" class=\"codex-usage-hud-settings-icon-action\" data-action=\"settings-edit-provider\"",
             script,
         )
-        self.assertIn("const apiKeyChanged = isAppProvider", script)
-        self.assertIn("providerRegistryEntry.usesExperimentalBearer === true", script)
+        self.assertIn("status?.codexProvidersSaved", script)
+        self.assertIn("refreshCodexProviderRuntime().then", script)
+        self.assertIn("providerRegistryEntry.usesExperimentalBearer !== true", script)
         self.assertIn("detail.usesExperimentalBearer === true || !defined", script)
         self.assertIn("result.hudSettingsCloned === true", script)
         self.assertNotIn('{ action: "save", settings: nextSettings }', script)
@@ -1041,7 +1042,7 @@ class RendererHudPayloadTests(unittest.TestCase):
         self.assertIn("auth.json", script)
         self.assertIn("OPENAI_API_KEY", script)
         self.assertIn("Codex App 使用 auth.json 中的 OPENAI_API_KEY", script)
-        self.assertIn("已运行的 Codex Desktop 不会获得新的环境变量值", script)
+        self.assertIn("API key 会保存在 Codex config.toml 中", script)
         self.assertIn("const credentialReloadText = usesCodexAuth", script)
         self.assertIn("officialAccount", script)
         self.assertIn("官方账号登录，默认 Provider 不可编辑", script)

@@ -35,6 +35,36 @@ from codex_usage_hud.codex_provider_config import (
 
 
 class CodexProviderConfigTests(unittest.TestCase):
+    def test_save_same_provider_removes_env_dependency_and_preserves_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "config.toml"
+            path.write_text('model_provider = "superqiyu1"\n[model_providers.superqiyu1]\nname = "Qiyu"\nbase_url = "https://example/v1"\nenv_key = "SUPERQIYU1_API_KEY"\nwire_api = "responses"\n', encoding="utf-8")
+            env_values = {"SUPERQIYU1_API_KEY": "old"}
+            with patch.object(provider_config_module, "_user_environment_value", side_effect=lambda name: env_values.get(name, "")), patch.object(provider_config_module, "_set_user_environment_value", side_effect=lambda name, value: env_values.__setitem__(name, value)):
+                result = save_provider_configs({"provider_id": "superqiyu1", "base_url": "https://example/v1", "env_key": "SUPERQIYU1_API_KEY", "api_key": "fresh"}, config_path=path)
+                result2 = save_provider_configs({"provider_id": "superqiyu1", "base_url": "https://example/v2", "env_key": "SUPERQIYU1_API_KEY", "section_text": '[model_providers.superqiyu1]\nname = "Qiyu"\nbase_url = "https://example/v2"\n'}, config_path=path)
+            parsed = provider_config_module._parse_toml_mapping(path.read_text(encoding="utf-8"))
+            self.assertEqual(set(parsed["model_providers"]), {"superqiyu1"})
+            self.assertEqual(parsed["model_provider"], "superqiyu1")
+            self.assertEqual(parsed["model_providers"]["superqiyu1"]["experimental_bearer_token"], "fresh")
+            self.assertNotIn("env_key", parsed["model_providers"]["superqiyu1"])
+            self.assertFalse(result["requiresCodexRestart"])
+            self.assertFalse(result2["requiresCodexRestart"])
+            self.assertEqual(result["profilePaths"], [])
+
+    def test_switch_upgrades_saved_key_on_same_id_without_clone(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "config.toml"
+            path.write_text('model_provider = "qiyu"\n[model_providers.qiyu]\nbase_url = "https://example/v1"\nenv_key = "QIYU_API_KEY"\n', encoding="utf-8")
+            with patch.object(provider_config_module, "_user_environment_value", return_value="fresh"):
+                result = set_default_codex_provider("qiyu", config_path=path)
+            parsed = provider_config_module._parse_toml_mapping(path.read_text(encoding="utf-8"))
+            self.assertTrue(result["changed"])
+            self.assertEqual(set(parsed["model_providers"]), {"qiyu"})
+            self.assertNotIn("env_key", parsed["model_providers"]["qiyu"])
+            self.assertEqual(parsed["model_providers"]["qiyu"]["experimental_bearer_token"], "fresh")
+            self.assertEqual(read_provider_definitions(path)["qiyu"].env_key, "QIYU_API_KEY")
+
     def test_environment_change_broadcast_is_non_blocking_when_notify_is_available(self) -> None:
         user32 = MagicMock()
         with patch.object(provider_config_module.os, "name", "nt"), patch.object(
@@ -370,17 +400,17 @@ class CodexProviderConfigTests(unittest.TestCase):
         self.assertTrue(result["changed"])
         self.assertTrue(result["defaultProviderEdited"])
         self.assertTrue(result["defaultProviderCredentialsChanged"])
-        self.assertTrue(result["requiresCodexRestart"])
+        self.assertFalse(result["requiresCodexRestart"])
         self.assertEqual(result["profilePaths"], [])
         self.assertEqual(result["environmentKeys"], [])
         self.assertEqual(result["authKeys"], [CODEX_AUTH_API_KEY])
         self.assertIn('base_url = "https://new.example/v1"', updated)
-        self.assertIn("requires_openai_auth = true", updated)
-        self.assertIn('experimental_bearer_token = "keep-out-of-hud"', updated)
+        self.assertNotIn("requires_openai_auth = true", updated)
+        self.assertIn('experimental_bearer_token = "new-secret"', updated)
         self.assertNotIn('env_key = "', updated)
         self.assertEqual(auth, {"OPENAI_API_KEY": "new-secret", "other": "keep"})
         self.assertEqual(auth_value, "new-secret")
-        self.assertEqual(definition.auth_key, CODEX_AUTH_API_KEY)
+        self.assertEqual(definition.auth_key, "")
         self.assertTrue(definition.has_api_key)
 
     def test_default_custom_provider_noop_does_not_request_restart(self) -> None:
@@ -450,7 +480,7 @@ class CodexProviderConfigTests(unittest.TestCase):
         self.assertFalse(result["defaultProviderCredentialsChanged"])
         self.assertFalse(result["requiresCodexRestart"])
 
-    def test_default_environment_provider_edit_marks_credential_restart(self) -> None:
+    def test_default_environment_provider_edit_is_hot_without_clone(self) -> None:
         config_text = (
             'model_provider = "muyuan"\n\n'
             "[model_providers.muyuan]\n"
@@ -494,7 +524,7 @@ class CodexProviderConfigTests(unittest.TestCase):
 
         self.assertTrue(result["defaultProviderEdited"])
         self.assertTrue(result["defaultProviderCredentialsChanged"])
-        self.assertTrue(result["requiresCodexRestart"])
+        self.assertFalse(result["requiresCodexRestart"])
         self.assertEqual(result["environmentKeys"], ["MUYUAN_API_KEY"])
         self.assertEqual(env_values["MUYUAN_API_KEY"], "new-secret")
 
@@ -845,7 +875,8 @@ class CodexProviderConfigTests(unittest.TestCase):
         self.assertIn("[features]\nmemories = true", updated)
         self.assertIn('name = "Muyuan"', updated)
         self.assertIn('base_url = "https://new.example/v1"', updated)
-        self.assertIn('env_key = "NEW_API_KEY"', updated)
+        self.assertIn('# codex-hud-env-key: NEW_API_KEY', updated)
+        self.assertNotIn('env_key = "NEW_API_KEY"', updated)
         self.assertEqual(definitions["muyuan"].base_url, "https://new.example/v1")
         self.assertEqual(definitions["muyuan"].env_key, "NEW_API_KEY")
 
@@ -896,7 +927,7 @@ class CodexProviderConfigTests(unittest.TestCase):
         self.assertTrue(result["changed"])
         self.assertEqual(environment["_123ABC_API_KEY"], "secret")
         self.assertIn("[model_providers.123abc]", updated)
-        self.assertIn('env_key = "_123ABC_API_KEY"', updated)
+        self.assertIn('# codex-hud-env-key: _123ABC_API_KEY', updated)
         self.assertEqual(definitions["123abc"].env_key, "_123ABC_API_KEY")
 
     def test_editor_section_text_replaces_full_provider_body(self) -> None:
@@ -950,10 +981,11 @@ class CodexProviderConfigTests(unittest.TestCase):
         self.assertIn("supports_websockets = true", updated)
         self.assertNotIn('name = "Muyuan"', updated)
         self.assertEqual(environment["EDITED_API_KEY"], "edited-secret")
-        self.assertEqual(
-            definition.section_text.replace("\r\n", "\n").rstrip(),
-            section_text,
-        )
+        edited = provider_config_module._parse_toml_mapping(updated)["model_providers"]["muyuan"]
+        self.assertEqual(edited["experimental_bearer_token"], "edited-secret")
+        self.assertNotIn("env_key", edited)
+        self.assertTrue(edited["supports_websockets"])
+        self.assertEqual(definition.env_key, "EDITED_API_KEY")
 
     def test_new_provider_creates_profile_and_defaults_scope_metadata(self) -> None:
         config_text = (
@@ -1119,6 +1151,15 @@ class CodexProviderConfigTests(unittest.TestCase):
         self.assertEqual(deleted, ["MUYUAN_API_KEY"])
         self.assertIn("environmentKeys", result)
         self.assertEqual(result["environmentKeys"], ["MUYUAN_API_KEY"])
+
+    def test_delete_bearer_provider_cleans_saved_environment_key(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "config.toml"
+            path.write_text('model_provider = "custom"\n[model_providers.qiyu]\nbase_url = "https://example/v1"\nexperimental_bearer_token = "secret"\n# codex-hud-env-key: QIYU_API_KEY\n', encoding="utf-8")
+            with patch.object(provider_config_module, "_delete_user_environment_value") as delete:
+                result = delete_provider_config("qiyu", config_path=path)
+            delete.assert_called_once_with("QIYU_API_KEY")
+            self.assertEqual(result["environmentKeys"], ["QIYU_API_KEY"])
 
     def test_delete_provider_without_env_key_does_not_touch_environment(self) -> None:
         config_text = (

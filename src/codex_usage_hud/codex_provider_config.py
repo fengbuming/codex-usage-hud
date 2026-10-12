@@ -195,10 +195,10 @@ def _set_user_environment_value(name: str, value: str) -> None:
     if not key:
         raise ValueError("用户环境变量名称不能为空")
     if os.name != "nt":
-        # The feature is intentionally Windows-compatible with the existing
-        # PowerShell helper.  Updating os.environ alone would not persist the
-        # key for a subsequently launched Codex process on Unix.
-        raise RuntimeError("用户环境变量持久化目前仅支持 Windows。")
+        # config.toml now supplies persistent credentials on all platforms.
+        # Keep the HUD's child-process environment in sync on Unix as well.
+        os.environ[key] = str(value)
+        return
     import winreg
 
     with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, "Environment") as handle:
@@ -212,7 +212,7 @@ def _delete_user_environment_value(name: str) -> None:
     if not key:
         return
     if os.name != "nt":
-        # No persistent user environment variable to remove on Unix.
+        os.environ.pop(key, None)
         return
     import winreg
 
@@ -452,6 +452,20 @@ def _set_quoted_value(body: str, key: str, value: str, newline: str) -> str:
     return body + separator + f'{key} = "{escaped}"'
 
 
+def _with_bearer_key(body: str, api_key: str, newline: str, env_key: str = "") -> str:
+    # Codex resolves env_key before the inline token, so even a valid bearer
+    # cannot rescue an environment variable absent from its running process.
+    env_key = env_key or _get_quoted_value(body, "env_key")
+    if env_key:
+        body = re.sub(r"(?m)^[\t ]*# codex-hud-env-key:[^\r\n]*(?:\r?\n|$)", "", body)
+        body = body.rstrip("\r\n") + newline + f"# codex-hud-env-key: {env_key}" + newline
+    body = re.sub(r"(?m)^[\t ]*env_key[\t ]*=[^\r\n]*(?:\r?\n|$)", "", body)
+    body = _set_quoted_value(body, "experimental_bearer_token", api_key, newline)
+    return re.sub(
+        r"(?m)^[\t ]*requires_openai_auth[\t ]*=[^\r\n]*(?:\r?\n|$)", "", body
+    )
+
+
 def _replace_section_body(text: str, provider_id: str, body: str) -> str:
     section = _section_range(text, provider_id)
     if section is None:
@@ -607,10 +621,12 @@ def read_provider_definitions(
         provider_id = str(raw_id or "").strip()
         if not provider_id or not isinstance(raw_value, Mapping):
             continue
-        env_key = str(raw_value.get("env_key") or "").strip()
+        section_text = _provider_section_text(text, provider_id)
+        saved_env_key = re.search(r"(?m)^# codex-hud-env-key: ([A-Za-z_][A-Za-z0-9_]*)\r?$", section_text)
+        env_key = str(raw_value.get("env_key") or (saved_env_key.group(1) if saved_env_key else "")).strip()
         normalized_provider = provider_id.casefold()
-        requires_openai_auth = normalized_provider == "custom" or bool(
-            raw_value.get("requires_openai_auth")
+        requires_openai_auth = bool(raw_value.get("requires_openai_auth")) or (
+            normalized_provider == "custom" and not raw_value.get("experimental_bearer_token")
         )
         bearer_token = (
             ""
@@ -625,7 +641,6 @@ def read_provider_definitions(
         official_account = bool(
             auth_key and codex_auth_uses_official_account(path)
         )
-        section_text = _provider_section_text(text, provider_id)
         metadata = proxy_metadata(section_text)
         raw_base_url = str(raw_value.get("base_url") or "").strip()
         if metadata:
@@ -750,8 +765,8 @@ def save_provider_configs(
     auth_candidate_text = ""
     auth_changed = False
     default_environment_keys: set[str] = set()
-    default_restart_environment_keys: set[str] = set()
     default_bearer_changed = False
+    hot_provider_ids: list[str] = []
 
     for update in normalized_updates:
         raw_section_text = str(
@@ -782,7 +797,7 @@ def save_provider_configs(
         is_default_app_provider = (
             is_default_provider
             and (
-                normalized_requested_id == "custom"
+                (normalized_requested_id == "custom" and not uses_experimental_bearer)
                 or bool(raw_default_entry.get("requires_openai_auth"))
             )
         )
@@ -813,10 +828,11 @@ def save_provider_configs(
                 ""
                 if is_default_app_provider
                 else _get_quoted_value(section_body, "env_key")
+                or str(update.get("env_key") or update.get("envKey") or "")
             )
         provider_id, base_url, env_key, api_key, is_new = _validate_request(
             validation_update,
-            allow_api_key_without_env=is_default_app_provider,
+            allow_api_key_without_env=is_default_app_provider or uses_experimental_bearer,
         )
         normalized_id = provider_id.casefold()
         if normalized_id in seen_ids:
@@ -875,12 +891,22 @@ def save_provider_configs(
                 next_body = _set_quoted_value(body, "base_url", base_url, newline)
                 if env_key or re.search(r"(?m)^[\t ]*env_key[\t ]*=", body):
                     next_body = _set_quoted_value(next_body, "env_key", env_key, newline)
-            if uses_experimental_bearer and api_key:
-                newline = _preferred_newline(candidate_text)
-                next_body = _set_quoted_value(
-                    next_body, "experimental_bearer_token", api_key, newline
-                )
             candidate_text = _replace_section_body(candidate_text, provider_id, next_body)
+
+        # Store credentials on the original provider: new threads hot-read
+        # config.toml, whereas the running backend cannot inherit new env keys.
+        # An unchanged auth.json key keeps the existing authentication mode.
+        hot_key = api_key or (existing.bearer_token if existing else "")
+        if is_default_app_provider and api_key == default_auth_before:
+            hot_key = ""
+        if hot_key:
+            section = _section_range(candidate_text, provider_id)
+            newline = _preferred_newline(candidate_text)
+            body = _with_bearer_key(section[2], hot_key, newline, env_key)
+            candidate_text = _replace_section_body(candidate_text, provider_id, body)
+            hot_provider_ids.append(provider_id)
+            if is_default_provider:
+                default_bearer_changed = hot_key != str(raw_default_entry.get("experimental_bearer_token") or "")
 
         if "use_proxy" in update:
             section = _section_range(candidate_text, provider_id)
@@ -919,13 +945,11 @@ def save_provider_configs(
             target_env_value = _user_environment_value(env_key)
             if is_default_provider:
                 default_environment_keys.add(env_key.casefold())
-                if not uses_experimental_bearer:
-                    default_restart_environment_keys.add(env_key.casefold())
-            if env_key not in env_before:
+            if env_key and env_key not in env_before:
                 env_before[env_key] = target_env_value
-            if api_key:
+            if api_key and env_key:
                 env_after[env_key] = api_key
-            elif not target_env_value:
+            elif not api_key and not target_env_value and not uses_experimental_bearer:
                 if previous_env_key and previous_env_value and previous_env_key == env_key:
                     env_after[env_key] = previous_env_value
                 elif is_new or not existing or previous_env_key != env_key:
@@ -945,7 +969,7 @@ def save_provider_configs(
     env_written: list[str] = []
     try:
         if config_changed:
-            _write_text_atomically(path, candidate_text, original_text)
+            _write_text_atomically(path, candidate_text, original_text, private=bool(hot_provider_ids))
             config_written = True
         for profile_path, profile_text in profiles_to_create:
             if _write_new_text_atomically(profile_path, profile_text):
@@ -1012,14 +1036,10 @@ def save_provider_configs(
         str(item or "").casefold() in default_environment_keys
         for item in env_written
     )
-    default_restart_environment_changed = any(
-        str(item or "").casefold() in default_restart_environment_keys
-        for item in env_written
-    )
     default_credentials_changed = bool(
         auth_changed or default_environment_changed or default_bearer_changed
     )
-    requires_codex_restart = bool(auth_changed or default_restart_environment_changed)
+    requires_codex_restart = bool(auth_changed and default_provider not in {item.casefold() for item in hot_provider_ids})
     return {
         "changed": bool(config_changed or created_profiles or env_written or auth_changed),
         "providerIds": provider_ids,
@@ -1034,6 +1054,7 @@ def save_provider_configs(
         ),
         "defaultProviderCredentialsChanged": default_credentials_changed,
         "requiresCodexRestart": requires_codex_restart,
+        "hotProviderIds": hot_provider_ids,
     }
 
 
@@ -1042,7 +1063,7 @@ def set_default_codex_provider(
     *,
     config_path: str | Path | None = None,
 ) -> dict[str, object]:
-    """Set the top-level ``model_provider`` key without touching other TOML.
+    """Switch default and make saved third-party credentials hot-readable.
 
     Codex reads this default when starting a thread. The renderer caller must
     also invalidate already-prewarmed threads: they retain their original
@@ -1067,8 +1088,6 @@ def set_default_codex_provider(
     original_text = _read_text_exact(path)
     parsed = _parse_toml_mapping(original_text)
     current = str(parsed.get("model_provider") or "").strip().casefold()
-    if current == normalized:
-        return {"changed": False, "providerId": requested}
     raw_model_providers = parsed.get("model_providers")
     defined_ids = (
         {
@@ -1094,11 +1113,30 @@ def set_default_codex_provider(
     candidate_head = _set_quoted_value(head, "model_provider", normalized, newline)
     # 顶层键必须与后续表头用换行分隔（head 为空或原文件末行无换行时都会被粘在一起）。
     candidate_head = candidate_head.rstrip("\r\n") + newline
-    candidate_text = candidate_head + tail
+    candidate_text = original_text if current == normalized else candidate_head + tail
+    # Also upgrade previously saved env-only providers when switching to them.
+    # This covers keys added during this Desktop process's lifetime without
+    # requiring the user to reopen the provider editor and save again.
+    providers = raw_model_providers if isinstance(raw_model_providers, Mapping) else {}
+    entry = next(
+        (value for key, value in providers.items() if str(key).casefold() == normalized), None
+    )
+    hot_key = ""
+    if isinstance(entry, Mapping) and not entry.get("requires_openai_auth") and normalized != "custom":
+        hot_key = str(entry.get("experimental_bearer_token") or "") or _user_environment_value(
+            str(entry.get("env_key") or "")
+        )
+        if hot_key:
+            section = _section_range(candidate_text, requested)
+            candidate_text = _replace_section_body(
+                candidate_text, requested, _with_bearer_key(section[2], hot_key, newline)
+            )
     candidate_parsed = _parse_toml_mapping(candidate_text)
     if str(candidate_parsed.get("model_provider") or "").strip().casefold() != normalized:
         raise ValueError("config.toml 顶层 model_provider 写入后校验失败。")
-    _write_text_atomically(path, candidate_text, original_text)
+    if candidate_text == original_text:
+        return {"changed": False, "providerId": requested}
+    _write_text_atomically(path, candidate_text, original_text, private=bool(hot_key))
     return {"changed": True, "providerId": requested, "configPath": str(path)}
 
 
@@ -1428,7 +1466,8 @@ def delete_provider_config(
     if isinstance(raw_providers, Mapping):
         raw_entry = raw_providers.get(provider)
         if isinstance(raw_entry, Mapping):
-            provider_env_key = str(raw_entry.get("env_key") or "").strip()
+            definition = read_provider_definitions(path).get(normalized_provider)
+            provider_env_key = definition.env_key if definition else str(raw_entry.get("env_key") or "").strip()
 
     candidate_text, removed_tables = _remove_provider_tables(
         original_text,
@@ -1715,9 +1754,9 @@ def send_cli_chat_probe(
     env_key = definition.env_key
     if not base_url:
         return {"ok": False, "error": f"Provider {provider} 未配置 base_url。"}
-    if not env_key:
+    if not env_key and not definition.bearer_token:
         return {"ok": False, "error": f"Provider {provider} 未配置用户环境变量名称。"}
-    api_key = _user_environment_value(env_key)
+    api_key = definition.bearer_token or _user_environment_value(env_key)
     if not api_key:
         return {
             "ok": False,

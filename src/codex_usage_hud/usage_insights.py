@@ -957,7 +957,7 @@ def _provider_registry_payload(context: object) -> dict[str, object]:
                 if (
                     str(provider or "").strip().lower() == app_provider
                     and (
-                        str(provider or "").strip().lower() == "custom"
+                        (str(provider or "").strip().lower() == "custom" and not getattr(entry, "bearer_token", ""))
                         or bool(getattr(entry, "requires_openai_auth", False))
                     )
                 )
@@ -969,7 +969,7 @@ def _provider_registry_payload(context: object) -> dict[str, object]:
                 if (
                     str(provider or "").strip().lower() == app_provider
                     and (
-                        str(provider or "").strip().lower() == "custom"
+                        (str(provider or "").strip().lower() == "custom" and not getattr(entry, "bearer_token", ""))
                         or bool(getattr(entry, "requires_openai_auth", False))
                     )
                 )

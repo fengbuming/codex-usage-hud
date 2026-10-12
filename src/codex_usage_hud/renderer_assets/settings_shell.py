@@ -2074,11 +2074,17 @@ _TEXT_PREFIX = r"""
       function providerSectionBasicString(text, key) {
         const escapedKey = String(key || "").replace(/[.*+?^${}()|[\\]\\\\]/g, "\\$&");
         const match = String(text || "").match(new RegExp("^[\t ]*" + escapedKey + "[\t ]*=[\t ]*\"((?:\\.|[^\"\\\r\n])*)\"", "m"));
+        if (!match && key === "env_key") {
+          return String(text || "").match(/^# codex-hud-env-key: ([A-Za-z_][A-Za-z0-9_]*)\r?$/m)?.[1] || "";
+        }
         if (!match) return "";
         return match[1].replace(/\\(["\\])/g, "$1");
       }
 
       function setProviderSectionBasicString(text, key, value) {
+        if (key === "env_key" && /^# codex-hud-env-key:/m.test(String(text || ""))) {
+          return String(text || "").replace(/^# codex-hud-env-key:[^\r\n]*/m, `# codex-hud-env-key: ${String(value || "").trim()}`);
+        }
         const escapedKey = String(key || "").replace(/[.*+?^${}()|[\\]\\\\]/g, "\\$&");
         const escapedValue = tomlBasicStringEscape(value);
         const pattern = new RegExp("^([\t ]*" + escapedKey + "[\t ]*=[\t ]*)\"(?:\\.|[^\"\\\r\n])*\"([\t ]*(?:#.*)?)$", "m");
@@ -2946,10 +2952,9 @@ _TEXT_PREFIX = r"""
         const normalizedProvider = String(provider || "").trim().toLowerCase();
         const isAppProvider = !isNew && normalizedProvider === String(settingsProviderDraft.appProvider || "").trim().toLowerCase();
         const registryEntry = settings.provider_registry?.[normalizedProvider] || {};
-        // 只有 custom / requires_openai_auth 的默认供应商走 auth.json；其它
-        // 默认供应商仍可编辑，但凭据保存在其 env_key 指向的用户环境变量中。
+        // 原 auth.json 供应商第一次修改 Key 后也改为同 ID 的配置凭据。
         const usesCodexAuth = isAppProvider && (
-          normalizedProvider === "custom" || registryEntry.requiresOpenaiAuth === true
+          (normalizedProvider === "custom" && registryEntry.usesExperimentalBearer !== true) || registryEntry.requiresOpenaiAuth === true
         );
         const usesExperimentalBearer = registryEntry.usesExperimentalBearer === true;
         // 官方账号登录时，任意默认供应商都不可编辑（不限于 custom）。
@@ -3079,13 +3084,7 @@ _TEXT_PREFIX = r"""
                 <span>此处内容会写回用户 config.toml；Base URL 和环境变量名会与上面的字段同步。</span>
               </label>
             </details>
-            <div class="codex-usage-hud-settings-confirm-body">${usesExperimentalBearer
-              ? "保存设置后会同步更新 config.toml 中的内嵌 bearer token 和对应用户环境变量，新的 Codex 会话立即生效，无需重启。编辑时已填充当前密钥，点击 👁 可查看明文。"
-              : usesCodexAuth
-              ? "保存设置后会更新主 config.toml 的默认 Provider 段，Base URL / 名称等修改保存后立即生效（新会话，无需重启）；API key 写入 Codex auth.json，编辑时已填充当前密钥，点击 👁 可查看明文。修改 API key 后需重启 Codex Desktop 才能确保生效，保存后会提示你选择立即重启或稍后重启。"
-              : isAppProvider
-                ? "保存设置后会更新主 config.toml 的默认 Provider 段，Base URL / 名称等修改保存后立即生效（新会话，无需重启）；API key 只写入用户环境变量，不会保存到 HUD 配置。已运行的 Codex Desktop 不会获得新的环境变量值，因此修改 API key 后会提示你选择立即重启或稍后重启。"
-                : "保存设置后会更新用户的 config.toml，保存后立即生效（新会话，无需重启）；API key 只写入用户环境变量，不会保存到 HUD 配置。编辑时已填充当前密钥，点击 👁 可查看明文。"}</div>
+            <div class="codex-usage-hud-settings-confirm-body">保存后新会话可直接使用，无需重启。API key 会保存在 Codex config.toml 中；供应商名称、ID 和已有会话保留。</div>
             <div class="codex-usage-hud-provider-config-status" data-provider-config-status="true" role="alert" aria-live="polite"></div>
             <div class="codex-usage-hud-provider-config-proxy-note">此供应商的代理选择同时用于 Desktop 和 CLI；Desktop 使用此设置时需保持 HUD 运行。</div>
             <div class="codex-usage-hud-settings-confirm-actions">
@@ -3209,7 +3208,7 @@ _TEXT_PREFIX = r"""
         const providerRegistryEntry = settings.provider_registry?.[provider] || {};
         // 与后端 is_default_app_provider 判定一致：仅 custom / requires_openai_auth 默认供应商走 auth.json 链路。
         const usesCodexAuth = isAppProvider && (
-          provider === "custom" || providerRegistryEntry.requiresOpenaiAuth === true
+          (provider === "custom" && providerRegistryEntry.usesExperimentalBearer !== true) || providerRegistryEntry.requiresOpenaiAuth === true
         );
         const usesExperimentalBearer = providerRegistryEntry.usesExperimentalBearer === true;
         if (isAppProvider && providerRegistryEntry.officialAccount === true) {
@@ -3270,40 +3269,7 @@ _TEXT_PREFIX = r"""
           );
           return false;
         }
-        // 默认供应商编辑：仅修改凭据（auth.json 或用户环境变量）才需要重启确认；
-        // Base URL / 名称 / wire_api 等 config.toml 字段已实测可热读，保存后即时生效，
-        // 直接提交保存。弹窗按钮会设置 providerRestartDecision 并再次调用本函数完成提交。
-        const apiKeyChanged = isAppProvider
-          && !!apiKey
-          && apiKey !== String(existingCodex?.currentApiKey || "");
-        if (isAppProvider && apiKeyChanged && !usesExperimentalBearer && providerRestartDecision === null) {
-          openProviderRestartConfirmDialog(provider);
-          return;
-        }
-        const restartDecision = providerRestartDecision;
-        providerRestartDecision = null;
-        if (restartDecision === "clone") {
-          // 克隆并切换：新 key 写入新供应商段的 experimental_bearer_token
-          // （config.toml 字段，实测运行中的 Codex 热读并用于下一个请求，无需重启），
-          // 顶层默认同步切到新供应商；不写 auth.json。原供应商段保留。
-          const requestId = typedSettingsRequestId("provider-clone-switch");
-          beginProviderCloneWorkflow(requestId, displayName, provider);
-          const submitted = submitSettingsCommand(
-            { action: "providerCloneSwitch", provider, apiKey, requestId, useProxy, proxyPort },
-            `正在克隆供应商 ${displayName} 并切换...`,
-          );
-          if (submitted) {
-            codexProviderDirty.clear();
-            renderSettingsProviderTabs();
-          } else {
-            finishProviderCloneWorkflow(requestId);
-          }
-          return true;
-        }
-        // 默认供应商未修改 API key 的保存：config.toml 字段热读，免重启即可生效。
-        if (isAppProvider && (!apiKeyChanged || usesExperimentalBearer)) {
-          codexProviderHotSavePending = true;
-        }
+        // API key 随原供应商配置热读；保存后自动刷新预创建会话。
         if (isNew) {
           const sourceProvider = String(sourceNode?.value || "").trim().toLowerCase();
           const sourceEntry = settingsProviderDraft.providers[sourceProvider];
@@ -3362,9 +3328,6 @@ _TEXT_PREFIX = r"""
         }
         // 编辑供应商只保存 provider 配置（Base URL / 环境变量 / API key / config.toml 段），
         // 不提交 model 单价，避免触发价格变更校验或「保存新价格」确认流程。
-        if (isAppProvider && restartDecision) {
-          pendingProviderRestartAfterSave = restartDecision;
-        }
         const submitted = submitSettingsCommand(
           { action: "save", codexProviders: collectCodexProviderUpdates() },
           `正在保存供应商 ${displayName} 配置...`,
@@ -3769,8 +3732,6 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
       let providerRestartDecision = null;
       // 保存提交后待执行的重启动作，由 applySettingsCommandStatus 在保存成功后消费。
       let pendingProviderRestartAfterSave = null;
-      // 默认供应商免重启保存（未修改 API key）成功后的待展示提示。
-      let codexProviderHotSavePending = false;
       let providerCloneRequestId = "";
       let providerCloneLoadingTimer = null;
       let providerClonePollTimer = null;
@@ -5245,6 +5206,7 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
         }
       }
 
+      let lastProviderSaveRefreshRequestId = "";
       function applySettingsCommandStatus(payload) {
         const status = payload?.settingsCommandStatus;
         sessionViewDomain.applySearchJump(status?.sessionCleanupSessionJump);
@@ -5277,6 +5239,20 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
               provider,
               ok: !failed && !!provider,
               message: status?.message,
+            });
+          }
+        }
+        if (status?.codexProvidersSaved && status.kind !== "error") {
+          const requestId = String(status.requestId || "");
+          if (requestId && requestId !== lastProviderSaveRefreshRequestId) {
+            lastProviderSaveRefreshRequestId = requestId;
+            refreshCodexProviderRuntime().then(() => {
+              if (lastProviderSaveRefreshRequestId !== requestId) return;
+              clearSettingsRestartPrompt();
+              setSettingsStatus("供应商已保存，新会话可直接使用，无需重启。", "");
+            }).catch((error) => {
+              if (lastProviderSaveRefreshRequestId !== requestId) return;
+              setSettingsStatus(`配置已保存，但新会话配置刷新失败：${String(error?.message || error)}。请重新切换供应商后再新建会话。`, "error");
             });
           }
         }
@@ -5514,15 +5490,7 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
             }
           }
           if (!providerDeleteTerminalHandled) {
-            // 默认供应商免重启保存（未修改 API key）：config.toml 字段已实测热读，
-            // 保存成功后直接提示已生效，并清掉任何历史遗留的重启提示。
-            if (codexProviderHotSavePending && status.kind !== "error") {
-              codexProviderHotSavePending = false;
-              clearSettingsRestartPrompt();
-              setSettingsStatus("已保存，新的 Codex 会话将立即生效（无需重启）。", "");
-            } else {
-              codexProviderHotSavePending = false;
-              if (status.restartVisible) {
+            if (status.restartVisible) {
               // 默认供应商保存后，若用户已在弹窗中做出重启决策，则按决策执行，
               // 不再走旧的「状态栏 + 底部立即重启按钮」流程。
               if (pendingProviderRestartAfterSave === "now") {
@@ -5542,7 +5510,6 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
               // 避免残留状态影响后续操作。
               pendingProviderRestartAfterSave = null;
               setSettingsStatus(status.message || "", status.kind || "");
-            }
             }
           }
           // 重启提示是粘性的：一旦因默认供应商等配置显示，就只能由用户
@@ -7735,11 +7702,11 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
         throw new Error("未找到 Codex 会话管理器");
       }
 
-      async function refreshCodexProviderRuntime(provider, requestId = "") {
+      async function refreshCodexProviderRuntime(provider = "", requestId = "") {
         const { manager, scope } = await resolveCodexProviderRuntime();
         const read = await manager.sendRequest("config/read", { includeLayers: false, cwd: null });
         const actual = String(read?.config?.model_provider || "openai").trim().toLowerCase();
-        if (actual !== provider) throw new Error(`有效默认供应商仍为 ${actual}`);
+        if (provider && actual !== provider) throw new Error(`有效默认供应商仍为 ${actual}`);
         // Refresh native config caches before clearing prewarm so any subsequent
         // prewarm reads the selected provider. Keep existing threads and drafts.
         await scope.queryClient.invalidateQueries({ queryKey: ["user-saved-config"] });
