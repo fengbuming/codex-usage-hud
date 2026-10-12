@@ -329,11 +329,13 @@ class DesktopWorkOverlay:
 
     def show_system_notice(
         self, *, title: str, message: str, dismissible: bool = False,
+        related_request_id: str = "",
     ) -> bool:
         """Publish a notice without replacing session bubbles."""
         if self._closed:
             return False
-        self._system_action = None
+        if not related_request_id:
+            self._system_action = None
         self._system_notice = {
             "id": WORK_OVERLAY_SYSTEM_NOTICE_ID,
             "title": str(title or "Codex HUD"),
@@ -342,6 +344,7 @@ class DesktopWorkOverlay:
             "persistent": True,
             "dismissible": dismissible,
             "instanceId": uuid.uuid4().hex,
+            "relatedRequestId": related_request_id,
         }
         if not self._runtime_available():
             self._report_unavailable_once(self._unavailable_reason)

@@ -69,13 +69,14 @@ def test_overlay_command_retries_once_after_cdp_transport_failure() -> None:
     prepare.assert_called_once()
 
 
-def test_overlay_command_never_activates_cli_session() -> None:
+def test_invalid_cli_target_never_activates_desktop_session() -> None:
     controller = SimpleNamespace(activate_session=MagicMock())
     result = handle_command(
         {"action": "activateSession", "sessionId": "cli-1", "clientKind": "cli"},
         controller,
     )
-    assert result is None
+    assert not result.ok
+    assert result.backend == "cli-terminal"
     controller.activate_session.assert_not_called()
 
 

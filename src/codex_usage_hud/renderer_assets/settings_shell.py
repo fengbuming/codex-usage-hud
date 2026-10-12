@@ -677,6 +677,7 @@ _TEXT_PREFIX = r"""
         const defaultProvider = String(options.defaultProvider || "").trim().toLowerCase();
         const args = [];
         const model = String(codexCliState.model || "").trim();
+        if (options.codex?.privateBackend && ["powershell", "cmd"].includes(shell)) args.push("--no-daemon");
         if (profile) {
           args.push("--profile", profile);
         } else if (provider && provider !== defaultProvider && /^[A-Za-z0-9_-]+$/.test(provider)) {

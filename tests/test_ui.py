@@ -4148,7 +4148,7 @@ class BudgetHelperTests(unittest.TestCase):
 
         self.assertTrue(_workdir_external_link_for_item(completed_item))
         self.assertTrue(_workdir_external_link_for_item(active_item))
-        self.assertFalse(_workdir_external_link_for_item(cli_item))
+        self.assertTrue(_workdir_external_link_for_item(cli_item))
         self.assertEqual(
             _workdir_link_opacity_for_item(completed_item, 0.22, True),
             1.0,
@@ -4797,10 +4797,11 @@ class BudgetHelperTests(unittest.TestCase):
             session_controller,
         )
 
-        self.assertIsNone(result)
+        self.assertFalse(result.ok)
+        self.assertEqual(result.backend, "cli-terminal")
         session_controller.activate_session.assert_not_called()
 
-    def test_cli_workdir_is_plain_text_without_hover_or_click(self) -> None:
+    def test_cli_workdir_exposes_terminal_jump_hotspot(self) -> None:
         cli_item = {
             "clientKind": "cli",
             "sessionId": "cli-thread",
@@ -4814,8 +4815,8 @@ class BudgetHelperTests(unittest.TestCase):
             "status": "running",
         }
 
-        self.assertFalse(_workdir_clickable_for_item(cli_item))
-        self.assertFalse(_workdir_link_hover_visible_for_item(cli_item))
+        self.assertTrue(_workdir_clickable_for_item(cli_item))
+        self.assertTrue(_workdir_link_hover_visible_for_item(cli_item))
         self.assertTrue(_workdir_clickable_for_item(app_item))
         self.assertTrue(_workdir_link_hover_visible_for_item(app_item))
 

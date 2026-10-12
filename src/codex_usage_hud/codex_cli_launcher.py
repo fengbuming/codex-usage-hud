@@ -17,12 +17,14 @@ import shutil
 import subprocess
 import sys
 import uuid
+from functools import lru_cache
 
 from .process_environment import (
     PYINSTALLER_INTERNAL_ENV_PREFIX,
     external_process_environment,
 )
 from .codex_provider_config import read_provider_definitions, default_codex_config_path
+from .cli_launch_registry import CLI_LAUNCH_ID_ENV, register_cli_launch, remove_cli_launch
 
 
 POWERSHELL_INSTALL_URL = (
@@ -667,7 +669,9 @@ def build_codex_cli_command(
         else:
             lines.append(f"cd -- {quoted_workdir}")
     lines.append(command)
-    return "\n".join(lines)
+    result = "\n".join(lines)
+    return (_cli_command_with_private_backend(result)
+            if _platform_name() == "windows" and shell_name in {"powershell", "cmd"} else result)
 
 
 def discover_codex_cli_options(
@@ -723,6 +727,8 @@ def discover_codex_cli_options(
         "codex": {
             "available": bool(codex_command),
             "command": "codex",
+            "privateBackend": bool(_platform_name(platform_name) == "windows" and codex_command
+                                   and _supports_private_cli_backend(codex_command)),
         },
         "proxy": proxy,
         "permissions": [
@@ -778,6 +784,10 @@ def _terminal_process_command(
                 f"{_shell_quote(title, shell)}"
             )
         command_text = f"{title_command}\n{command_text}"
+    if shell == "cmd":
+        # cmd /K executes only the first physical line passed on its command
+        # line. Keep title/env/cwd setup and Codex in the same command sequence.
+        command_text = " & ".join(line for line in command_text.splitlines() if line.strip())
     if kind == "windows_terminal":
         args = [executable]
         if open_as_tab:
@@ -994,6 +1004,34 @@ def _windows_terminal_host(
     return None
 
 
+@lru_cache(maxsize=8)
+def _supports_private_cli_backend(executable: str) -> bool:
+    try:
+        command = [executable, "--help"]
+        if Path(executable).suffix.lower() in {".cmd", ".bat"}:
+            command = [os.environ.get("COMSPEC", "cmd.exe"), "/D", "/C", executable, "--help"]
+        result = subprocess.run(command, capture_output=True, text=True, timeout=2,
+                                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                                env=external_process_environment(), check=False)
+        return result.returncode == 0 and "--no-daemon" in str(result.stdout)
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def _cli_command_with_private_backend(command: str) -> str:
+    """Only add an advertised CLI option to direct Codex command lines."""
+    executable = shutil.which("codex")
+    if not executable or "--no-daemon" in command or not _supports_private_cli_backend(executable):
+        return command
+    # Commands from the renderer may contain env/cwd setup on preceding lines.
+    # Leave shell pipelines, wrappers, and arbitrary user commands intact.
+    for line in command.splitlines():
+        if re.match(r"\s*codex(?:\s|$)", line) and not any(token in line for token in ("|", ";", "&&")):
+            replacement = re.sub(r"^(\s*codex)(?=\s|$)", r"\1 --no-daemon", line, count=1)
+            return command.replace(line, replacement, 1)
+    return command
+
+
 def launch_codex_cli(
     *,
     terminal_id: str,
@@ -1071,6 +1109,12 @@ def launch_codex_cli(
         else 0
     )
     title = build_codex_cli_title(provider=provider, workdir=str(path))
+    terminal_command = _command_with_codex_home(
+        command_text, codex_home=resolved_codex_home, shell=launch_terminal.get("shell"),
+    )
+    shell = str(launch_terminal.get("shell") or "powershell")
+    if platform == "windows" and shell in {"powershell", "cmd"}:
+        terminal_command = _cli_command_with_private_backend(terminal_command)
     if commit_spawn is not None:
         try:
             if not bool(commit_spawn()):
@@ -1081,26 +1125,35 @@ def launch_codex_cli(
         return cancelled_result()
     # Redirected stdio makes PowerShell treat -NoExit as non-interactive and
     # exit after -Command completes. Let the new terminal own its stdio.
-    terminal_command = _command_with_codex_home(
-        command_text,
-        codex_home=resolved_codex_home,
-        shell=launch_terminal.get("shell"),
-    )
-    process = subprocess.Popen(
-        _terminal_process_command(
-            launch_terminal,
-            terminal_command,
-            str(path),
-            open_as_tab=opened_as_tab,
-            title=title,
-        ),
-        cwd=str(path),
-        env=_launch_environment(
-            platform_name=platform_name,
-            codex_home=resolved_codex_home,
-        ),
-        creationflags=creationflags,
-    )
+    launch_record = None
+    if platform == "windows" and shell in {"powershell", "cmd"}:
+        launch_record = register_cli_launch(title or f"Codex CLI · {path.name}",
+                                           str(launch_terminal.get("kind") or "shell"), str(path))
+        title = launch_record["title"]
+        token = launch_record["launchId"]
+        prefix = (f"$env:{CLI_LAUNCH_ID_ENV} = '{token}'" if shell == "powershell"
+                  else f'set "{CLI_LAUNCH_ID_ENV}={token}"')
+        terminal_command = f"{prefix}\n{terminal_command}"
+    try:
+        process = subprocess.Popen(
+            _terminal_process_command(
+                launch_terminal,
+                terminal_command,
+                str(path),
+                open_as_tab=opened_as_tab,
+                title=title,
+            ),
+            cwd=str(path),
+            env=_launch_environment(
+                platform_name=platform_name,
+                codex_home=resolved_codex_home,
+            ),
+            creationflags=creationflags,
+        )
+    except Exception:
+        if launch_record:
+            remove_cli_launch(launch_record["launchId"])
+        raise
     return {
         "pid": int(process.pid),
         "terminal": str(terminal.get("label") or terminal_id),
@@ -1109,6 +1162,7 @@ def launch_codex_cli(
         "openedAsTab": opened_as_tab,
         "launchMode": "new-tab" if opened_as_tab else "new-window",
         "title": title,
+        "launchId": launch_record["launchId"] if launch_record else "",
     }
 
 

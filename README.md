@@ -60,6 +60,7 @@ Windows 下从 Codex 内置终端等受 Job 生命周期管理的环境启动时
 
 - Renderer-only：Codex 暴露配置的本地 CDP target 时，HUD 直接显示在 Codex App 内部；HUD 存活期间新启动的 Codex 会按来源区分为直接接入或一次性 CDP 接管，已有/不明确的实例仍在右上角启动面板提供显式重启入口，不回退到 Qt/Tk 独立窗口。
 - PySide6 桌面会话气泡：源码 / pip 安装时可通过 `codex-usage-hud[desktop-overlay]` 启用桌面级方形运行气泡和完成态圆气泡；主 HUD 仍保持 renderer-only。
+- Windows CLI 会话气泡支持点击工作目录，恢复对应的 Windows Terminal 标签页或独立 PowerShell/cmd 窗口。HUD 启动的终端具有唯一标签，支持 `--no-daemon` 的 CLI 会采用独立后台，并在命令预览中显示该选项，以便准确核验会话归属。手动启动的 CLI 仅在归属可确认时跳转；共享后台、重复标签标题及 VS Code/WSL 终端无法确认时会提示。CLI 已退出时，可从会话管理中选择“在 CLI 中恢复”。
 - Codex 主题跟随：Renderer 模式优先跟随 live 主题；没有可用 CDP target 时会保留诊断，提示重新以调试端口启动 Codex App。
 - 实时 token 与金额：输入、缓存输入、输出、推理、合计、缓存率和实时 USD 估算同屏展示。
 - 日/周预算：自定义日额度、周额度、刷新时间、周起始日和提醒阈值。

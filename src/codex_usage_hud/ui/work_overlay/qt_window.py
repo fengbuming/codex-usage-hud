@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import sys
 import time
+import uuid
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -176,6 +177,7 @@ class OverlayWindow(OverlayTransitionsMixin, OverlayRenderingMixin, QWidget):
             self._last_payload_signature = ""
             self._last_structure_signature = ""
             self._stable_current_session_id = ""
+            self._switch_pending_request_id = ""
             self._raw_items: list[Mapping[str, object]] = []
             self._previous_visible_items: list[Mapping[str, object]] = []
             self._command_path = _work_overlay_command_path(path)
@@ -352,6 +354,7 @@ class OverlayWindow(OverlayTransitionsMixin, OverlayRenderingMixin, QWidget):
             self.reposition_interactive_windows()
 
         def _clear_switch_pending(self) -> None:
+            self._switch_pending_request_id = ""
             self._switch_pending_key = ""
             self._switch_pending_started_at = 0.0
             self._switch_pending_completed_at = 0.0
@@ -471,14 +474,13 @@ class OverlayWindow(OverlayTransitionsMixin, OverlayRenderingMixin, QWidget):
                     }
                 )
                 return
-            if _item_is_cli(item):
-                return
             session_id = str(item.get("sessionId") or item.get("id") or "").strip()
             target_title = str(item.get("targetTitle") or item.get("title") or "").strip()
             if not session_id and not target_title:
                 return
             payload = {
                 "action": "activateSession",
+                "requestId": uuid.uuid4().hex,
                 "sessionId": session_id,
                 "targetTitle": target_title,
                 "title": str(item.get("title") or "").strip(),
@@ -494,6 +496,7 @@ class OverlayWindow(OverlayTransitionsMixin, OverlayRenderingMixin, QWidget):
             if not self._append_command(payload):
                 return
             self._set_switch_pending(item)
+            self._switch_pending_request_id = str(payload["requestId"])
 
         def trigger_system_action(self, item: Mapping[str, object]) -> None:
             if not _item_is_system_action(item):
@@ -707,6 +710,10 @@ class OverlayWindow(OverlayTransitionsMixin, OverlayRenderingMixin, QWidget):
             should_close = bool(state.get("close"))
             system_action = _normalized_system_action(state.get("systemAction"))
             system_notice = _normalized_system_notice(state.get("systemNotice"))
+            raw_notice = state.get("systemNotice")
+            if (isinstance(raw_notice, Mapping) and self._switch_pending_request_id
+                    and raw_notice.get("relatedRequestId") == self._switch_pending_request_id):
+                self._clear_switch_pending()
             rest_reminder = _normalized_rest_reminder(state.get("restReminder"))
             if self._owner_pid is not None and not self._process_exists(self._owner_pid):
                 self.shutdown("owner-gone")

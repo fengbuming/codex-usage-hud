@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import json
+from pathlib import Path
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 import sys
@@ -74,6 +76,8 @@ def build_parser() -> argparse.ArgumentParser:
         version=f"%(prog)s {__version__}",
         help="Print the installed codex-usage-hud version and exit.",
     )
+    parser.add_argument("--cli-console-probe", type=int, help=argparse.SUPPRESS)
+    parser.add_argument("--cli-console-probe-output", help=argparse.SUPPRESS)
     parser.add_argument(
         "--once",
         action="store_true",
@@ -283,6 +287,16 @@ def main(
     configure_stdout()
     parser = (services.parser_factory or build_parser)()
     args = parser.parse_args(argv)
+    if getattr(args, "cli_console_probe", None) is not None:
+        from .platforms.windows_cli import WindowsCliApi
+        if args.cli_console_probe <= 0:
+            parser.error("CLI process ID must be positive")
+        result = json.dumps(WindowsCliApi().console_info(args.cli_console_probe))
+        if args.cli_console_probe_output:
+            Path(args.cli_console_probe_output).write_text(result, encoding="utf-8")
+        else:
+            print(result)
+        return 0
     if getattr(args, "daemon_launch_broker", None) is not None:
         if services.resume_broker is None:
             parser.error("independent daemon broker is unavailable")

@@ -5,8 +5,12 @@ from __future__ import annotations
 import os
 import sys
 import unittest
+import tempfile
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -28,10 +32,49 @@ from codex_usage_hud.ui.work_overlay.constants import (
     WORK_OVERLAY_BODY_MAX_LINES,
 )
 from codex_usage_hud.ui.work_overlay.qt_rendering import OverlayRenderingMixin
-from codex_usage_hud.ui.work_overlay.qt_window import _multiline_elided_text
+from codex_usage_hud.ui.work_overlay.qt_window import OverlayWindow, _multiline_elided_text
 
 
 class WorkOverlayRenderingTests(unittest.TestCase):
+    def test_cli_failure_clears_only_the_matching_pending_click(self) -> None:
+        state = {"updatedAt": time.time(), "items": [], "systemNotice": {
+            "id": "cli-jump", "title": "CLI jump", "message": "CLI has exited",
+            "relatedRequestId": "older-request", "dismissible": True,
+        }}
+        with tempfile.TemporaryDirectory() as directory:
+            window = OverlayWindow(app=self._app, path=Path(directory) / "state.json",
+                                   read_state=lambda: state, owner_pid=None, process_exists=lambda _: True,
+                                   stale_seconds=20, item_limit=2, overlay_alpha=1, hover_alpha=1,
+                                   heartbeat_path=Path(directory) / "heartbeat", header_title_limit=28)
+            try:
+                window._switch_pending_request_id = "current-request"
+                window.poll_state()
+                self.assertEqual(window._switch_pending_request_id, "current-request")
+                state["systemNotice"]["relatedRequestId"] = "current-request"
+                window.poll_state()
+                self.assertEqual(window._switch_pending_request_id, "")
+            finally:
+                window.close()
+                window.deleteLater()
+                self._app.processEvents()
+
+    def test_cli_bubble_footer_emits_a_correlated_terminal_jump(self) -> None:
+        rendering = self._rendering()
+        item = {"id": "cli-session", "sessionId": "10000000-0000-4000-8000-000000000abc",
+                "title": "CLI Session", "clientKind": "cli", "status": "running",
+                "workdir": r"E:\Project\repo", "lastText": "CLI work", "activitySteps": ()}
+        rendering._build_item_card(item)
+        self.assertTrue(any(anchor[1]["sessionId"] == item["sessionId"]
+                            for anchor in rendering._workdir_anchors))
+        helper = SimpleNamespace(_owner_pid=None, _append_command=MagicMock(return_value=True),
+                                 _set_switch_pending=MagicMock())
+        OverlayWindow.switch_item(helper, item)
+        command = helper._append_command.call_args.args[0]
+        self.assertEqual(command["action"], "activateSession")
+        self.assertEqual(command["clientKind"], "cli")
+        self.assertEqual(command["sessionId"], item["sessionId"])
+        self.assertEqual(helper._switch_pending_request_id, command["requestId"])
+
     @classmethod
     def setUpClass(cls) -> None:
         os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")

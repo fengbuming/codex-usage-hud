@@ -1128,7 +1128,7 @@ def _overlay_footer_selection(item: Mapping[str, object]) -> tuple[str, str]:
 
 def _workdir_clickable_for_item(item: Mapping[str, object]) -> bool:
     if _item_is_cli(item):
-        return False
+        return bool(str(item.get("sessionId") or "").strip()) and not bool(item.get("isSubagent") or item.get("is_subagent"))
     if _item_is_background_usage(item):
         return bool(str(item.get("eventId") or item.get("id") or "").strip())
     workdir = str(item.get("workdir") or "").strip()
@@ -1137,7 +1137,7 @@ def _workdir_clickable_for_item(item: Mapping[str, object]) -> bool:
     return bool(workdir and (session_id or target_title))
 
 def _workdir_link_hover_visible_for_item(item: Mapping[str, object]) -> bool:
-    return not _item_is_cli(item) and not _item_is_completed(item)
+    return (not _item_is_cli(item) or _workdir_clickable_for_item(item)) and not _item_is_completed(item)
 
 def _workdir_external_link_for_item(item: Mapping[str, object]) -> bool:
     return _workdir_clickable_for_item(item)

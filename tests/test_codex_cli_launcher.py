@@ -8,6 +8,35 @@ from codex_usage_hud import codex_cli_launcher as launcher
 from codex_usage_hud.config import UserConfig
 from codex_usage_hud.runtime_commands import GeneralCommandPorts, dispatch_command
 from codex_usage_hud.runtime_commands import RuntimeCommandPorts
+from codex_usage_hud import cli_launch_registry
+
+
+@pytest.fixture(autouse=True)
+def isolate_cli_launch_records(tmp_path, monkeypatch):
+    monkeypatch.setattr(cli_launch_registry, "hud_runtime_dir", lambda: tmp_path / "hud-runtime")
+    monkeypatch.setattr(launcher, "_supports_private_cli_backend", lambda _: False)
+
+
+def test_cli_binding_adds_only_an_advertised_private_backend_option(monkeypatch):
+    monkeypatch.setattr(launcher.shutil, "which", lambda _: "C:/codex.cmd")
+    monkeypatch.setattr(launcher, "_supports_private_cli_backend", lambda _: True)
+    assert launcher._cli_command_with_private_backend("Set-Location 'E:/repo'\ncodex --profile p resume id") == "Set-Location 'E:/repo'\ncodex --no-daemon --profile p resume id"
+    assert launcher._cli_command_with_private_backend("codex --no-daemon resume id") == "codex --no-daemon resume id"
+    assert launcher._cli_command_with_private_backend("my-wrapper codex") == "my-wrapper codex"
+    assert launcher._cli_command_with_private_backend("codex | other") == "codex | other"
+    monkeypatch.setattr(launcher, "_supports_private_cli_backend", lambda _: False)
+    assert launcher._cli_command_with_private_backend("codex resume id") == "codex resume id"
+
+
+def test_cmd_launch_executes_registration_and_cli_on_one_command_line():
+    command = launcher._terminal_process_command(
+        {"kind": "shell", "shell": "cmd", "executable": "cmd.exe"},
+        'set "CODEX_USAGE_HUD_CLI_LAUNCH_ID=launch-id"\ncodex resume session-id',
+        "C:/repo", title="CLI Window",
+    )
+    assert command[:3] == ["cmd.exe", "/D", "/K"]
+    assert "\n" not in command[-1]
+    assert 'set "CODEX_USAGE_HUD_CLI_LAUNCH_ID=launch-id" & codex resume session-id' in command[-1]
 
 
 def test_build_codex_cli_command_matches_reference_profile_shape(tmp_path: Path) -> None:
@@ -490,12 +519,17 @@ def test_launch_codex_cli_uses_new_windows_terminal_tab_when_host_is_open(
         "-w",
         "0",
         "new-tab",
+        "--title",
+        result["title"],
+        "--suppressApplicationTitle",
         "-d",
         str(tmp_path),
         "C:/pwsh.exe",
         "-NoLogo",
         "-NoExit",
         "-Command",
+        f"$Host.UI.RawUI.WindowTitle = {launcher._shell_quote(result['title'], 'powershell')}\n"
+        f"$env:CODEX_USAGE_HUD_CLI_LAUNCH_ID = '{result['launchId']}'\n"
         f"$env:CODEX_HOME = {launcher._shell_quote(str(codex_home), 'powershell')}\ncodex --help",
     ]
     assert process_calls[0]["env"]["CODEX_HOME"] == str(codex_home)
@@ -551,15 +585,14 @@ def test_windows_terminal_host_wraps_selected_shell_in_new_tab(
         platform_name="windows",
     )
 
-    assert process_calls[0]["args"][0:5] == [
+    assert process_calls[0]["args"][0:4] == [
         "C:/WindowsApps/wt.exe",
         "-w",
         "0",
         "new-tab",
-        "-d",
     ]
-    assert process_calls[0]["args"][5] == str(tmp_path)
-    assert process_calls[0]["args"][6] == "C:/pwsh.exe"
+    assert process_calls[0]["args"][4:7] == ["--title", result["title"], "--suppressApplicationTitle"]
+    assert process_calls[0]["args"][7:10] == ["-d", str(tmp_path), "C:/pwsh.exe"]
     assert result["terminalId"] == "powershell7"
     assert result["openedAsTab"] is True
 
@@ -602,9 +635,9 @@ def test_windows_terminal_launch_sets_provider_workdir_title(
     )
 
     args = process_calls[0]["args"]
-    assert args[1:4] == ["--title", f"[cunai] {tmp_path.name}", "--suppressApplicationTitle"]
+    assert args[1:4] == ["--title", result["title"], "--suppressApplicationTitle"]
     assert f"[cunai] {tmp_path.name}" in args[-1]
-    assert result["title"] == f"[cunai] {tmp_path.name}"
+    assert result["title"].startswith(f"[cunai] {tmp_path.name} · CLI#")
 
 
 def test_macos_terminal_tab_command_targets_front_window() -> None:

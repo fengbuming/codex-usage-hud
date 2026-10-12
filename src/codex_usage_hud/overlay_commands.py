@@ -167,8 +167,9 @@ def _handle_work_overlay_command(
     if action != "activateSession":
         return None
     if str(command.get("clientKind") or "").strip().lower() == "cli":
-        _LOGGER.info("work_overlay_command_ignored reason=cli_session")
-        return None
+        from .platforms.cli_session_switch import CliSessionNavigator
+        return CliSessionNavigator().activate(str(command.get("sessionId") or ""),
+                                             str(command.get("workdir") or ""))
     session_id = str(command.get("sessionId") or "").strip()
     target_title = str(command.get("targetTitle") or command.get("title") or "").strip()
     if not session_id and not target_title:
@@ -351,13 +352,27 @@ def _route_work_overlay_command(
         refocus_window_callback=refocus_window_callback,
     )
     _publish_work_overlay_command_event(runtime_events, command, result, activation_context=activation_meta, clock=clock)
+    is_cli = str(command.get("clientKind") or "").lower() == "cli"
+    if is_cli and result is not None and not result.ok:
+        show_notice = getattr(work_overlay, "show_system_notice", None)
+        if callable(show_notice):
+            show_notice(title="CLI 会话跳转", dismissible=True,
+                        message=result.message or "未能定位此 CLI 的终端。",
+                        related_request_id=str(command.get("requestId") or ""))
+    elif is_cli and result is not None and result.ok:
+        notice = getattr(work_overlay, "_system_notice", None)
+        if isinstance(notice, Mapping) and notice.get("relatedRequestId"):
+            clear_notice = getattr(work_overlay, "clear_system_notice", None)
+            if callable(clear_notice):
+                clear_notice()
     if result is not None and result.ok:
         _publish_work_overlay_active_session_changed(runtime_events, command, result, activation_context=activation_meta, clock=clock)
     if result is not None and result.ok:
         mark_completed = getattr(work_overlay, "mark_switch_completed", None)
         if callable(mark_completed):
             mark_completed(command)
-    meta = {**activation_meta, "handled": result is not None, "ok": bool(getattr(result, "ok", False))}
+    meta = {**activation_meta, "handled": result is not None, "ok": bool(getattr(result, "ok", False)),
+            "status": str(getattr(result, "status", "")), "message": str(getattr(result, "message", ""))}
     return ("completed" if meta["ok"] else "rejected"), meta
 
 
