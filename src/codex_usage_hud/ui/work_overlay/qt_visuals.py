@@ -828,6 +828,10 @@ class CompletedBadgeWidget(QWidget):
 
         title = str(self._item.get("title") or "Codex 工作").strip()
         profile = _profile_display_name(self._item)
+        if str(self._item.get("clientKind") or "").strip().lower() == "app":
+            profile = _compact_work_text(self._item.get("modelProvider"), 24)
+            if profile.lower() in {"unknown", "n/a"}:
+                profile = ""
         workdir = _workdir_display_name(self._item)
         self._draw_arc_text(
             painter,
