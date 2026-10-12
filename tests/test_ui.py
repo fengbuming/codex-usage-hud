@@ -4731,7 +4731,7 @@ class BudgetHelperTests(unittest.TestCase):
         self.assertEqual(record["firstSeenAt"], 150.0)
         self.assertEqual(record["lastSeenAt"], 150.0)
 
-    def test_work_overlay_command_pump_uses_cdp_before_window_prepare(self) -> None:
+    def test_work_overlay_command_pump_prepares_window_then_waits_for_cdp(self) -> None:
         command = {
             "action": "activateSession",
             "sessionId": "thread-1",
@@ -4973,7 +4973,7 @@ class BudgetHelperTests(unittest.TestCase):
 
         with (
             patch(
-                "codex_usage_hud.runtime_orchestration._prepare_codex_window_for_standalone",
+                "codex_usage_hud.overlay_runtime._prepare_codex_window_for_work_overlay_switch",
                 return_value=(True, "visible", "", 321),
             ) as prepare_window,
             patch(
@@ -4997,10 +4997,11 @@ class BudgetHelperTests(unittest.TestCase):
             title="Thread One",
             workdir="",
         )
-        prepare_window.assert_not_called()
+        prepare_window.assert_called_once()
         refocus_window.assert_called_once()
 
     def test_work_overlay_switch_activates_codex_on_macos(self) -> None:
+        from codex_usage_hud.platforms.cdp_probe import cdp_port_from_env
         with (
             patch.object(sys, "platform", "darwin"),
             patch("codex_usage_hud.overlay_commands.launch_codex_app", return_value=True) as launch,
@@ -5008,7 +5009,7 @@ class BudgetHelperTests(unittest.TestCase):
             result = overlay_runtime._prepare_codex_window_for_work_overlay_switch()
 
         self.assertEqual(result, (True, "activated", "", 0))
-        launch.assert_called_once_with(debugger=False)
+        launch.assert_called_once_with(debugger=True, cdp_port=cdp_port_from_env())
 
     def test_desktop_work_overlay_writes_state_with_atomic_json_helper(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -21147,8 +21148,8 @@ class DaemonLifecycleTests(unittest.TestCase):
         self.assertEqual(status, "visible")
         self.assertEqual(reason, "")
         self.assertEqual(hwnd, 321)
-        activate_app.assert_called_once()
-        tracker.activate_main_window.assert_not_called()
+        activate_app.assert_not_called()
+        tracker.activate_main_window.assert_called_once()
 
     def test_prepare_codex_window_does_not_restart_hidden_tray_process(self) -> None:
         tracker = SimpleNamespace(
@@ -21657,7 +21658,7 @@ class DaemonLifecycleTests(unittest.TestCase):
         self.assertEqual(events[0].context["action"], "activateSession")
         self.assertEqual(events[0].context["sessionId"], "thread-1")
         self.assertEqual(events[0].context["activeSessionId"], "")
-        self.assertFalse(events[0].context["windowPrepared"])
+        self.assertTrue(events[0].context["windowPrepared"])
         self.assertEqual(events[1].source, "work_overlay")
         self.assertEqual(events[1].context["reason"], "overlay_session_activation")
 

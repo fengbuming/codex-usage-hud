@@ -829,7 +829,8 @@ def _tracker_window_is_active(tracker: object, hwnd: int) -> bool:
     if not hwnd:
         return False
     try:
-        return bool(tracker.is_active(hwnd))
+        check = getattr(tracker, "is_main_window_foreground", None) or tracker.is_active
+        return bool(check(hwnd))
     except Exception:
         return False
 
@@ -894,6 +895,7 @@ def prepare_codex_window_for_renderer(
     deadline = now() + max(0.0, float(timeout_seconds))
     launch_attempted = False
     activation_attempted = False
+    running: bool | None = None
     last_status = "not_found"
     last_reason = ""
     last_hwnd = 0
@@ -904,25 +906,8 @@ def prepare_codex_window_for_renderer(
         if last_status == "visible" and is_active:
             return True, last_status, last_reason, last_hwnd
 
-        if (
-            not activation_attempted
-            and is_running()
-            and (last_status != "visible" or not is_active)
-        ):
-            activation_attempted = True
-            activated = activate_app()
-            _LOGGER.info(
-                "codex_app_shell_activation_requested activated=%s status=%s "
-                "hwnd=%s reason=%s",
-                activated,
-                last_status,
-                last_hwnd,
-                last_reason,
-            )
-            if activated:
-                wait(max(0.05, float(poll_seconds)))
-                continue
-
+        # Restoring an existing HWND needs no process audit or shell launch.
+        # This is the fast path for a minimized or covered Desktop window.
         try:
             activated_hwnd = int(tracker.activate_main_window() or 0)
         except Exception:
@@ -937,13 +922,26 @@ def prepare_codex_window_for_renderer(
             if last_status == "visible" and activated_is_active:
                 return True, last_status, last_reason, last_hwnd
 
+        if running is None:
+            running = is_running()
+        if not activation_attempted and running:
+            activation_attempted = True
+            activated = activate_app()
+            _LOGGER.info(
+                "codex_app_shell_activation_requested activated=%s status=%s "
+                "hwnd=%s reason=%s", activated, last_status, last_hwnd, last_reason,
+            )
+            if activated:
+                # Recheck immediately; do not penalize an already restored UI.
+                continue
+
         if (
             launch_if_missing
             and not launch_attempted
             and last_status in {"not_found", "hidden", "cloaked"}
         ):
             launch_attempted = True
-            if is_running() and last_status == "not_found":
+            if running:
                 launched = False
                 action = "await_restart_confirmation"
             else:

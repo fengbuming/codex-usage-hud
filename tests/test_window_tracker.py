@@ -1390,6 +1390,41 @@ class CodexWindowTrackerSelectionTests(unittest.TestCase):
 
 
 class CodexWindowTrackerActivationTests(unittest.TestCase):
+    def test_minimized_chatgpt_main_window_survives_icon_rect_size_filter(self) -> None:
+        main = SimpleNamespace(
+            title="ChatGPT", class_name="Chrome_WidgetWin_1", process="ChatGPT.exe",
+            visible=True, minimized=True, cloaked=False, rect=PhysicalRect(0, 0, 160, 28),
+        )
+        self.assertTrue(CodexWindowTracker._is_restore_candidate(main))
+        self.assertFalse(CodexWindowTracker._is_stable_candidate(main))
+
+    def test_computer_use_overlay_is_never_a_main_window_candidate(self) -> None:
+        overlay = SimpleNamespace(
+            title="ChatGPT is using your computer. Esc to cancel",
+            class_name="CodexComputerUseSwiftOverlay", process="ChatGPT.exe",
+            visible=True, minimized=False, cloaked=False,
+            rect=PhysicalRect(0, 0, 1920, 1080),
+        )
+        self.assertFalse(CodexWindowTracker._looks_like_codex(
+            overlay.title, overlay.class_name, overlay.process))
+        self.assertFalse(CodexWindowTracker._is_stable_candidate(overlay))
+        self.assertFalse(CodexWindowTracker._is_restore_candidate(overlay))
+
+    def test_foreground_verification_excludes_helper_and_other_chat_windows(self) -> None:
+        tracker = object.__new__(CodexWindowTracker)
+        tracker.enabled = True
+        tracker._is_cloaked = lambda hwnd: False
+        tracker.user32 = SimpleNamespace(
+            GetForegroundWindow=lambda: 999,
+            IsWindowVisible=lambda hwnd: True,
+            IsIconic=lambda hwnd: False,
+        )
+        self.assertFalse(tracker.is_main_window_foreground(123))
+        tracker.user32.GetForegroundWindow = lambda: 123
+        self.assertTrue(tracker.is_main_window_foreground(123))
+        tracker.user32.IsIconic = lambda hwnd: True
+        self.assertFalse(tracker.is_main_window_foreground(123))
+
     @staticmethod
     def _value(raw: object) -> int:
         return int(getattr(raw, "value", raw) or 0)

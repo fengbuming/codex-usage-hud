@@ -21,20 +21,62 @@ from .platforms import (
     CdpSessionSwitchBackend,
     CodexWindowTracker,
     SessionSwitchController,
+    SessionSwitchResult,
     WindowsSearchSessionSwitchBackend,
 )
 from .platforms.base import BasePlatform
+from .platforms.cdp_probe import (
+    cdp_port_from_env, list_targets, pick_page_target,
+    runtime_evaluate_params, send_cdp_command,
+)
 from . import overlay_window
 
 
 NATIVE_SEARCH_SESSION_SWITCH_ENV = "CODEX_USAGE_HUD_NATIVE_SEARCH_SWITCH"
 WORK_OVERLAY_CDP_SWITCH_TIMEOUT_SECONDS = 3.0
-WORK_OVERLAY_WINDOW_PREPARE_TIMEOUT_SECONDS = 0.8
+WORK_OVERLAY_WINDOW_PREPARE_TIMEOUT_SECONDS = 15.0
+WORK_OVERLAY_UI_READY_TIMEOUT_SECONDS = 15.0
 WORK_OVERLAY_SWITCH_REFOCUS_TIMEOUT_SECONDS = 0.8
-WORK_OVERLAY_SWITCH_REFOCUS_DELAY_SECONDS = 0.08
+WORK_OVERLAY_SWITCH_REFOCUS_DELAY_SECONDS = 0.0
 
 _LOGGER = logging.getLogger("codex_usage_hud.overlay_commands")
 WindowAction = Callable[[], tuple[bool, str, str, int]]
+
+
+def _running_cdp_target() -> dict[str, Any] | None:
+    try:
+        return pick_page_target(list_targets(cdp_port_from_env(), 0.2))
+    except Exception:
+        return None
+
+
+def _open_running_codex_ui() -> bool:
+    """Reopen a tray instance through its own main process without shell discovery."""
+    target = _running_cdp_target()
+    if target is not None:
+        try:
+            response = send_cdp_command(
+                str(target["webSocketDebuggerUrl"]), "Runtime.evaluate",
+                runtime_evaluate_params("""(async () => {
+                  const bridge = window.electronBridge;
+                  if (!bridge?.sendMessageFromView) return false;
+                  const row = document.querySelector('[data-app-action-sidebar-thread-active="true"]');
+                  const ref = row?.getAttribute('data-app-action-sidebar-thread-id') || '';
+                  const match = ref.match(/^(local|chatgpt|remote):(.+)$/);
+                  // A provisional new-thread ID is not a routable chat.
+                  // Use the platform reopen action until it is persisted.
+                  if (!match || !/^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(match[2])) return false;
+                  const prefix = match?.[1] === 'chatgpt' ? 'c' : match?.[1];
+                  const path = `/${prefix}/${encodeURIComponent(match[2])}?hostId=${match[1]}`;
+                  await bridge.sendMessageFromView({type: 'open-in-main-window', path});
+                  return true;
+                })()""", await_promise=True), 0.5,
+            )
+            if response.get("result", {}).get("result", {}).get("value") is True:
+                return True
+        except Exception:
+            pass
+    return activate_running_codex_app()
 
 
 def _prepare_codex_window_for_standalone(
@@ -49,9 +91,9 @@ def _prepare_codex_window_for_standalone(
         launch_if_missing=launch_if_missing,
         prepare_window_for_renderer=prepare_codex_window_for_renderer,
         tracker_factory=lambda: CodexWindowTracker(enable_uia=False),
-        processes_running=codex_processes_running,
-        activate=activate_running_codex_app,
-        launch=lambda **_kwargs: launch_codex_app(debugger=False),
+        processes_running=lambda: _running_cdp_target() is not None or codex_processes_running(),
+        activate=_open_running_codex_ui,
+        launch=launch_codex_app,
         monotonic=time.monotonic,
         sleep=time.sleep,
     )
@@ -127,7 +169,6 @@ def _handle_work_overlay_command(
     if str(command.get("clientKind") or "").strip().lower() == "cli":
         _LOGGER.info("work_overlay_command_ignored reason=cli_session")
         return None
-    is_current = bool(command.get("current"))
     session_id = str(command.get("sessionId") or "").strip()
     target_title = str(command.get("targetTitle") or command.get("title") or "").strip()
     if not session_id and not target_title:
@@ -149,27 +190,30 @@ def _handle_work_overlay_command(
             backend_names=backend_names,
         )
 
-    # CDP can reach a live Codex renderer without first foregrounding the
-    # desktop window.  Defer the expensive window preparation until transport
-    # or backend failure, then retry once as the bounded recovery path.
-    result = activate_session()
     window_prepared = False
-    if (
-        prepare_window
-        and not result.ok
-        and result.status in {"cdp-error", "backend-error", "no-backend"}
-    ):
-        window_ready, window_status, window_reason, window_hwnd = (
-            prepare_window_callback() if prepare_window_callback is not None else (False, "unavailable", "", 0)
-        )
+    if prepare_window and prepare_window_callback is not None:
+        window_ready, window_status, window_reason, window_hwnd = prepare_window_callback()
         window_prepared = True
+        if activation_meta is not None:
+            activation_meta.update(windowPrepared=True, windowReady=window_ready,
+                                   windowStatus=window_status, windowHwnd=window_hwnd)
         if not window_ready:
-            _LOGGER.info(
-                "work_overlay_command_window_prepare_best_effort_failed status=%s hwnd=%s reason=%s",
-                window_status,
-                window_hwnd,
-                window_reason,
+            return SessionSwitchResult(
+                ok=False, status="window-unavailable", requested_session_id=session_id,
+                requested_title=target_title, message=window_reason or window_status,
             )
+    # Window creation precedes renderer readiness on a cold start. Retry only
+    # readiness/transport failures; a missing thread is a terminal result.
+    deadline = time.monotonic() + WORK_OVERLAY_UI_READY_TIMEOUT_SECONDS
+    result = activate_session()
+    while (
+        window_prepared and not result.ok
+        and result.status in {"cdp-error", "backend-error", "no-backend",
+                              "desktop-bridge-unavailable", "desktop-response-timeout",
+                              "navigation-unverified", "sidebar-unavailable"}
+        and time.monotonic() < deadline
+    ):
+        time.sleep(0.05)
         result = activate_session()
     if activation_meta is not None:
         activation_meta["windowPrepared"] = window_prepared
@@ -183,10 +227,11 @@ def _handle_work_overlay_command(
         result.matched_by or "-",
         result.message or "-",
     )
-    if prepare_window and (is_current or result.ok or result.status == "already-active"):
-        window_ready, window_status, window_reason, window_hwnd = (
-            refocus_window_callback() if refocus_window_callback is not None else (False, "unavailable", "", 0)
-        )
+    if prepare_window and result.ok and refocus_window_callback is not None:
+        window_ready, window_status, window_reason, window_hwnd = refocus_window_callback()
+        if activation_meta is not None:
+            activation_meta.update(windowRefocused=window_ready, windowStatus=window_status,
+                                   windowHwnd=window_hwnd)
         _LOGGER.info(
             "work_overlay_command_session_refocus ok=%s status=%s hwnd=%s reason=%s",
             window_ready,
@@ -194,6 +239,13 @@ def _handle_work_overlay_command(
             window_hwnd,
             window_reason or "-",
         )
+        if not window_ready:
+            return SessionSwitchResult(
+                ok=False, status="window-not-foreground", backend=result.backend,
+                requested_session_id=session_id, requested_title=target_title,
+                active_session_id=result.active_session_id, active_title=result.active_title,
+                matched_by=result.matched_by, message=window_reason or window_status,
+            )
     return result
 
 
@@ -301,7 +353,7 @@ def _route_work_overlay_command(
     _publish_work_overlay_command_event(runtime_events, command, result, activation_context=activation_meta, clock=clock)
     if result is not None and result.ok:
         _publish_work_overlay_active_session_changed(runtime_events, command, result, activation_context=activation_meta, clock=clock)
-    if result is not None and (bool(command.get("current")) or result.ok or result.status == "already-active"):
+    if result is not None and result.ok:
         mark_completed = getattr(work_overlay, "mark_switch_completed", None)
         if callable(mark_completed):
             mark_completed(command)

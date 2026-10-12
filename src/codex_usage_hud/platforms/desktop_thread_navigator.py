@@ -142,7 +142,6 @@ def _navigation_script(
       resolve({{ ok: false, error: `desktop-send-failed: ${{String(error)}}` }});
     }});
   }});
-  const sleep = (ms) => new Promise((resolve) => window.setTimeout(resolve, ms));
   const rowIsActive = (row) => (
     row.getAttribute("data-app-action-sidebar-thread-active") === "true"
     || row.getAttribute("aria-current") === "page"
@@ -158,14 +157,23 @@ def _navigation_script(
     }}
     return false;
   }};
-  const waitForActive = async (hostId) => {{
-    const deadline = Date.now() + verifyTimeoutMs;
-    while (Date.now() < deadline) {{
-      if (activeRowFor(hostId)) return true;
-      await sleep(120);
-    }}
-    return activeRowFor(hostId);
-  }};
+  const waitForActive = (hostId) => new Promise((resolve) => {{
+    if (activeRowFor(hostId)) return resolve(true);
+    const observer = new MutationObserver(() => {{
+      if (activeRowFor(hostId)) finish(true);
+    }});
+    const finish = (verified) => {{
+      observer.disconnect();
+      window.clearTimeout(timer);
+      resolve(verified);
+    }};
+    const timer = window.setTimeout(() => finish(activeRowFor(hostId)), verifyTimeoutMs);
+    observer.observe(document.documentElement, {{
+      subtree: true, childList: true, attributes: true,
+      attributeFilter: ['data-app-action-sidebar-thread-active', 'aria-current', 'aria-selected'],
+    }});
+    if (activeRowFor(hostId)) finish(true);
+  }});
   try {{
     // 1. Prove Desktop still owns this rollout.  Navigating to an id it has
     // never loaded lands on a blank conversation instead of erroring.
@@ -179,7 +187,8 @@ def _navigation_script(
         ok: false,
         threadId: input.threadId,
         verified: false,
-        error: "thread-not-owned",
+        error: /desktop-response-timeout|desktop-send-failed/.test(read.error)
+          ? "desktop-response-timeout" : "thread-not-owned",
         detail: read.error,
       }};
     }}

@@ -15,6 +15,7 @@ from typing import Protocol
 from .base import BasePlatform
 from .cdp_probe import CodexCdpSessionController
 from .windows_tracker import CodexWindowTracker
+from .desktop_thread_navigator import DesktopThreadNavigator, _canonical_uuid
 
 _VK_CONTROL = 0x11
 _VK_A = 0x41
@@ -107,8 +108,22 @@ class CdpSessionSwitchBackend:
             port=port,
             timeout_seconds=timeout_seconds,
         )
+        self._navigator = DesktopThreadNavigator(
+            port=port, preflight_timeout_seconds=1.0,
+            verify_timeout_seconds=max(0.5, min(timeout_seconds, 1.0)),
+        )
 
     def activate(self, request: SessionSwitchRequest) -> SessionSwitchResult:
+        if _canonical_uuid(request.session_id):
+            report = self._navigator.navigate(request.session_id)
+            return SessionSwitchResult(
+                ok=report.verified, status="switched" if report.verified else report.error,
+                backend=self.name, requested_session_id=request.session_id,
+                requested_title=request.title,
+                active_session_id=report.thread_id if report.verified else "",
+                matched_by="desktop-route" if report.verified else "",
+                message=report.detail,
+            )
         result = self._controller.activate_thread(
             session_id=request.session_id,
             title=request.title,
@@ -443,6 +458,8 @@ class SessionSwitchController:
             if backend_names is not None
             else None
         )
+        if allowed_backends is None and _canonical_uuid(request.session_id):
+            allowed_backends = {"cdp"}
         for backend in self._backends:
             backend_name = str(
                 getattr(backend, "name", "") or type(backend).__name__
@@ -473,6 +490,10 @@ class SessionSwitchController:
             if result.ok:
                 return result
             last_result = result
+            # A canonical ID is authoritative. Native title search can select
+            # a different chat with the same title and must not mask failures.
+            if backend_name == "cdp" and _canonical_uuid(request.session_id):
+                break
             if result.status == "missing-target":
                 break
         return last_result

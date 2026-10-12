@@ -2921,6 +2921,8 @@ class CodexWindowTracker:
             return False
         title = candidate.title.strip().lower()
         class_name = candidate.class_name.strip().lower()
+        if class_name.startswith("codexcomputeruse"):
+            return False
         if not _is_codex_process_name(candidate.process):
             return False
         if title == "codex":
@@ -2938,9 +2940,16 @@ class CodexWindowTracker:
     def _is_restore_candidate(candidate: "_WindowCandidate") -> bool:
         title = candidate.title.strip().lower()
         class_name = candidate.class_name.strip().lower()
+        if class_name.startswith("codexcomputeruse"):
+            return False
         if not _is_codex_process_name(candidate.process):
             return False
         if title == "codex":
+            return True
+        # Current Windows Desktop titles its Electron window "ChatGPT".
+        # A minimized window reports a tiny icon rectangle, not its restored
+        # size, so the usual main-window area threshold cannot identify it.
+        if title == "chatgpt" and class_name == "chrome_widgetwin_1":
             return True
         if not title:
             return False
@@ -3302,6 +3311,21 @@ class CodexWindowTracker:
             self._bottom_roi_cache_hwnd = hwnd
             self._bottom_roi_cache_window_rect = window_rect
         return snapshot
+
+    def is_main_window_foreground(self, hwnd: int) -> bool:
+        """Verify the main window itself, excluding HUD helpers and other chats."""
+        if not self.enabled or not hwnd:
+            return False
+        try:
+            handle = wintypes.HWND(hwnd)
+            return bool(
+                self.user32.GetForegroundWindow() == hwnd
+                and self.user32.IsWindowVisible(handle)
+                and not self.user32.IsIconic(handle)
+                and not self._is_cloaked(hwnd)
+            )
+        except Exception:
+            return False
 
     def is_active(self, hwnd: int, allowed_hwnds: set[int] | None = None) -> bool:
         """Return whether Codex or one of its own windows is foreground."""
@@ -3895,6 +3919,10 @@ class CodexWindowTracker:
         title_lower = title.strip().lower()
         class_lower = class_name.strip().lower()
         process_lower = process.strip().lower()
+        # This is a full-screen computer-use indicator, not a chat window.
+        # Restoring it when Desktop is minimized traps the user under a cover.
+        if class_lower.startswith("codexcomputeruse"):
+            return False
         if not title_lower and class_lower == "chrome_widgetwin_0":
             return False
         if not _is_codex_process_name(process_lower):

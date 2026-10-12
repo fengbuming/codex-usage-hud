@@ -1,6 +1,7 @@
 from unittest.mock import MagicMock
 
 from codex_usage_hud import overlay_window
+from codex_usage_hud.platforms.cdp_probe import cdp_port_from_env
 
 
 def test_prepare_standalone_forwards_platform_ports_without_side_effects() -> None:
@@ -30,7 +31,7 @@ def test_prepare_standalone_forwards_platform_ports_without_side_effects() -> No
         timeout_seconds=0.8,
         poll_seconds=0.08,
         launch_if_missing=True,
-        cdp_port=None,
+        cdp_port=cdp_port_from_env(),
         tracker_factory=tracker_factory,
         processes_running=processes_running,
         activate=activate,
@@ -54,7 +55,7 @@ def test_prepare_switch_uses_mac_os_activation_without_window_polling() -> None:
     )
 
     assert result == (True, "activated", "", 0)
-    launch.assert_called_once_with(debugger=False)
+    launch.assert_called_once_with(debugger=True, cdp_port=cdp_port_from_env())
     prepare.assert_not_called()
 
 

@@ -416,7 +416,7 @@ def test_prepare_window_activates_existing_instance_without_relaunch(
     assert result == (True, "visible", "", 321)
     assert activations == ["activate"]
     assert launches == []
-    tracker.activate_main_window.assert_not_called()
+    tracker.activate_main_window.assert_called_once()
 
 
 def test_prepare_missing_window_launches_once_with_caller_selected_port(

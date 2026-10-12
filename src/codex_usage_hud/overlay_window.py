@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from .platforms.cdp_probe import cdp_port_from_env
 
 WindowResult = tuple[bool, str, str, int]
 
@@ -25,7 +26,7 @@ def prepare_codex_window_for_standalone(
         timeout_seconds=timeout_seconds,
         poll_seconds=poll_seconds,
         launch_if_missing=launch_if_missing,
-        cdp_port=None,
+        cdp_port=cdp_port_from_env(),
         tracker_factory=tracker_factory,
         processes_running=processes_running,
         activate=activate,
@@ -44,9 +45,9 @@ def prepare_codex_window_for_work_overlay_switch(
     poll_seconds: float,
     launch_if_missing: bool,
 ) -> WindowResult:
-    """Prepare the Codex window after an overlay session-switch failure."""
+    """Open the Codex UI before switching an overlay's target session."""
     if platform == "darwin":
-        activated = launch_codex_app(debugger=False)
+        activated = launch_codex_app(debugger=True, cdp_port=cdp_port_from_env())
         return (
             bool(activated),
             "activated" if activated else "launch-failed",
@@ -72,7 +73,8 @@ def refocus_codex_window_after_work_overlay_switch(
     launch_if_missing: bool,
 ) -> WindowResult:
     """Refocus Codex after an overlay session switch completes."""
-    sleep(delay_seconds)
+    if delay_seconds > 0:
+        sleep(delay_seconds)
     if platform == "darwin":
         activated = launch_codex_app(debugger=False)
         return (

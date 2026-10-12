@@ -1,6 +1,7 @@
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
+from codex_usage_hud import overlay_commands
 
 from codex_usage_hud.overlay_command_pump import WorkOverlayCommandPump
 from codex_usage_hud.overlay_commands import (
@@ -26,10 +27,14 @@ def _switch_result(**overrides: object) -> SimpleNamespace:
     return SimpleNamespace(**values)
 
 
-def test_overlay_command_uses_cdp_before_bounded_window_recovery() -> None:
+def test_overlay_command_opens_window_before_switch_and_checks_focus() -> None:
     controller = SimpleNamespace(activate_session=MagicMock(return_value=_switch_result()))
     prepare = MagicMock(return_value=(True, "visible", "", 1))
     refocus = MagicMock(return_value=(True, "visible", "", 1))
+    order = MagicMock()
+    order.attach_mock(prepare, "prepare")
+    order.attach_mock(controller.activate_session, "switch")
+    order.attach_mock(refocus, "refocus")
 
     result = handle_command(
         {"action": "activateSession", "sessionId": "session-1"},
@@ -39,8 +44,9 @@ def test_overlay_command_uses_cdp_before_bounded_window_recovery() -> None:
     )
 
     assert result.ok
-    prepare.assert_not_called()
+    prepare.assert_called_once()
     refocus.assert_called_once()
+    assert [call[0] for call in order.mock_calls] == ["prepare", "switch", "refocus"]
 
 
 def test_overlay_command_retries_once_after_cdp_transport_failure() -> None:
@@ -71,6 +77,70 @@ def test_overlay_command_never_activates_cli_session() -> None:
     )
     assert result is None
     controller.activate_session.assert_not_called()
+
+
+def test_overlay_command_waits_for_cold_renderer_after_window_exists(monkeypatch) -> None:
+    controller = SimpleNamespace(activate_session=MagicMock(side_effect=[
+        _switch_result(ok=False, status="cdp-error"),
+        _switch_result(ok=False, status="desktop-bridge-unavailable"),
+        _switch_result(),
+    ]))
+    monkeypatch.setattr(overlay_commands.time, "sleep", lambda _: None)
+    result = handle_command(
+        {"action": "activateSession", "sessionId": "session-1"}, controller,
+        prepare_window_callback=lambda: (True, "visible", "", 1),
+        refocus_window_callback=lambda: (True, "visible", "", 1),
+    )
+    assert result.ok
+    assert controller.activate_session.call_count == 3
+
+
+def test_overlay_command_does_not_route_if_window_cannot_open() -> None:
+    controller = SimpleNamespace(activate_session=MagicMock())
+    result = handle_command(
+        {"action": "activateSession", "sessionId": "session-1"}, controller,
+        prepare_window_callback=lambda: (False, "not_found", "UI did not open", 0),
+    )
+    assert not result.ok
+    assert result.status == "window-unavailable"
+    controller.activate_session.assert_not_called()
+
+
+def test_overlay_command_rejects_route_success_when_foreground_failed() -> None:
+    controller = SimpleNamespace(activate_session=MagicMock(return_value=_switch_result()))
+    result = handle_command(
+        {"action": "activateSession", "sessionId": "session-1", "current": True}, controller,
+        prepare_window_callback=lambda: (True, "visible", "", 1),
+        refocus_window_callback=lambda: (False, "minimized", "focus denied", 1),
+    )
+    assert not result.ok
+    assert result.status == "window-not-foreground"
+    assert result.active_session_id == "session-1"
+
+
+def test_missing_thread_is_terminal_and_not_retried() -> None:
+    controller = SimpleNamespace(activate_session=MagicMock(
+        return_value=_switch_result(ok=False, status="thread-not-owned")))
+    result = handle_command(
+        {"action": "activateSession", "sessionId": "deleted-session"}, controller,
+        prepare_window_callback=lambda: (True, "visible", "", 1),
+    )
+    assert not result.ok
+    controller.activate_session.assert_called_once()
+
+
+def test_cdp_readiness_retry_stops_at_deadline(monkeypatch) -> None:
+    ticks = iter([0.0, 0.0, 20.0])
+    monkeypatch.setattr(overlay_commands.time, "monotonic", lambda: next(ticks))
+    monkeypatch.setattr(overlay_commands.time, "sleep", lambda _: None)
+    controller = SimpleNamespace(activate_session=MagicMock(
+        return_value=_switch_result(ok=False, status="cdp-error")))
+    result = handle_command(
+        {"action": "activateSession", "sessionId": "session-1"}, controller,
+        prepare_window_callback=lambda: (True, "visible", "", 1),
+    )
+    assert not result.ok
+    assert controller.activate_session.call_count == 2
 
 
 def test_overlay_runtime_commands_queue_background_query_with_correlation() -> None:
