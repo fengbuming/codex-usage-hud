@@ -6,8 +6,8 @@
   },
   "currentBundle": {
     "phase": "P6.7",
-    "sha256": "eeb13d75f5fd5422b30403226f2233179adff3102969b7d803522f723d29f781",
-    "byteLength": 1400927
+    "sha256": "478d34206d8f7a5e95c1575cbdd7a4d1487f4312f923fcccfc2cbfa5987002c5",
+    "byteLength": 1400826
   },
   "sha256": "f83d65265c55143fa775f509f09ce109c2aa75a03946b42cf462cb6cbd4ea637",
   "byteLength": 548705,
@@ -41,12 +41,12 @@
     "backgroundUsage", "diagnostics", "usageInsights", "sessionCleanup"
   ],
   "lifecycleCounts": {
-    "mutationObservers": 8,
+    "mutationObservers": 9,
     "resizeObservers": 3,
     "setIntervals": 6,
     "setTimeouts": 44,
     "kernelSetIntervals": 1,
-    "kernelSetTimeouts": 11
+    "kernelSetTimeouts": 10
   },
   "lifecycleInventory": [
     {

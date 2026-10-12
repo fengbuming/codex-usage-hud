@@ -595,8 +595,7 @@ SESSION_SWITCH_SCRIPT_TEMPLATE = r"""
       .sort((left, right) => (left.rect.left - right.rect.left) || (left.rect.top - right.rect.top));
     const toggle = toggles[0]?.node;
     if (!toggle) return false;
-    toggle.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window }));
-    if (typeof toggle.click === "function") toggle.click();
+    clickPrimaryNode(toggle);
     for (let attempt = 0; attempt < 10; attempt += 1) {
       await sleep(90);
       if (queryRows().length > 0) return true;
@@ -617,9 +616,8 @@ SESSION_SWITCH_SCRIPT_TEMPLATE = r"""
   };
   const clickPrimaryNode = (node) => {
     if (!(node instanceof HTMLElement)) return;
-    node.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, cancelable: true, view: window }));
-    node.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: window }));
-    node.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, view: window }));
+    // Sidebar rows sit inside drag sensors. A programmatic click activates
+    // navigation without starting a pointer gesture that can outlive this script.
     if (typeof node.click === "function") node.click();
     else node.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window }));
   };

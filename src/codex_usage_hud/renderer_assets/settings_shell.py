@@ -85,8 +85,7 @@ _TEXT_PREFIX = r"""
         feedbackLayer: null,
       };
       // 点击供应商切换菜单项且存在活跃会话（其供应商与目标不同）时弹出的
-      // 迁移提示对话框。迁移优先在弹窗内完成（thread/fork 通常亚秒）；超过
-      // 1 秒则转交设置里的「复制/迁移会话」对话框（标题/会话 ID 筛选 + 勾选）。
+      // 迁移提示对话框。复制、命名和切换均在此流程内完成。
       const codexProviderMigrateDialogState = {
         layer: null,
         surface: null,
@@ -96,9 +95,7 @@ _TEXT_PREFIX = r"""
         activeSessionId: "",
         busy: false,
         result: null,
-        thresholdTimer: 0,
         startedAt: 0,
-        fallbackOpened: false,
       };
 
       function codexCliLaunchStateKey(optionsValue = codexCliState.options || {}, providerValue = codexCliState.provider) {
@@ -7830,6 +7827,7 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
             const data = event?.data;
             if (!data || data.hostId !== "local" || data.type !== "mcp-response") return;
             if (data.message?.id !== id) return;
+            window.clearTimeout(timer);
             window.removeEventListener("message", onMessage);
             resolve(data.message);
           };
@@ -7859,6 +7857,7 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
         const source = String(activeProvider || "").trim().toLowerCase();
         const sourceId = String(activeSessionId || "").trim();
         if (!target || !source || !sourceId) return false;
+        if (codexProviderMigrateDialogState.busy) return false;
         ensureCodexCliQuickLaunchMenuStyle();
         closeCodexProviderMigrateDialog();
         const settings = hudSettingsFromPayload();
@@ -7879,14 +7878,11 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
 
       function closeCodexProviderMigrateDialog() {
         const state = codexProviderMigrateDialogState;
-        if (state.thresholdTimer) {
-          window.clearTimeout(state.thresholdTimer);
-          state.thresholdTimer = 0;
-        }
         state.layer?.remove();
         state.layer = null;
         state.surface = null;
-        state.busy = false;
+        // Dismissing progress must not permit another fork while this one runs.
+        if (state.busy) return;
         state.result = null;
         state.startedAt = 0;
       }
@@ -7906,7 +7902,7 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
           return `已复制到「${targetName}」，新会话「${title}」已生成，原会话保留。自动切换未成功，请从会话列表打开新副本。`;
         }
         if (detail.navigated === true) {
-          return `已复制到「${targetName}」并切换到新会话，原会话保留，可以直接继续聊天。`;
+          return `已复制到「${targetName}」并切换到新会话，原会话保留。副本标题设置失败，请手动重命名。`;
         }
         return `已复制到「${targetName}」，原会话保留。自动切换未成功，请从会话列表打开新副本。`;
       }
@@ -7923,7 +7919,7 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
           layer.innerHTML = `
             <div class="codex-usage-hud-provider-migrate-surface">
               <div class="codex-usage-hud-provider-migrate-head">
-                <strong>${escapeHtml(ok ? "已复制并切换会话" : "迁移未完成")}</strong>
+                <strong>${escapeHtml(ok ? (state.result.navigated ? "已切换到复制会话" : "会话已复制") : "迁移未完成")}</strong>
                 ${closeButton}
               </div>
               <div class="codex-usage-hud-provider-migrate-body">${escapeHtml(codexProviderMigrateResultText(state.result))}</div>
@@ -7959,7 +7955,7 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
               ${closeButton}
             </div>
             <div class="codex-usage-hud-provider-migrate-body">
-              默认已切换到「${escapeHtml(targetName)}」，仅对新会话生效。可立即复制当前会话到「${escapeHtml(targetName)}」并自动切换，副本标题带「（副本）」标识，原会话保留。
+              默认已切换到「${escapeHtml(targetName)}」，仅对新会话生效。可立即复制当前会话到「${escapeHtml(targetName)}」并自动切换，副本标题以「(复制)」开头，原会话保留。
             </div>
             <div class="codex-usage-hud-provider-migrate-actions">
               <button type="button" data-codex-provider-migrate-dismiss="true" data-variant="ghost">暂不迁移</button>
@@ -7977,14 +7973,15 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
         const row = document.querySelector(
           `[data-app-action-sidebar-thread-id="local:${sourceIdText}"]`
         );
-        const rowText = row ? String(row.textContent || "").trim() : "";
+        const titleNode = row?.querySelector("[data-thread-title], .truncate.select-none, .truncate.text-base, .truncate");
+        const rowText = titleNode ? String(titleNode.textContent || "").trim() : "";
         if (rowText) return Promise.resolve(rowText);
         return codexBridgeRequest("thread/read", {
           threadId: sourceIdText,
           includeTurns: false,
         }, 8000).then((response) => {
           const thread = response?.result?.thread || {};
-          return String(thread?.preview || thread?.name || "").trim();
+          return String(thread?.name || thread?.preview || "").trim();
         }).catch(() => "");
       }
 
@@ -8000,31 +7997,40 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
         })).then(() => true).catch(() => false);
       }
 
-      function codexWaitForSidebarActive(threadId, timeoutMs = 2500) {
+      function codexWaitForSidebarActive(threadId, timeoutMs = 5000) {
         const threadIdText = String(threadId || "").trim();
-        const deadline = Date.now() + Math.max(0, Number(timeoutMs) || 2500);
         return new Promise((resolve) => {
-          const poll = () => {
-            if (Date.now() >= deadline) {
-              resolve(false);
-              return;
-            }
+          const isActive = () => {
+            // A collapsed sidebar has no row; the local route still identifies
+            // the opened conversation exactly.
+            const route = String(window.location?.hash || "").replace(/^#/, "")
+              || String(window.location?.pathname || "");
+            if (route.split("?")[0] === `/local/${threadIdText}`) return true;
             const rows = document.querySelectorAll(
               `[data-app-action-sidebar-thread-id="local:${threadIdText}"]`
             );
-            const active = Array.from(rows).some((row) => (
+            return Array.from(rows).some((row) => (
               row.getAttribute("aria-current") === "page"
               || row.getAttribute("aria-current") === "true"
               || row.getAttribute("aria-selected") === "true"
               || row.getAttribute("data-app-action-sidebar-thread-active") === "true"
             ));
-            if (active) {
-              resolve(true);
-              return;
-            }
-            window.setTimeout(poll, 150);
           };
-          poll();
+          const finish = (active) => {
+            observer.disconnect();
+            window.clearTimeout(timer);
+            window.removeEventListener("popstate", check);
+            window.removeEventListener("hashchange", check);
+            resolve(active);
+          };
+          const check = () => { if (isActive()) finish(true); };
+          const observer = new MutationObserver(check);
+          const timer = window.setTimeout(() => finish(isActive()), Math.max(0, Number(timeoutMs) || 5000));
+          observer.observe(document.body, { childList: true, subtree: true, attributes: true,
+            attributeFilter: ["aria-current", "aria-selected", "data-app-action-sidebar-thread-active"] });
+          window.addEventListener("popstate", check);
+          window.addEventListener("hashchange", check);
+          check();
         });
       }
 
@@ -8051,7 +8057,6 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
         state.busy = true;
         state.result = null;
         state.startedAt = Date.now();
-        state.fallbackOpened = false;
         sessionTransferState.providerForkTask = {
           active: true,
           startedAt: state.startedAt,
@@ -8060,27 +8065,12 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
           sourceSessionId: sourceId,
         };
         renderCodexProviderMigrateDialog();
-        // 超过 1 秒仍未完成，转交设置里的「复制/迁移会话」对话框继续。
-        state.thresholdTimer = window.setTimeout(() => {
-          state.thresholdTimer = 0;
-          const source = state.activeProvider;
-          const targetProvider = state.targetProvider;
-          state.fallbackOpened = true;
-          closeCodexProviderMigrateDialog();
-          const modal = document.getElementById(settingsModalId);
-          if (!modal || modal.hidden) renderSettingsModal("settings", "", {});
-          openSessionTransferDialog(source, targetProvider);
-        }, 1000);
         codexBridgeRequest("thread/fork", {
           threadId: sourceId,
           modelProvider: target,
           threadSource: "user",
           ephemeral: false,
         }).then((response) => {
-          if (state.thresholdTimer) {
-            window.clearTimeout(state.thresholdTimer);
-            state.thresholdTimer = 0;
-          }
           const error = response?.error;
           const thread = response?.result?.thread || {};
           const newId = String(thread?.id || response?.result?.threadId || response?.result?.id || "");
@@ -8097,13 +8087,13 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
                     ? "Codex 未返回新会话。"
                     : `新会话使用了「${got}」，未按目标迁移。`),
             };
-          state.busy = false;
-          if (sessionTransferState.providerForkTask) sessionTransferState.providerForkTask.active = false;
-          if (codexProviderMigrateDialogState.layer) renderCodexProviderMigrateDialog();
-          if (sessionTransferState.open) renderSessionTransferDialog();
-          return;
+            state.busy = false;
+            if (sessionTransferState.providerForkTask) sessionTransferState.providerForkTask.active = false;
+            if (state.layer) renderCodexProviderMigrateDialog();
+            if (sessionTransferState.open) renderSessionTransferDialog();
+            return;
           }
-          // fork 成功：取原标题 → 命名副本 → 导航切换 → 确认侧边栏已高亮
+          // fork 成功：取原标题 → 命名副本 → 导航切换 → 确认目标会话已打开
           const finish = (detail) => {
             state.result = detail;
             state.busy = false;
@@ -8111,17 +8101,12 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
               sessionTransferState.providerForkTask.active = false;
               sessionTransferState.providerForkTask.result = detail;
             }
-            if (codexProviderMigrateDialogState.layer) renderCodexProviderMigrateDialog();
-            if (detail?.ok && state.fallbackOpened && sessionTransferState.open) {
-              // The slow-request fallback is only a secondary surface. Once
-              // the original fork completes, close the duplicate dialog.
-              closeSessionTransferDialog();
-            } else if (sessionTransferState.open) {
-              renderSessionTransferDialog();
-            }
+            if (detail?.ok && detail.named && detail.navigated) closeCodexProviderMigrateDialog();
+            else if (state.layer) renderCodexProviderMigrateDialog();
+            if (sessionTransferState.open) renderSessionTransferDialog();
           };
           codexSourceSessionTitle(sourceId).then((sourceTitle) => {
-            const title = `${(sourceTitle || "复制会话")}（副本）`;
+            const title = `(复制)${(sourceTitle || "会话").replace(/^(?:\(复制\)\s*)+/, "")}`;
             return codexBridgeRequest("thread/name/set", {
               threadId: newId,
               name: title,

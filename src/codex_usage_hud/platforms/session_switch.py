@@ -21,6 +21,7 @@ _VK_A = 0x41
 _VK_K = 0x4B
 _VK_V = 0x56
 _VK_1 = 0x31
+_VK_ESCAPE = 0x1B
 _CF_UNICODETEXT = 13
 _GMEM_MOVEABLE = 0x0002
 _KEYEVENTF_KEYUP = 0x0002
@@ -265,6 +266,16 @@ class WindowsSearchSessionSwitchBackend:
         self._settle_seconds = max(0.1, float(settle_seconds))
         self._poll_seconds = max(0.05, float(poll_seconds))
 
+    @staticmethod
+    def _dismiss_search_dialog(tracker: object, hwnd: int) -> None:
+        try:
+            # A failed shortcut leaves Codex's modal search layer open. Only
+            # dismiss it while Codex still owns the foreground input.
+            if tracker.is_active(hwnd):
+                _send_virtual_keys(_VK_ESCAPE)
+        except Exception:
+            _LOGGER.debug("session_search_dialog_cleanup_failed", exc_info=True)
+
     def activate(self, request: SessionSwitchRequest) -> SessionSwitchResult:
         if not sys.platform.startswith("win"):
             return SessionSwitchResult(
@@ -346,6 +357,7 @@ class WindowsSearchSessionSwitchBackend:
             _send_virtual_keys(_VK_CONTROL, _VK_A)
             time.sleep(0.05)
             if not _send_virtual_keys(_VK_CONTROL, _VK_V):
+                self._dismiss_search_dialog(tracker, hwnd)
                 return SessionSwitchResult(
                     ok=False,
                     status="sendinput-error",
@@ -357,6 +369,7 @@ class WindowsSearchSessionSwitchBackend:
                 )
             time.sleep(self._settle_seconds)
             if not _send_virtual_keys(_VK_CONTROL, _VK_1):
+                self._dismiss_search_dialog(tracker, hwnd)
                 return SessionSwitchResult(
                     ok=False,
                     status="sendinput-error",
@@ -387,6 +400,7 @@ class WindowsSearchSessionSwitchBackend:
                 )
             time.sleep(self._poll_seconds)
 
+        self._dismiss_search_dialog(tracker, hwnd)
         return SessionSwitchResult(
             ok=False,
             status="search-shortcut-timeout",
