@@ -48,14 +48,26 @@ def test_canonical_uuid_round_trip_lowercases_and_strips_whitespace() -> None:
     assert _canonical_uuid("not-a-uuid") == ""
 
 
-def test_route_candidates_orders_caller_kind_first() -> None:
-    ordered = _route_candidates("local-thread")
-    assert ordered[0] == "/local/"
-    assert "/c/" in ordered
-    assert "/remote/" in ordered
-    # Unknown kind falls back to the canonical order.
-    fallback = _route_candidates("")
-    assert fallback[0] == "/local/"
+@pytest.mark.parametrize("kind", ["local-thread", "", "app", "chatgpt", "remote"])
+def test_route_candidates_stay_on_preflight_host(kind: str) -> None:
+    assert _route_candidates(kind) == ["/local/"]
+
+
+def test_bubble_does_not_repeat_an_already_sent_unverified_navigation() -> None:
+    from codex_usage_hud.overlay_commands import _handle_work_overlay_command
+    from codex_usage_hud.platforms.session_switch import SessionSwitchResult
+
+    controller = MagicMock()
+    controller.activate_session.return_value = SessionSwitchResult(
+        ok=False, status="navigation-unverified", backend="cdp",
+    )
+    result = _handle_work_overlay_command(
+        {"action": "activateSession", "sessionId": SESSION_ID},
+        controller,
+        prepare_window_callback=lambda: (True, "ready", "", 123),
+    )
+    assert result.status == "navigation-unverified"
+    controller.activate_session.assert_called_once()
 
 
 def test_navigation_script_uses_electron_bridge_and_local_host() -> None:

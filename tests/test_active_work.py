@@ -3,8 +3,68 @@ from __future__ import annotations
 from pathlib import Path
 from threading import Event
 from types import SimpleNamespace
+from datetime import datetime, timedelta
+from dataclasses import replace
+
+import pytest
 
 from codex_usage_hud.active_work import RendererActiveWorkPump
+
+
+@pytest.mark.parametrize("follow_target", [False, True])
+@pytest.mark.parametrize("old_first", [False, True])
+@pytest.mark.parametrize("terminal", ["complete", "abort", "running"])
+def test_resumed_rollouts_use_latest_task_before_updating_caches(
+    tmp_path, monkeypatch, follow_target, old_first, terminal,
+) -> None:
+    from codex_usage_hud import active_work
+    from codex_usage_hud.core import ParsedSession
+
+    now = datetime.now().astimezone()
+    old_path, new_path = tmp_path / "old.jsonl", tmp_path / "resumed.jsonl"
+    old = ParsedSession(
+        session_id="same-session", session_path=old_path,
+        task_started_at=now - timedelta(minutes=20),
+        session_started_at=now - timedelta(minutes=20),
+        last_event_time=now - timedelta(minutes=19), task_prompt="old task",
+    )
+    old.request.status = "running"
+    newer = replace(
+        old, session_path=new_path, task_started_at=now - timedelta(minutes=2),
+        session_started_at=now - timedelta(minutes=2),
+        last_event_time=now - timedelta(seconds=2), task_prompt="new task",
+    )
+    parsed = {old_path: old, new_path: newer}
+    context = SimpleNamespace(
+        sessions_root=tmp_path, active_session_tracker=None,
+        parser=SimpleNamespace(parse_file=lambda path: parsed[path]),
+    )
+    paths = [old_path, new_path] if old_first else [new_path, old_path]
+    monkeypatch.setattr(active_work, "_recent_session_files", lambda *a, **kw: paths)
+    current = old if follow_target else ParsedSession(session_id="unrelated")
+    current_path = old_path if follow_target else None
+    # Observe the latest task running, then process its terminal transition
+    # with both the abandoned and resumed files still discoverable.
+    items = active_work.active_work_items_for_snapshot(context, current, current_path)
+    assert len(items) == 1
+    assert items[0].task_started_at == newer.task_started_at
+    if terminal == "complete":
+        parsed[new_path] = replace(newer, task_completed_at=now)
+    elif terminal == "abort":
+        parsed[new_path] = replace(newer, task_aborted_at=now)
+    items = active_work.active_work_items_for_snapshot(context, current, current_path)
+    if terminal == "abort":
+        assert items == []
+    else:
+        assert len(items) == 1
+        assert items[0].task_started_at == newer.task_started_at
+        assert items[0].status == ("recent" if terminal == "complete" else "running")
+    # After HUD restart, historical completion must not resurrect the old task.
+    if terminal != "running":
+        fresh = SimpleNamespace(
+            sessions_root=tmp_path, active_session_tracker=None, parser=context.parser,
+        )
+        assert active_work.active_work_items_for_snapshot(fresh, current, current_path) == []
 
 
 def test_active_work_pump_publishes_sequence_bound_result_and_wakes() -> None:

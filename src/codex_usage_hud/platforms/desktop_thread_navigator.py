@@ -36,16 +36,6 @@ from .cdp_probe import (
 _DEFAULT_PREFLIGHT_TIMEOUT_SECONDS = 6.0
 _DEFAULT_VERIFY_TIMEOUT_SECONDS = 4.0
 
-# Desktop route prefixes by host kind.  ``local`` covers Codex CLI/Desktop
-# threads; the others exist so a non-local thread can be attempted as a
-# fallback rather than reported as unreachable.
-_ROUTE_PREFIXES: tuple[tuple[str, str], ...] = (
-    ("local", "/local/"),
-    ("chatgpt", "/c/"),
-    ("remote", "/remote/"),
-)
-
-
 class DesktopThreadNavigationError(RuntimeError):
     """Raised when Desktop cannot be asked to open a thread at all."""
 
@@ -60,19 +50,8 @@ def _canonical_uuid(value: object) -> str:
 
 
 def _route_candidates(client_kind: object) -> list[str]:
-    """Order route prefixes so the caller's own kind is tried first."""
-    wanted = str(client_kind or "").strip().casefold()
-    ordered = [
-        prefix
-        for kind, prefix in _ROUTE_PREFIXES
-        if wanted and wanted.startswith(kind)
-    ]
-    ordered.extend(
-        prefix
-        for kind, prefix in _ROUTE_PREFIXES
-        if prefix not in ordered
-    )
-    return ordered
+    """The local thread/read preflight authorizes only the local route."""
+    return ["/local/"]
 
 
 def _navigation_script(
@@ -202,8 +181,8 @@ def _navigation_script(
         detail: "thread-id-mismatch",
       }};
     }}
-    // 2. Ask the main process to route.  Each prefix is followed by its own
-    // verification pass so a non-local thread can fall through.
+    // 2. Route only on the host verified by thread/read. A slow sidebar is
+    // not evidence that the thread belongs to a different host.
     const attempted = [];
     for (const route of input.routes) {{
       const hostId = route.replace(/^\\//, "").replace(/\\/$/, "");

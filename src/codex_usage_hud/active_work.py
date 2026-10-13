@@ -1125,6 +1125,18 @@ def _effective_notification_provider_scope(
     return included
 
 
+def _work_snapshot_revision(snapshot: ParsedSession) -> tuple[float, float, float]:
+    """Order resumed rollouts by their durable task, never discovery priority."""
+    return tuple(
+        value.timestamp() if value is not None else float("-inf")
+        for value in (
+            snapshot.task_started_at or snapshot.session_started_at,
+            snapshot.last_event_time,
+            snapshot.session_started_at,
+        )
+    )
+
+
 def active_work_items_for_snapshot(
     context: "RuntimeContext",
     snapshot: ParsedSession,
@@ -1152,6 +1164,38 @@ def active_work_items_for_snapshot(
     terminal_item_ids: dict[str, str] = {}
     expired_startup_item_ids: set[str] = set()
     current_key = _session_path_key(session_path)
+    # A Desktop restart can create another rollout with the same session_meta.id.
+    # Resolve those versions before touching terminal/visible caches: an old
+    # unfinished file must not resurrect a completed or aborted task.
+    candidates: dict[str, tuple[Path, ParsedSession]] = {}
+    if scan_candidates:
+        for path in _recent_session_files(
+            context.sessions_root,
+            current_path=session_path,
+            limit=ACTIVE_WORK_CANDIDATE_LIMIT,
+            priority_paths=priority_paths,
+        ):
+            if _session_path_key(path) == current_key:
+                continue
+            try:
+                parsed = context.parser.parse_file(path)
+            except Exception:
+                continue
+            if parsed.session_id == snapshot.session_id and parsed.session_id not in {"", "n/a"}:
+                if _work_snapshot_revision(parsed) > _work_snapshot_revision(snapshot):
+                    snapshot = replace(
+                        parsed,
+                        session_title=snapshot.session_title or parsed.session_title,
+                        selection_source=snapshot.selection_source,
+                        composer_draft=snapshot.composer_draft,
+                        composer_draft_updated_at_ms=snapshot.composer_draft_updated_at_ms,
+                        composer_send_requested=snapshot.composer_send_requested,
+                    )
+                continue
+            identity = parsed.session_id if parsed.session_id not in {"", "n/a"} else _session_path_key(path)
+            previous = candidates.get(identity)
+            if previous is None or _work_snapshot_revision(parsed) > _work_snapshot_revision(previous[1]):
+                candidates[identity] = (path, parsed)
     # Internal collaboration agents stay folded into their parent. Desktop can
     # promote a delegation to an independent visible thread; those do bubble.
     # Desktop source=exec threads are internal request executors and never bubble.
@@ -1224,18 +1268,7 @@ def active_work_items_for_snapshot(
         visible_item_cache.pop(str(snapshot.session_id), None)
 
     if scan_candidates:
-        for path in _recent_session_files(
-            context.sessions_root,
-            current_path=session_path,
-            limit=ACTIVE_WORK_CANDIDATE_LIMIT,
-            priority_paths=priority_paths,
-        ):
-            if _session_path_key(path) == current_key:
-                continue
-            try:
-                parsed = context.parser.parse_file(path)
-            except Exception:
-                continue
+        for path, parsed in candidates.values():
             if _hide_from_work_overlay(parsed):
                 if parsed.session_id:
                     visible_item_cache.pop(str(parsed.session_id), None)

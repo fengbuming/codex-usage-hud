@@ -211,13 +211,15 @@ def _handle_work_overlay_command(
             )
     # Window creation precedes renderer readiness on a cold start. Retry only
     # readiness/transport failures; a missing thread is a terminal result.
+    # navigation-unverified already sent a route: repeating it can fight the
+    # Desktop's in-flight load and alternate between content and error pages.
     deadline = time.monotonic() + WORK_OVERLAY_UI_READY_TIMEOUT_SECONDS
     result = activate_session()
     while (
         window_prepared and not result.ok
         and result.status in {"cdp-error", "backend-error", "no-backend",
                               "desktop-bridge-unavailable", "desktop-response-timeout",
-                              "navigation-unverified", "sidebar-unavailable"}
+                              "sidebar-unavailable"}
         and time.monotonic() < deadline
     ):
         time.sleep(0.05)
