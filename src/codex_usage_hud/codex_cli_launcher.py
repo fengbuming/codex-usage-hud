@@ -146,6 +146,11 @@ def _launch_environment(
             continue
         environment[normalized_name] = value
         existing_names.add(normalized_name.casefold())
+    # Background launchers may advertise a non-interactive terminal. This env
+    # belongs to a new interactive Windows terminal, not the HUD's own stdio.
+    for name, value in environment.items():
+        if name.casefold() == "term" and str(value).strip().casefold() == "dumb":
+            environment[name] = "xterm-256color"
     return environment
 
 
@@ -921,6 +926,23 @@ def _command_with_codex_home(
     return f"{prefix}\n{str(command or '')}"
 
 
+def _command_with_interactive_term(command: str, shell: str) -> str:
+    """Also fix a stale host/profile env when Windows Terminal reuses a tab."""
+    if shell == "powershell":
+        prefix = "if ($env:TERM -eq 'dumb') { $env:TERM = 'xterm-256color' }"
+    elif shell == "cmd":
+        prefix = '(if /I "%TERM%"=="dumb" set "TERM=xterm-256color")'
+    else:
+        return command
+    return f"{prefix}\n{command}"
+
+
+def _cmd_process_command(arguments: list[str]) -> str:
+    # cmd consumes its command as raw text, not CommandLineToArgvW arguments.
+    # list2cmdline on the final argument turns quotes into literal backslashes.
+    return subprocess.list2cmdline(arguments[:-1]) + " " + arguments[-1]
+
+
 def _terminal_process_probe(
     command: list[str],
     *,
@@ -1114,6 +1136,7 @@ def launch_codex_cli(
     )
     shell = str(launch_terminal.get("shell") or "powershell")
     if platform == "windows" and shell in {"powershell", "cmd"}:
+        terminal_command = _command_with_interactive_term(terminal_command, shell)
         terminal_command = _cli_command_with_private_backend(terminal_command)
     if commit_spawn is not None:
         try:
@@ -1135,14 +1158,14 @@ def launch_codex_cli(
                   else f'set "{CLI_LAUNCH_ID_ENV}={token}"')
         terminal_command = f"{prefix}\n{terminal_command}"
     try:
+        process_command = _terminal_process_command(
+            launch_terminal, terminal_command, str(path), open_as_tab=opened_as_tab, title=title,
+        )
+        if (platform == "windows" and shell == "cmd"
+                and launch_terminal.get("kind") != "windows_terminal"):
+            process_command = _cmd_process_command(process_command)
         process = subprocess.Popen(
-            _terminal_process_command(
-                launch_terminal,
-                terminal_command,
-                str(path),
-                open_as_tab=opened_as_tab,
-                title=title,
-            ),
+            process_command,
             cwd=str(path),
             env=_launch_environment(
                 platform_name=platform_name,

@@ -6,9 +6,15 @@ import ctypes
 from ctypes import wintypes as wt
 from dataclasses import dataclass
 from pathlib import Path
+import re
 import struct
 
 from .windows_tracker import CodexWindowTracker, _UiaProbe
+
+
+def _terminal_title_key(title: str) -> str:
+    """Ignore Codex's animated Braille prefix, preserving the full title."""
+    return re.sub(r"^[\u2800-\u28ff]\s+", "", title.strip())
 
 
 @dataclass(frozen=True)
@@ -272,7 +278,8 @@ class WindowsCliApi:
                         element = stack.pop()
                         visited += 1
                         try:
-                            if probe._element_int(element, 21) == 50019 and probe._element_bstr(element, 23) == title:
+                            if (probe._element_int(element, 21) == 50019
+                                    and _terminal_title_key(probe._element_bstr(element, 23)) == _terminal_title_key(title)):
                                 tabs.append((hwnd, probe._retain(element)))
                             stack.extend(probe._children(walker, element))
                         finally:
@@ -308,7 +315,9 @@ class WindowsCliApi:
                         stack.extend(probe._children(walker, element))
                     finally:
                         probe._release(element)
-                candidates = panes if len(panes) == 1 else [p for p in panes if p[0] == title]
+                candidates = panes if len(panes) == 1 else [
+                    p for p in panes if _terminal_title_key(p[0]) == _terminal_title_key(title)
+                ]
                 if len(candidates) != 1:
                     return False, "terminal-pane-ambiguous"
                 pane = candidates[0][1]

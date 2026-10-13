@@ -1,4 +1,6 @@
 import json
+import os
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -15,6 +17,53 @@ from codex_usage_hud import cli_launch_registry
 def isolate_cli_launch_records(tmp_path, monkeypatch):
     monkeypatch.setattr(cli_launch_registry, "hud_runtime_dir", lambda: tmp_path / "hud-runtime")
     monkeypatch.setattr(launcher, "_supports_private_cli_backend", lambda _: False)
+
+
+@pytest.mark.parametrize("name,value", [("TERM", "dumb"), ("term", "DUMB")])
+def test_windows_interactive_launch_corrects_only_the_child_term(name, value, monkeypatch):
+    inherited = {name: value, "KEEP": "unchanged"}
+    monkeypatch.setattr(launcher, "external_process_environment", lambda: inherited.copy())
+    monkeypatch.setattr(launcher, "_windows_registry_environment", lambda: {})
+    result = launcher._launch_environment(platform_name="windows")
+    assert result[name] == "xterm-256color"
+    assert result["KEEP"] == "unchanged"
+    assert inherited[name] == value
+
+
+@pytest.mark.parametrize("term", [None, "xterm-256color", "vt100"])
+def test_windows_interactive_launch_preserves_valid_term(term, monkeypatch):
+    inherited = {"TERM": term} if term else {}
+    monkeypatch.setattr(launcher, "external_process_environment", lambda: inherited.copy())
+    monkeypatch.setattr(launcher, "_windows_registry_environment", lambda: {})
+    assert launcher._launch_environment(platform_name="windows") == inherited
+
+
+@pytest.mark.parametrize("platform", ["macos", "linux"])
+def test_non_windows_launch_keeps_explicit_dumb_term(platform, monkeypatch):
+    monkeypatch.setattr(launcher, "external_process_environment", lambda: {"TERM": "dumb"})
+    assert launcher._launch_environment(platform_name=platform)["TERM"] == "dumb"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows interactive shell environment")
+@pytest.mark.parametrize("shell", ["powershell", "cmd"])
+@pytest.mark.parametrize("term", ["dumb", "vt100"])
+def test_shell_startup_corrects_stale_host_term_but_preserves_valid_term(shell, term):
+    environment = os.environ.copy()
+    environment["TERM"] = term
+    if shell == "powershell":
+        text = launcher._command_with_interactive_term("[Console]::Write($env:TERM)", shell)
+        command = ["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", text]
+    else:
+        text = launcher._command_with_interactive_term("cmd.exe /D /C set TERM", shell)
+        arguments = launcher._terminal_process_command(
+            {"executable": "cmd.exe", "kind": "shell", "shell": "cmd"}, text, "C:/", title="TERM test",
+        )
+        arguments[2] = "/C"
+        command = launcher._cmd_process_command(arguments)
+    result = subprocess.run(command, env=environment, capture_output=True, text=True, timeout=5, check=True)
+    expected = "xterm-256color" if term == "dumb" else term
+    assert result.stdout.strip() == (expected if shell == "powershell" else "TERM=" + expected)
+    assert environment["TERM"] == term
 
 
 def test_cli_binding_adds_only_an_advertised_private_backend_option(monkeypatch):
@@ -530,6 +579,7 @@ def test_launch_codex_cli_uses_new_windows_terminal_tab_when_host_is_open(
         "-Command",
         f"$Host.UI.RawUI.WindowTitle = {launcher._shell_quote(result['title'], 'powershell')}\n"
         f"$env:CODEX_USAGE_HUD_CLI_LAUNCH_ID = '{result['launchId']}'\n"
+        "if ($env:TERM -eq 'dumb') { $env:TERM = 'xterm-256color' }\n"
         f"$env:CODEX_HOME = {launcher._shell_quote(str(codex_home), 'powershell')}\ncodex --help",
     ]
     assert process_calls[0]["env"]["CODEX_HOME"] == str(codex_home)

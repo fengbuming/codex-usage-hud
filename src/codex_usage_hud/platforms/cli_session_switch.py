@@ -134,17 +134,39 @@ class CliSessionNavigator:
                 info = self._console_probe(root.pid)
                 terminal_pids = {p.pid for p in ancestors(int(info.get("ownerPid") or 0))
                                  if ntpath.basename(p.executable).casefold() == "windowsterminal.exe"}
+                # Default-terminal delegation can leave the shell parent gone
+                # and the console HWND owned by the shell, not the WT broker.
+                # Search actual WT windows using the verified CLI's live title;
+                # focus_terminal rejects missing or duplicate tabs before focus.
+                if not terminal_pids and info.get("hwnd") and not info.get("classic"):
+                    terminal_pids = {p.pid for p in processes
+                                     if ntpath.basename(p.executable).casefold() == "windowsterminal.exe"}
             if terminal_pids:
                 if not record and not info:
                     info = self._console_probe(root.pid)
-                title = str((record or info).get("title") or "")
+                title = str((record or {}).get("title") or info.get("title") or "")
                 if not title:
                     return outcome("cli-terminal-unidentified", "无法确认此 CLI 对应的终端标签页。")
-                ready, status = api.focus_terminal(api.windows(terminal_pids), title)
-                return outcome(status, "" if ready else "未能确认目标终端标签页；请保持标签页标题唯一。", ok=ready)
+                windows = api.windows(terminal_pids)
+                ready, status = api.focus_terminal(windows, title)
+                # Codex changes the shell title after startup unless WT pins it.
+                # Retry only a missing registered title, never an ambiguous tab.
+                if not ready and status == "terminal-tab-not-found":
+                    if not info:
+                        info = self._console_probe(root.pid)
+                    live_title = str(info.get("title") or "")
+                    if live_title and live_title != title:
+                        ready, status = api.focus_terminal(windows, live_title)
+                messages = {
+                    "terminal-ambiguous": "多个终端标签页使用相同标题，无法确定目标；请保持标签页标题唯一。",
+                    "terminal-tab-not-found": "未找到此 CLI 对应的终端标签页，请确认标签页仍在运行。",
+                    "terminal-not-foreground": "目标 CLI 终端未能恢复到前台。",
+                }
+                return outcome(status, "" if ready else messages.get(
+                    status, "未能确认目标终端标签页或输入焦点，请稍后重试。"), ok=ready)
             hwnd = int(info.get("hwnd") or 0)
             if not hwnd or not info.get("classic"):
-                return outcome("cli-terminal-unsupported", "此 CLI 的终端不支持直接跳转；VS Code 和 WSL 需要单独适配。")
+                return outcome("cli-terminal-unidentified", "无法确认此 CLI 对应的终端窗口或标签页。")
             ready = api.restore(hwnd)
             return outcome("switched" if ready else "terminal-not-foreground",
                            "" if ready else "目标 CLI 终端未能恢复到前台。", ok=ready)

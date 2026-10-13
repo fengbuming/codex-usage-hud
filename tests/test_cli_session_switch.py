@@ -83,6 +83,65 @@ def test_repeated_tab_titles_remain_a_failure():
     assert not result.ok and result.status == "terminal-ambiguous"
 
 
+def test_delegated_powershell_tab_uses_live_title_without_terminal_ancestor():
+    api = fixture_api()
+    api.processes.return_value[1] = CliProcess(10, 999, r"C:\pwsh.exe", 101)
+    api.processes.return_value.append(CliProcess(30, 0, r"C:\WindowsTerminal.exe", 103))
+    probe = MagicMock(return_value={"hwnd": 300, "ownerPid": 10, "classic": False,
+                                   "title": "current CLI session"})
+    assert navigator(api, probe=probe).activate(SESSION).ok
+    api.windows.assert_called_once_with({20, 30})
+    api.focus_terminal.assert_called_once_with([200], "current CLI session")
+    api.restore.assert_not_called()
+
+
+def test_changed_registered_title_retries_live_console_title():
+    api = fixture_api([cli(launch_id="launch-1")])
+    api.focus_terminal.side_effect = [(False, "terminal-tab-not-found"), (True, "switched")]
+    probe = MagicMock(return_value={"hwnd": 300, "classic": False, "title": "current CLI session"})
+    assert navigator(api, probe=probe).activate(SESSION).ok
+    assert [call.args[1] for call in api.focus_terminal.call_args_list] == [
+        "registered CLI", "current CLI session"]
+    probe.assert_called_once_with(1)
+
+
+def test_delegated_registered_title_can_change_after_launch():
+    api = fixture_api([cli(launch_id="launch-1")])
+    api.processes.return_value[1] = CliProcess(10, 999, r"C:\pwsh.exe", 101)
+    api.focus_terminal.side_effect = [(False, "terminal-tab-not-found"), (True, "switched")]
+    probe = MagicMock(return_value={"hwnd": 300, "ownerPid": 10, "classic": False,
+                                   "title": "current CLI session"})
+    assert navigator(api, probe=probe).activate(SESSION).ok
+    assert [call.args[1] for call in api.focus_terminal.call_args_list] == [
+        "registered CLI", "current CLI session"]
+    probe.assert_called_once_with(1)
+
+
+def test_ambiguous_registered_title_does_not_retry_another_title():
+    api = fixture_api([cli(launch_id="launch-1")])
+    api.focus_terminal.return_value = False, "terminal-ambiguous"
+    probe = MagicMock()
+    assert navigator(api, probe=probe).activate(SESSION).status == "terminal-ambiguous"
+    api.focus_terminal.assert_called_once()
+    probe.assert_not_called()
+
+
+def test_delegated_console_without_title_does_not_focus_arbitrary_tab():
+    api = fixture_api([cli(parent=0)])
+    result = navigator(api, probe=lambda _: {"hwnd": 300, "classic": False}).activate(SESSION)
+    assert result.status == "cli-terminal-unidentified"
+    api.focus_terminal.assert_not_called()
+
+
+def test_failed_console_probe_does_not_search_unrelated_terminal_windows():
+    api = fixture_api([cli(parent=0)])
+    result = navigator(api, probe=lambda _: {}).activate(SESSION)
+    assert result.status == "cli-terminal-unidentified"
+    assert "VS Code" not in result.message and "WSL" not in result.message
+    api.windows.assert_not_called()
+    api.focus_terminal.assert_not_called()
+
+
 def test_resumed_cli_can_change_workdir_without_losing_session_identity():
     api = fixture_api()
     n = navigator(api, identity=lambda _: (SESSION, "\\\\?\\" + CWD))
