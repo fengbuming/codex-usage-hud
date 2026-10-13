@@ -113,6 +113,18 @@ class PyInstallerCommandTests(unittest.TestCase):
         self.assertEqual(environment["PYTHONPATH"], str(source_root.resolve()))
         self.assertEqual(environment["PYTHONNOUSERSITE"], "1")
 
+    def test_windows_build_environment_excludes_foreign_native_toolchains(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            windows_root = Path(temp_dir) / "Windows"
+            with patch.object(build_exe.sys, "platform", "win32"), patch.dict(
+                os.environ, {"PATH": "foreign-poppler-bin", "SystemRoot": str(windows_root)}
+            ):
+                environment = build_exe.build_environment()
+        self.assertNotIn("foreign-poppler-bin", environment["PATH"])
+        paths = environment["PATH"].split(os.pathsep)
+        self.assertIn(str(windows_root / "System32"), paths)
+        self.assertIn(str(Path(sys.executable).resolve().parent), paths)
+
 
 if __name__ == "__main__":
     unittest.main()

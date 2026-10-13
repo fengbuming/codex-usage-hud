@@ -225,6 +225,20 @@ def build_environment(*, source_root: Path | None = None) -> dict[str, str]:
         # can leak extra module names into an otherwise isolated worktree build.
         env["PYTHONPATH"] = str(Path(source_root).resolve())
     env["PYTHONNOUSERSITE"] = "1"
+    if sys.platform.startswith("win"):
+        # Dependency analysis also searches PATH for native DLLs. Unrelated
+        # toolchains (e.g. Poppler's versioned ICU) can shadow Windows ICU and
+        # produce an executable whose QtCore cannot load. Keep only the active
+        # Python runtime and Windows directories in the build search path.
+        python_root = Path(sys.executable).resolve().parent
+        windows_env = {name.casefold(): value for name, value in env.items()}
+        windows_root = Path(windows_env.get("systemroot") or windows_env.get("windir") or r"C:\Windows")
+        env["PATH"] = os.pathsep.join(str(path) for path in dict.fromkeys((
+            python_root, python_root / "Scripts", python_root / "DLLs",
+            Path(sys.base_prefix), Path(sys.base_prefix) / "DLLs",
+            windows_root / "System32", windows_root,
+            windows_root / "System32" / "Wbem",
+        )))
     return env
 
 

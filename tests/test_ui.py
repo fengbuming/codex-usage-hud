@@ -18115,6 +18115,9 @@ class DaemonLifecycleTests(unittest.TestCase):
                 update_manager_factory=lambda: fake_update_manager,
                 bridge_factory=lambda *_args, **_kwargs: fake_bridge,
                 snapshot_builder=build_snapshot,
+                active_work_pump_factory=lambda *_args: SimpleNamespace(
+                    take_latest=lambda: None, request=MagicMock(), close=MagicMock(),
+                ),
             )
 
             with (

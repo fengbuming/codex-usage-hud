@@ -59,7 +59,9 @@ def run_work_overlay_helper_qt(
         from PySide6.QtCore import QFileSystemWatcher, QTimer
         from PySide6.QtWidgets import QApplication
     except Exception as exc:  # pragma: no cover - depends on local runtime
-        raise RuntimeError("PySide6 is required for the desktop work overlay helper.") from exc
+        raise RuntimeError(
+            f"PySide6 desktop work overlay import failed: {type(exc).__name__}: {exc}"
+        ) from exc
 
     from .qt_window import OverlayWindow
 

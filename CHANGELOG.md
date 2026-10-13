@@ -19,6 +19,7 @@ and this repository follows Semantic Versioning for release tags.
 
 - Kept provider IDs when editing API keys and refreshed prewarmed new-session configuration.
 - Preserved existing provider relay endpoints across saves and HUD restarts.
+- Isolated Windows packaging from unrelated native DLLs on PATH so bundled work bubbles can start.
 - Protected CLI history from provider-wide forced deletion without CLI shutdown verification.
 - Improved cold-start day/week totals, task completion state across resumed rollouts, and Desktop startup detection.
 - Avoided cross-route navigation retries and restored HUD layout after window resizing.
