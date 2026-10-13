@@ -586,6 +586,13 @@ def run_daemon(
                         seamless_recovery=seamless_recovery,
                         shutdown_coordinator=shutdown,
                     )
+                services.append_diagnostic(
+                    "daemon_renderer_session_exited",
+                    exit_code=exit_code,
+                    primary_pid=_manager_primary_pid(manager),
+                    launched_codex=launched_codex_for_renderer,
+                    observed_codex_launch=observed_codex_launch,
+                )
                 session_loading = startup_loading
                 startup_loading = None
                 observed_codex_launch = False

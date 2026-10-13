@@ -122,3 +122,50 @@ def test_running_desktop_attaches_only_to_verified_candidate() -> None:
         port_source="desktop-process",
     )
     assert diagnostics == ["renderer_startup_classified"]
+
+
+@pytest.mark.parametrize("running,observed,declared,verified,expected", [
+    (False, False, False, False, startup.RENDERER_STARTUP_LAUNCH),
+    (True, False, True, True, startup.RENDERER_STARTUP_ATTACH),
+    (True, False, False, False, startup.RENDERER_STARTUP_RESTART_REQUIRED),
+    (True, True, True, False, startup.RENDERER_STARTUP_ATTACH_OBSERVED),
+    (True, True, False, False, startup.RENDERER_STARTUP_RELAUNCH_OBSERVED),
+])
+def test_five_startup_scenarios_ignore_residual_renderer_ports(
+    running, observed, declared, verified, expected, monkeypatch,
+) -> None:
+    monkeypatch.delenv(startup.CDP_PORT_ENV, raising=False)
+    main = _process(22, "ChatGPT.exe" + (
+        " --remote-debugging-port=60123" if declared else ""
+    ))
+    stale = _process(11, "ChatGPT.exe --type=renderer --remote-debugging-port=59629")
+    ports = startup.RendererStartupPorts(
+        desktop_processes=lambda: [stale, main] if running else [],
+        audited_desktop_processes=lambda: [stale, main] if running else [],
+        desktop_running=lambda: running,
+        diagnostic=lambda *_args, **_kwargs: None,
+        state_path=lambda: Path("unused"),
+    )
+    plan = startup.startup_plan(
+        ports=ports, observed_codex_launch=observed,
+        select_launch=lambda: 60123,
+        find_existing=lambda: startup.RendererCdpPortCandidate(60123, "desktop-process", 22)
+        if verified else None,
+    )
+    assert plan.scenario == expected
+    assert plan.port == (60123 if expected in {
+        startup.RENDERER_STARTUP_LAUNCH, startup.RENDERER_STARTUP_ATTACH,
+        startup.RENDERER_STARTUP_ATTACH_OBSERVED,
+    } else None)
+
+
+def test_observed_helpers_alone_cannot_trigger_automatic_restart() -> None:
+    ports = startup.RendererStartupPorts(
+        audited_desktop_processes=lambda: [
+            _process(11, "ChatGPT.exe --type=renderer --remote-debugging-port=59629"),
+        ],
+        diagnostic=lambda *_args, **_kwargs: None,
+    )
+    plan = startup.startup_plan(observed_codex_launch=True, ports=ports)
+    assert plan.scenario == startup.RENDERER_STARTUP_RESTART_REQUIRED
+    assert plan.reason == "observed-codex-process-not-found"

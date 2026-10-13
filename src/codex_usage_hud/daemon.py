@@ -220,6 +220,7 @@ class WindowsProcessListener:
         self.exclude_pid = exclude_pid if exclude_pid is not None else os.getpid()
         self.enabled = False
         self.error = ""
+        self._main_process_cache: dict[int, bool] = {}
         if not sys.platform.startswith("win"):
             self.error = f"Windows process listener is unsupported on {sys.platform}"
             return
@@ -302,6 +303,7 @@ class WindowsProcessListener:
 
         pids: list[int] = []
         names: list[str] = []
+        parents: dict[int, int] = {}
         entry = _ProcessEntry32W()
         entry.dwSize = ctypes.sizeof(_ProcessEntry32W)
         try:
@@ -318,14 +320,41 @@ class WindowsProcessListener:
                 ):
                     pids.append(pid)
                     names.append(name)
+                    parents[pid] = int(entry.th32ParentProcessID)
                 has_entry = bool(self.kernel32.Process32NextW(handle, ctypes.byref(entry)))
         finally:
             self.kernel32.CloseHandle(handle)
 
+        # Toolhelp enumeration order is not process-tree order. Watch only the
+        # audited roots; GPU/renderer/crashpad helpers can survive a tray quit.
+        roots = {pid for pid in pids if parents[pid] not in parents}
+        self._main_process_cache = {
+            pid: main for pid, main in self._main_process_cache.items()
+            if pid in parents
+        }
+        if any(pid not in self._main_process_cache for pid in roots):
+            from .codex_app_runtime import (
+                audited_running_codex_desktop_processes,
+                is_codex_desktop_main_process,
+            )
+
+            try:
+                audited = audited_running_codex_desktop_processes()
+            except RuntimeError as exc:
+                raise ProcessListenerError(str(exc)) from exc
+            for process in audited:
+                if process.pid in roots and process.command_line:
+                    self._main_process_cache[process.pid] = (
+                        is_codex_desktop_main_process(process)
+                    )
+        main_rows = [
+            (pid, name) for pid, name in zip(pids, names)
+            if pid in roots and self._main_process_cache.get(pid, False)
+        ]
         return ProcessSnapshot(
-            found=bool(pids),
-            pids=tuple(pids),
-            names=tuple(names),
+            found=bool(main_rows),
+            pids=tuple(pid for pid, _name in main_rows),
+            names=tuple(name for _pid, name in main_rows),
             checked_at=checked_at,
         )
 
@@ -572,18 +601,23 @@ class CodexDaemonManager:
     def codex_is_running(self) -> bool:
         """Return whether the watched Codex process family is still alive."""
         previous_pid = self.last_snapshot.primary_pid
+        monitored_exited = False
         if self._exit_monitor is not None:
             monitored_pid = self._exit_monitor_pid
             running = self._exit_monitor.is_running()
             if running is True:
                 return True
+            monitored_exited = running is False
             self._clear_exit_monitor()
             previous_pid = monitored_pid or previous_pid
         snapshot = self.snapshot()
         if (
-            snapshot.found
-            and previous_pid is not None
-            and previous_pid not in snapshot.pids
+            monitored_exited
+            or (
+                snapshot.found
+                and previous_pid is not None
+                and previous_pid not in snapshot.pids
+            )
         ):
             self.state = DaemonState.EXITING
             _logger.info(

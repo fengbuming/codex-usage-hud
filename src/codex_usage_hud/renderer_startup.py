@@ -16,6 +16,7 @@ from .codex_app_runtime import (
     CodexDesktopProcess,
     audited_running_codex_desktop_processes,
     codex_processes_running,
+    is_codex_desktop_main_process,
     running_codex_desktop_processes,
 )
 from .platforms.cdp_probe import (
@@ -303,6 +304,8 @@ def cdp_port_candidates(
         candidates.append(RendererCdpPortCandidate(value, source, pid))
 
     for process in ports.desktop_processes():
+        if not is_codex_desktop_main_process(process):
+            continue
         for port in remote_debugging_ports(process.command_line):
             append(port, "desktop-process", process.pid)
     append(explicit_cdp_port_from_env(), "environment")
@@ -376,7 +379,10 @@ def observed_startup_plan(
     ports: RendererStartupPorts = RendererStartupPorts(),
 ) -> RendererStartupPlan:
     try:
-        processes = ports.audited_desktop_processes()
+        processes = [
+            process for process in ports.audited_desktop_processes()
+            if is_codex_desktop_main_process(process)
+        ]
     except RuntimeError as exc:
         return RendererStartupPlan(
             RENDERER_STARTUP_RESTART_REQUIRED,

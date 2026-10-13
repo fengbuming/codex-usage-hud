@@ -46,6 +46,20 @@ class CodexDesktopProcess:
     started_at: str = ""
 
 
+def is_codex_desktop_main_process(process: CodexDesktopProcess) -> bool:
+    """Classify an audited Desktop row without trusting Electron helpers.
+
+    Renderer helpers inherit the main process's debugging port and can outlive
+    it. Their arguments must never describe a newly launched Desktop instance.
+    An unreadable command line is not sufficient proof of a main process.
+    """
+    command = str(process.command_line or "").strip()
+    return bool(command) and not re.search(
+        r"(?:^|\s)--type(?:=|\s)|(?:^|\s)app-server(?:\s|$)",
+        command,
+    )
+
+
 def _windows_process_started_at(value: object) -> str:
     """Normalize a Win32/CIM CreationDate value to an UTC ISO timestamp."""
     text = str(value or "").strip()
@@ -969,7 +983,7 @@ __all__ = [
     "codex_app_debugger_parameters", "codex_app_executable_candidates",
     "codex_app_shell_targets", "codex_appx_install_locations",
     "codex_processes_exited", "codex_processes_running", "is_codex_client_process",
-    "is_macos_codex_desktop_command", "launch_codex_app",
+    "is_codex_desktop_main_process", "is_macos_codex_desktop_command", "launch_codex_app",
     "launch_macos_codex_app", "macos_executable_from_command_line",
     "macos_running_codex_desktop_processes", "prepare_codex_window_for_renderer",
     "restart_codex_app", "running_codex_desktop_processes",

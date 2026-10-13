@@ -13,6 +13,20 @@ import pytest
 from codex_usage_hud import codex_app_runtime as app
 
 
+@pytest.mark.parametrize("command,expected", [
+    ('"C:/Program Files/Codex/ChatGPT.exe"', True),
+    ("ChatGPT.exe --remote-debugging-port=59629", True),
+    ("ChatGPT.exe --type=renderer --remote-debugging-port=59629", False),
+    ("ChatGPT.exe --type gpu-process", False),
+    ("codex.exe app-server --listen unix://", False),
+    ("", False),
+    ("/Applications/Codex.app/Contents/MacOS/Codex --remote-debugging-port=59629", True),
+])
+def test_audited_desktop_main_process_excludes_helpers(command, expected) -> None:
+    process = app.CodexDesktopProcess(22, "ChatGPT.exe", "C:/Codex/ChatGPT.exe", command)
+    assert app.is_codex_desktop_main_process(process) is expected
+
+
 def test_windows_process_audit_excludes_npm_cli(monkeypatch: pytest.MonkeyPatch) -> None:
     rows = [
         {

@@ -6,7 +6,7 @@ import sys
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SRC_ROOT = PROJECT_ROOT / "src"
@@ -19,6 +19,7 @@ from codex_usage_hud.daemon import (
     MacOSProcessListener,
     ProcessListenerError,
     ProcessSnapshot,
+    WindowsProcessListener,
     current_process_listener,
     is_codex_client_process,
 )
@@ -248,6 +249,75 @@ class DaemonStateMachineTests(unittest.TestCase):
         )
         self.assertEqual(manager.last_snapshot.primary_pid, 456)
         self.assertEqual(manager.state, DaemonState.HUD_RUNNING)
+
+    def test_signaled_exit_handle_detects_replacement_even_when_pid_is_reused(self) -> None:
+        listener = _FakeListener([
+            ProcessSnapshot(found=True, pids=(123,)),
+            ProcessSnapshot(found=True, pids=(123,)),
+        ])
+        monitor = _FakeExitMonitor([False])
+        manager = CodexDaemonManager(
+            listener=listener, exit_monitor_factory=lambda _snapshot: monitor,
+        )
+        manager.snapshot()
+
+        self.assertFalse(manager.codex_is_running())
+        self.assertTrue(monitor.closed)
+        self.assertEqual(manager.state, DaemonState.EXITING)
+
+
+def test_windows_listener_tracks_main_across_residual_helpers(monkeypatch) -> None:
+    from codex_usage_hud import codex_app_runtime as app
+
+    rows = [(11, 22), (22, 99)]  # Toolhelp can enumerate the helper first.
+    cursor = [0]
+
+    def write_entry(pointer) -> bool:
+        if cursor[0] >= len(rows):
+            return False
+        entry = pointer._obj
+        entry.th32ProcessID, entry.th32ParentProcessID = rows[cursor[0]]
+        entry.szExeFile = "ChatGPT.exe"
+        return True
+
+    def first(_handle, pointer) -> bool:
+        cursor[0] = 0
+        return write_entry(pointer)
+
+    def next_entry(_handle, pointer) -> bool:
+        cursor[0] += 1
+        return write_entry(pointer)
+
+    listener = WindowsProcessListener.__new__(WindowsProcessListener)
+    listener.enabled = True
+    listener.error = ""
+    listener.exclude_pid = 999
+    listener._main_process_cache = {}
+    listener.kernel32 = SimpleNamespace(
+        CreateToolhelp32Snapshot=lambda *_args: 1,
+        Process32FirstW=first, Process32NextW=next_entry,
+        CloseHandle=MagicMock(),
+    )
+    main = app.CodexDesktopProcess(22, "ChatGPT.exe", "C:/Codex/ChatGPT.exe", "ChatGPT.exe")
+    helper = app.CodexDesktopProcess(11, "ChatGPT.exe", "C:/Codex/ChatGPT.exe",
+                                  "ChatGPT.exe --type=renderer --remote-debugging-port=59629")
+    new_main = app.CodexDesktopProcess(33, "ChatGPT.exe", "C:/Codex/ChatGPT.exe", "ChatGPT.exe")
+    audit = MagicMock(return_value=[helper, main])
+    monkeypatch.setattr(app, "audited_running_codex_desktop_processes", audit)
+
+    assert listener.snapshot().pids == (22,)
+    assert listener.snapshot().pids == (22,)
+    assert audit.call_count == 1  # No repeat CIM query for an unchanged root.
+
+    rows[:] = [(11, 22)]
+    audit.return_value = [helper]
+    assert not listener.snapshot().found  # Orphan cannot keep the App alive.
+
+    rows[:] = [(11, 22), (33, 99)]
+    audit.return_value = [helper, new_main]
+    assert listener.snapshot().pids == (33,)
+    assert audit.call_count == 3
+    assert listener.kernel32.CloseHandle.call_count == 4
 
 
 if __name__ == "__main__":
