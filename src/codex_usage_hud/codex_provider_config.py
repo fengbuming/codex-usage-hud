@@ -15,7 +15,7 @@ from urllib.error import URLError, HTTPError
 from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
-from .provider_proxy import proxy_metadata, with_proxy_metadata, provider_proxy_relay
+from .provider_proxy import proxy_metadata, with_proxy_metadata, provider_proxy_relay, updated_proxy_metadata
 
 # ``ctypes.windll`` is absent on POSIX. Keep a patchable sentinel so tests
 # simulating the Windows notification path reach the function under test.
@@ -911,11 +911,11 @@ def save_provider_configs(
         if "use_proxy" in update:
             section = _section_range(candidate_text, provider_id)
             newline = _preferred_newline(candidate_text)
-            metadata = proxy_metadata(section[2])
-            # Keep the currently committed route immutable if the save rolls back.
-            metadata.pop("token", None)
-            metadata.update({"base_url": base_url, "enabled": update["use_proxy"] is True,
-                             "port": update.get("proxy_port", 7897)})
+            metadata = updated_proxy_metadata(
+                proxy_metadata(existing.section_text) if existing else {},
+                base_url=base_url, enabled=update["use_proxy"] is True,
+                port=update.get("proxy_port", 7897),
+            )
             relay_url = provider_proxy_relay.route(metadata, path)
             body = _set_quoted_value(section[2], "base_url", relay_url, newline)
             candidate_text = _replace_section_body(
@@ -923,9 +923,9 @@ def save_provider_configs(
             )
         elif existing and proxy_metadata(existing.section_text):
             section = _section_range(candidate_text, provider_id)
-            metadata = proxy_metadata(existing.section_text)
-            metadata.pop("token", None)
-            metadata["base_url"] = base_url
+            metadata = updated_proxy_metadata(
+                proxy_metadata(existing.section_text), base_url=base_url,
+            )
             newline = _preferred_newline(candidate_text)
             body = _set_quoted_value(section[2], "base_url", provider_proxy_relay.route(metadata, path), newline)
             candidate_text = _replace_section_body(
@@ -1252,6 +1252,7 @@ def clone_provider_with_bearer_key(
                          "enabled": use_proxy, "port": proxy_port})
     if metadata:
         metadata.pop("token", None)
+        metadata.pop("previous_routes", None)
         new_body = _set_quoted_value(
             new_body, "base_url", provider_proxy_relay.route(metadata, path), newline
         )

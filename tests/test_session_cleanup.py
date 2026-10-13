@@ -64,6 +64,25 @@ def _create_state(path: Path, rows: list[tuple[object, ...]]) -> None:
 
 
 class SessionCleanupManagerTests(unittest.TestCase):
+    def test_forced_provider_delete_blocks_cli_before_desktop_or_local_side_effects(self):
+        temporary, _root, state, index, rollouts, manager = self._fixture()
+        self.addCleanup(temporary.cleanup)
+        # Mixed Desktop/CLI provider: even idle-looking CLI metadata cannot
+        # prove a private CLI App Server has released its recorder.
+        cli = rollouts[SECOND_ID]
+        cli.write_text(cli.read_text().replace('"routin"', '"openai-custom"'), encoding="utf-8")
+        manager.active_session_ids = lambda: (SECOND_ID,)
+        before_files = {key: path.read_bytes() for key, path in rollouts.items()}
+        before_index = index.read_bytes()
+        lifecycle = MagicMock(return_value={"verified": True, "quiesced": False})
+        with self.assertRaisesRegex(SessionCleanupError, "CLI"):
+            manager.delete_provider_history("openai-custom", force=True, desktop_lifecycle=lifecycle)
+        lifecycle.assert_not_called()
+        self.assertEqual(before_files, {key: path.read_bytes() for key, path in rollouts.items()})
+        self.assertEqual(before_index, index.read_bytes())
+        with closing(sqlite3.connect(state)) as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM threads").fetchone()[0], 3)
+
     def test_cold_search_refreshes_after_resident_load_without_reopening(self):
         from codex_usage_hud.core.session_search import SessionSearchIndex
         from codex_usage_hud.session_cleanup_runtime import SessionCleanupWorker

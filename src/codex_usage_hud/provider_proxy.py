@@ -39,6 +39,17 @@ def with_proxy_metadata(body: str, metadata: dict, newline: str) -> str:
     return body + newline + MARKER + json.dumps(metadata, ensure_ascii=True, separators=(",", ":"))
 
 
+def updated_proxy_metadata(metadata: dict, **changes) -> dict:
+    """Retain immutable committed routes used by already-created sessions."""
+    updated = {**metadata, **changes}
+    keys = ("base_url", "enabled", "port")
+    if metadata.get("token") and any(metadata.get(key) != updated.get(key) for key in keys):
+        previous = {key: metadata[key] for key in (*keys, "token") if key in metadata}
+        updated["previous_routes"] = [*metadata.get("previous_routes", []), previous]
+        updated.pop("token", None)
+    return updated
+
+
 class ProviderProxyRelay:
     def __init__(self, port: int = 0) -> None:
         self.port = port
@@ -61,6 +72,12 @@ class ProviderProxyRelay:
         if not 1 <= port <= 65535:
             raise ValueError("代理端口必须为 1–65535。")
         with self.lock:
+            # Restore old immutable endpoints as well as the current one. Only
+            # committed metadata survives a restart; failed saves cannot alter
+            # the route used by existing sessions.
+            for previous in metadata.get("previous_routes", []):
+                self.route({key: previous[key] for key in
+                            ("base_url", "enabled", "port", "token") if key in previous}, config_path)
             if self.server is None:
                 self.server = ThreadingHTTPServer(("127.0.0.1", self.port), self._handler_type())
                 self.port = self.server.server_port

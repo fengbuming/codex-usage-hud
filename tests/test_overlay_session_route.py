@@ -97,5 +97,3 @@ navigation.then(report => {
 ''', encoding="utf-8")
     result = subprocess.run(["node", str(path)], capture_output=True, text=True, timeout=5)
     assert result.returncode == 0, result.stdout + result.stderr
-
-

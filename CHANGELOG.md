@@ -7,6 +7,28 @@ and this repository follows Semantic Versioning for release tags.
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-10-13
+
+### Added
+
+- Shared provider proxy settings for Desktop and CLI, with streaming and WebSocket forwarding.
+- Windows CLI bubble navigation to an identified terminal window or tab.
+- Selection of all deletable sessions within the current filter, with explicit selection scope.
+
+### Fixed
+
+- Kept provider IDs when editing API keys and refreshed prewarmed new-session configuration.
+- Preserved existing provider relay endpoints across saves and HUD restarts.
+- Protected CLI history from provider-wide forced deletion without CLI shutdown verification.
+- Improved cold-start day/week totals, task completion state across resumed rollouts, and Desktop startup detection.
+- Avoided cross-route navigation retries and restored HUD layout after window resizing.
+- Improved provider session copy naming/navigation and native title visibility.
+
+### Notes
+
+- Provider-wide forced deletion refuses batches containing identified CLI history. Exit CLI and clean up those sessions through session management first.
+- macOS support remains source/pip with code-level CI coverage; real-device interaction is not certified.
+
 ## [1.3.3] - 2026-09-30
 
 ### Fixed

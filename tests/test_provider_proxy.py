@@ -258,3 +258,50 @@ def test_cli_clears_inherited_proxy_when_disabled(shell, clear):
     command = cli.build_codex_cli_command(provider="other", use_proxy=False, shell=shell)
     assert clear in command
     assert "127.0.0.1" not in command
+
+
+def test_saved_routes_survive_fresh_relay_restart_and_failed_save(tmp_path, upstream):
+    server, calls, _, release = upstream
+    release.set()
+    path = tmp_path / "config.toml"
+    base = f"http://127.0.0.1:{server.server_port}/v1"
+    path.write_text(f'model_provider = "demo"\n[model_providers.demo]\n'
+                    f'name = "Demo"\nbase_url = "{base}"\nenv_key = "DEMO_KEY"\n', encoding="utf-8")
+    relay = ProviderProxyRelay()
+    try:
+        with patch.object(config, "provider_proxy_relay", relay), patch.object(
+            config, "_user_environment_value", return_value="test-only"
+        ):
+            update = {"provider_id": "demo", "base_url": base, "env_key": "DEMO_KEY",
+                      "use_proxy": False, "proxy_port": 7897}
+            def endpoint():
+                return config._parse_toml_mapping(path.read_text())["model_providers"]["demo"]["base_url"]
+            config.save_provider_configs(update, config_path=path)
+            original = endpoint()
+            config.save_provider_configs(update, config_path=path)
+            assert endpoint() == original
+            config.save_provider_configs({**update, "base_url": base + "/new"}, config_path=path)
+            changed = endpoint()
+            assert changed != original
+            committed = path.read_text()
+            with patch.object(config, "_write_text_atomically", side_effect=OSError("failed save")):
+                with pytest.raises(OSError):
+                    config.save_provider_configs({**update, "base_url": base + "/failed"}, config_path=path)
+            assert path.read_text() == committed
+        port = relay.port
+        relay.close()
+        relay = ProviderProxyRelay(port=port)
+        relay.activate(path)
+        for url, expected in ((original, "/v1/responses"), (changed, "/v1/new/responses")):
+            target = urlsplit(url)
+            client = http.client.HTTPConnection(target.hostname, target.port, timeout=3)
+            try:
+                client.request("POST", target.path + "/responses", b"test")
+                response = client.getresponse()
+                assert response.status == 200
+                response.read()
+                assert calls[-1][0] == expected
+            finally:
+                client.close()
+    finally:
+        relay.close()

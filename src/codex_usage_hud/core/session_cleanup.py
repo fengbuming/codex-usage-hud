@@ -1855,6 +1855,10 @@ class SessionCleanupManager:
                 selectable=True,
                 blocked_reason="",
                 model_provider=provider,
+                client_kind=(
+                    "cli" if any(_session_metadata(path).client_kind == "cli" for path in paths)
+                    else _session_metadata(record.rollout_path).client_kind
+                ),
                 _session_id=session_id,
                 _cwd=record.cwd,
                 _rollout_paths=tuple(paths),
@@ -1875,6 +1879,14 @@ class SessionCleanupManager:
         if desktop_lifecycle is None:
             raise SessionCleanupError("强制删除需要 Codex 会话停止及删除通道。")
         items = self._provider_history_items(provider)
+        # Desktop only owns its own App Server connection. Its deletion receipt
+        # cannot establish that a separate CLI recorder has stopped writing.
+        # Check the whole batch before causing any Desktop or local side effects.
+        if any(item.client_kind == "cli" for item in items):
+            raise SessionCleanupError(
+                "此供应商包含 CLI 会话，无法通过 Desktop 确认 CLI 已停止。"
+                "请先退出 CLI，并在会话管理中清理这些会话，再删除供应商。"
+            )
         results: list[dict[str, object]] = []
         publisher = getattr(self, "progress_publisher", None)
         for index, item in enumerate(items, 1):

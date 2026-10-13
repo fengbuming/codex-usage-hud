@@ -15880,6 +15880,7 @@ class DaemonLifecycleTests(unittest.TestCase):
         config = UserConfig.defaults()
 
         with (
+            patch("codex_usage_hud.daemon_launch.detach_daemon_if_needed", return_value=None),
             patch("codex_usage_hud.runtime_orchestration.UserConfigStore") as store_class,
             patch("codex_usage_hud.runtime_orchestration.run_daemon", return_value=0) as run_daemon,
             patch("codex_usage_hud.runtime_orchestration.run_hud_session") as run_session,
@@ -16054,6 +16055,7 @@ class DaemonLifecycleTests(unittest.TestCase):
         config.display_mode = "tk"
 
         with (
+            patch("codex_usage_hud.daemon_launch.detach_daemon_if_needed", return_value=None),
             patch("codex_usage_hud.runtime_orchestration.UserConfigStore") as store_class,
             patch("codex_usage_hud.runtime_orchestration.run_daemon", return_value=0) as run_daemon,
         ):
@@ -16070,6 +16072,7 @@ class DaemonLifecycleTests(unittest.TestCase):
         config.display_mode = "qt"
 
         with (
+            patch("codex_usage_hud.daemon_launch.detach_daemon_if_needed", return_value=None),
             patch("codex_usage_hud.runtime_orchestration.UserConfigStore") as store_class,
             patch("codex_usage_hud.runtime_orchestration.run_daemon", return_value=0) as run_daemon,
         ):
@@ -16087,6 +16090,7 @@ class DaemonLifecycleTests(unittest.TestCase):
         config.display_mode = "tk"
 
         with (
+            patch("codex_usage_hud.daemon_launch.detach_daemon_if_needed", return_value=None),
             patch("codex_usage_hud.runtime_orchestration.UserConfigStore") as store_class,
             patch("codex_usage_hud.runtime_orchestration.run_daemon", return_value=0) as run_daemon,
         ):

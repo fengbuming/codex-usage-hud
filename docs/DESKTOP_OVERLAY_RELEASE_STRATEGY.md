@@ -2,16 +2,17 @@
 
 ## Current Decision
 
-This project currently treats the PySide6 desktop work-bubble overlay as an
-optional source / pip capability, not a default packaged runtime dependency.
+The main HUD remains renderer-only. The Windows v1.4.0 installer also bundles
+the PySide6 Essentials dependencies for desktop work bubbles. Source / pip
+installations enable this helper with the desktop-overlay extra.
 
 ### Windows
 
 - Official release artifact remains the Windows installer:
   `codex-usage-hud-vX.Y.Z-windows-x64-setup.exe`
-- The default Windows packaged build does **not** bundle PySide6.
-- Users who need desktop work bubbles should use a source / pip environment and
-  install `codex-usage-hud[desktop-overlay]`.
+- Windows release builds include PySide6 Essentials from the build environment;
+  unused Qt Addons are excluded by tools/build_exe.py.
+- Source / pip users install `codex-usage-hud[desktop-overlay]` for desktop bubbles.
 
 ### macOS
 
@@ -47,7 +48,7 @@ It is **not** sufficient to claim:
 
 | Surface | Current status | PySide6 bundled by default | Notes |
 |---|---|---:|---|
-| Windows installer | supported | no | official GitHub Release path |
+| Windows installer | supported | yes (Essentials) | official GitHub Release path |
 | Windows source / pip | supported | optional | install `.[desktop-overlay]` when needed |
 | macOS source / pip | limited | optional | gated by CI smoke, not by real-device validation |
 | macOS installer | not supported | n/a | intentionally deferred |
@@ -70,7 +71,7 @@ It is **not** sufficient to claim:
 
 These are intentionally not decided in the current round:
 
-1. Bundle PySide6 into the default Windows installer.
+1. Expand the bundled Qt modules beyond the Essentials required by work bubbles.
 2. Publish a separate Windows overlay-enabled installer.
 3. Ship a macOS app bundle, installer, signing, or auto-update flow.
 4. Treat macOS desktop bubbles as officially validated without real-device testing.
