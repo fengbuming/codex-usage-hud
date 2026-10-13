@@ -43,6 +43,12 @@ _LOGGER = logging.getLogger("codex_usage_hud.overlay_commands")
 WindowAction = Callable[[], tuple[bool, str, str, int]]
 
 
+def _is_cli_client_kind(value: object) -> bool:
+    """Accept the stable and legacy CLI labels emitted by session inventories."""
+    normalized = str(value or "").strip().casefold().replace("_", "-")
+    return normalized in {"cli", "codex-cli", "codex-tui"}
+
+
 def _running_cdp_target() -> dict[str, Any] | None:
     try:
         return pick_page_target(list_targets(cdp_port_from_env(), 0.2))
@@ -166,7 +172,7 @@ def _handle_work_overlay_command(
     action = str(command.get("action") or "").strip()
     if action != "activateSession":
         return None
-    if str(command.get("clientKind") or "").strip().lower() == "cli":
+    if _is_cli_client_kind(command.get("clientKind")) or _is_cli_client_kind(command.get("source")):
         from .platforms.cli_session_switch import CliSessionNavigator
         return CliSessionNavigator().activate(str(command.get("sessionId") or ""),
                                              str(command.get("workdir") or ""))
@@ -352,7 +358,7 @@ def _route_work_overlay_command(
         refocus_window_callback=refocus_window_callback,
     )
     _publish_work_overlay_command_event(runtime_events, command, result, activation_context=activation_meta, clock=clock)
-    is_cli = str(command.get("clientKind") or "").lower() == "cli"
+    is_cli = _is_cli_client_kind(command.get("clientKind")) or _is_cli_client_kind(command.get("source"))
     if is_cli and result is not None and not result.ok:
         show_notice = getattr(work_overlay, "show_system_notice", None)
         if callable(show_notice):

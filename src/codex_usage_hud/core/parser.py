@@ -1141,20 +1141,24 @@ class CostEstimator:
 def classify_session_client(originator: object, source: object) -> str:
     """Classify session ownership once at the JSONL boundary for all UI consumers."""
     originator_text = str(originator or "").strip().lower()
+    source_text = source.strip().lower() if isinstance(source, str) else ""
+    # A CLI session launched through Desktop can retain Desktop as its
+    # originator while the session metadata explicitly records source=cli.
+    # The explicit source describes the client that owns the terminal session.
+    if source_text == "cli":
+        return "cli"
+    if source_text == "vscode":
+        return "app"
     if "codex desktop" in originator_text:
         return "app"
     if (
         "codex-tui" in originator_text
+        or "codex-cli" in originator_text
+        or "codex_cli" in originator_text
         or "codex cli" in originator_text
         or originator_text == "codex_exec"
     ):
         return "cli"
-    if isinstance(source, str):
-        source_text = source.strip().lower()
-        if source_text == "cli":
-            return "cli"
-        if source_text == "vscode":
-            return "app"
     return "unknown"
 
 

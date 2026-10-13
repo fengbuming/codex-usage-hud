@@ -148,6 +148,31 @@ def test_cli_bubble_dispatch_never_calls_desktop_navigation(monkeypatch):
     refocus.assert_not_called()
 
 
+def test_legacy_cli_client_kind_alias_never_calls_desktop_navigation(monkeypatch):
+    result = SessionSwitchResult(ok=True, status="switched", backend="cli-terminal")
+    activate = MagicMock(return_value=result)
+    monkeypatch.setattr(CliSessionNavigator, "activate", activate)
+    controller, prepare, refocus = MagicMock(), MagicMock(), MagicMock()
+    assert overlay_commands.handle_command(
+        {"action": "activateSession", "clientKind": "codex-cli", "sessionId": SESSION, "workdir": CWD},
+        controller, prepare_window_callback=prepare, refocus_window_callback=refocus) is result
+    controller.activate_session.assert_not_called()
+    prepare.assert_not_called()
+    refocus.assert_not_called()
+
+
+def test_cli_source_fallback_never_calls_desktop_navigation(monkeypatch):
+    result = SessionSwitchResult(ok=True, status="switched", backend="cli-terminal")
+    activate = MagicMock(return_value=result)
+    monkeypatch.setattr(CliSessionNavigator, "activate", activate)
+    controller, prepare, refocus = MagicMock(), MagicMock(), MagicMock()
+    assert overlay_commands.handle_command(
+        {"action": "activateSession", "clientKind": "unknown", "source": "cli",
+         "sessionId": SESSION, "workdir": CWD},
+        controller, prepare_window_callback=prepare, refocus_window_callback=refocus) is result
+    controller.activate_session.assert_not_called()
+
+
 def test_cli_failure_is_acknowledged_and_visible_without_a_success_mark(monkeypatch):
     monkeypatch.setattr(CliSessionNavigator, "activate", lambda *_: SessionSwitchResult(
         ok=False, status="cli-session-not-bound", backend="cli-terminal", message="CLI 已退出"))

@@ -72,6 +72,7 @@ class WorkOverlayRenderingTests(unittest.TestCase):
         command = helper._append_command.call_args.args[0]
         self.assertEqual(command["action"], "activateSession")
         self.assertEqual(command["clientKind"], "cli")
+        self.assertEqual(command["source"], "")
         self.assertEqual(command["sessionId"], item["sessionId"])
         self.assertEqual(helper._switch_pending_request_id, command["requestId"])
 

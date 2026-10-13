@@ -486,6 +486,7 @@ class OverlayWindow(OverlayTransitionsMixin, OverlayRenderingMixin, QWidget):
                 "title": str(item.get("title") or "").strip(),
                 "workdir": str(item.get("workdir") or "").strip(),
                 "clientKind": str(item.get("clientKind") or "unknown").strip().lower(),
+                "source": str(item.get("source") or "").strip().lower(),
                 "requestedAt": time.time(),
                 "current": bool(item.get("current")),
             }

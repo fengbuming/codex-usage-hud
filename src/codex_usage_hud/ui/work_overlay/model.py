@@ -438,7 +438,8 @@ def _workdir_link_pending_for_item(
     return False
 
 def _item_is_cli(item: Mapping[str, object]) -> bool:
-    return str(item.get("clientKind") or "").strip().lower() == "cli"
+    normalized = str(item.get("clientKind") or "").strip().casefold().replace("_", "-")
+    return normalized in {"cli", "codex-cli", "codex-tui"}
 
 def _profile_display_name(item: Mapping[str, object]) -> str:
     """Return the profile label only for CLI session bubbles."""

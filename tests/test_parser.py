@@ -359,6 +359,31 @@ class JsonlSessionParserTests(unittest.TestCase):
         self.assertEqual(snapshot.session_source, "cli")
         self.assertEqual(snapshot.client_kind, "cli")
 
+    def test_session_meta_cli_originator_aliases_are_classified_as_cli(self) -> None:
+        parser = JsonlSessionParser()
+        for originator in ("codex-cli", "codex_cli"):
+            snapshot = parser.parse_records([
+                {
+                    "type": "session_meta",
+                    "payload": {"id": "cli-alias", "originator": originator},
+                }
+            ])
+            self.assertEqual(snapshot.client_kind, "cli")
+
+    def test_explicit_cli_source_overrides_desktop_originator(self) -> None:
+        parser = JsonlSessionParser()
+        snapshot = parser.parse_records([
+            {
+                "type": "session_meta",
+                "payload": {
+                    "id": "cli-from-desktop",
+                    "originator": "Codex Desktop",
+                    "source": "cli",
+                },
+            }
+        ])
+        self.assertEqual(snapshot.client_kind, "cli")
+
     def test_session_meta_without_provider_uses_visible_unknown_channel(self) -> None:
         parser = JsonlSessionParser()
         snapshot = parser.parse_records(
