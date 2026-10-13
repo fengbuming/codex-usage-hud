@@ -12,8 +12,8 @@ The flow is deliberately:
 1. ``thread/read`` preflight — proves Desktop still owns the rollout.  Without
    it an unknown id navigates to a blank conversation instead of failing.
 2. ``open-in-main-window`` with the route path.
-3. Verification against the sidebar's active row, which Desktop updates on its
-   own (it inserts the thread into the sidebar when navigated to).
+3. Verification against the conversation composer's exact thread identity or
+   the sidebar's active row. Archived threads may have no sidebar row.
 """
 
 from __future__ import annotations
@@ -128,6 +128,15 @@ def _navigation_script(
     || row.getAttribute("aria-selected") === "true"
   );
   const activeRowFor = (hostId) => {{
+    if (hostId === "local") {{
+      const composers = document.querySelectorAll("[data-above-composer-conversation-id]");
+      for (const composer of composers) {{
+        if (composer.closest("#codex-usage-hud-root")) continue;
+        if (composer.getAttribute("data-above-composer-conversation-id") === input.threadId) {{
+          return true;
+        }}
+      }}
+    }}
     const rows = document.querySelectorAll(
       `[data-app-action-sidebar-thread-id="${{hostId}}:${{input.threadId}}"]`
     );
@@ -149,7 +158,7 @@ def _navigation_script(
     const timer = window.setTimeout(() => finish(activeRowFor(hostId)), verifyTimeoutMs);
     observer.observe(document.documentElement, {{
       subtree: true, childList: true, attributes: true,
-      attributeFilter: ['data-app-action-sidebar-thread-active', 'aria-current', 'aria-selected'],
+      attributeFilter: ['data-above-composer-conversation-id', 'data-app-action-sidebar-thread-active', 'aria-current', 'aria-selected'],
     }});
     if (activeRowFor(hostId)) finish(true);
   }});

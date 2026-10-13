@@ -12,6 +12,8 @@ silently regress the protocol.
 from __future__ import annotations
 
 from pathlib import Path
+import json
+import subprocess
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -82,11 +84,60 @@ def test_navigation_script_uses_electron_bridge_and_local_host() -> None:
     assert "thread/read" in script
     assert "open-in-main-window" in script
     assert "/local/" in script
-    # Sidebar activation is the only signal we trust, so the script must read
-    # the data-app-action attribute the existing CDP probe already targets.
+    # Exact conversation identity works even when no sidebar row is mounted.
+    assert "data-above-composer-conversation-id" in script
     assert "data-app-action-sidebar-thread-active" in script
     # The message listener must always be removed even on the happy path.
     assert "removeEventListener" in script
+
+
+@pytest.mark.parametrize("mode, verified", [
+    ("composer", True), ("sidebar", True), ("wrong-composer", False), ("hud-composer", False),
+])
+def test_navigation_verifies_exact_composer_without_sidebar(mode, verified) -> None:
+    navigation = _navigation_script(
+        SESSION_ID, ["/local/"], preflight_timeout_ms=500, verify_timeout_ms=500,
+    )
+    host = r'''
+const listeners = new Set();
+let composerId = 'old-session', active = false;
+const composer = {closest() { return mode === 'hud-composer' ? {} : null; },
+  getAttribute() { return composerId; }};
+const row = {getAttribute(name) { return name === 'aria-current' && active ? 'page' : null; }};
+global.document = {documentElement: {}, querySelectorAll(selector) {
+  if (selector === '[data-above-composer-conversation-id]') return mode === 'sidebar' ? [] : [composer];
+  return mode === 'sidebar' ? [row] : [];
+}};
+global.MutationObserver = class {observe() {} disconnect() {}};
+global.window = {
+  setTimeout, clearTimeout,
+  addEventListener(_name, listener) { listeners.add(listener); },
+  removeEventListener(_name, listener) { listeners.delete(listener); },
+  electronBridge: {sendMessageFromView(message) {
+    if (message.type === 'mcp-request') queueMicrotask(() => {
+      for (const listener of listeners) listener({data: {
+        type: 'mcp-response', hostId: 'local', message: {
+          id: message.request.id, result: {thread: {id: sessionId}},
+        },
+      }});
+    });
+    if (message.type === 'open-in-main-window') {
+      composerId = mode === 'wrong-composer' ? 'another-session' : sessionId;
+      active = mode === 'sidebar';
+    }
+  }},
+};
+'''
+    script = f"const mode = {json.dumps(mode)}, sessionId = {json.dumps(SESSION_ID)};\n" + host
+    script += f"\nPromise.resolve({navigation}).then(result => console.log(JSON.stringify({{result, listeners: listeners.size}})));"
+    result = subprocess.run(
+        ["node", "--input-type=commonjs"], input=script, capture_output=True,
+        text=True, encoding="utf-8", check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    output = json.loads(result.stdout)
+    assert output["result"]["verified"] is verified
+    assert output["listeners"] == 0
 
 
 # ---------------------------------------------------------------------------
@@ -229,7 +280,6 @@ def _build_navigator(report: DesktopThreadNavigationReport | Exception) -> Simpl
 # ---------------------------------------------------------------------------
 
 def test_open_session_jump_reports_unresolved_target() -> None:
-    from pathlib import Path
 
     manager = SimpleNamespace(
         session_route_target_for_item=MagicMock(return_value=None),
@@ -254,7 +304,6 @@ def test_open_session_jump_reports_unresolved_target() -> None:
 
 
 def test_open_session_jump_succeeds_when_navigator_verifies() -> None:
-    from pathlib import Path
 
     manager = _inventory_stub()
     navigator = _build_navigator(
@@ -290,7 +339,6 @@ def test_open_session_jump_succeeds_when_navigator_verifies() -> None:
 
 
 def test_open_session_jump_returns_not_owned_error_and_marks_resumable() -> None:
-    from pathlib import Path
 
     manager = _inventory_stub()
     navigator = _build_navigator(
@@ -319,7 +367,6 @@ def test_open_session_jump_returns_not_owned_error_and_marks_resumable() -> None
 
 
 def test_open_session_jump_translates_navigator_failure() -> None:
-    from pathlib import Path
 
     manager = _inventory_stub()
     navigator = _build_navigator(
@@ -344,7 +391,6 @@ def test_open_session_jump_translates_navigator_failure() -> None:
 
 @patch("codex_usage_hud.runtime_commands.DesktopThreadNavigator")
 def test_open_session_jump_without_injected_navigator_falls_back_to_constructor(constructor) -> None:
-    from pathlib import Path
 
     manager = _inventory_stub()
     constructor.return_value.navigate.side_effect = DesktopThreadNavigationError("desktop missing")
@@ -370,7 +416,6 @@ def test_open_session_jump_without_injected_navigator_falls_back_to_constructor(
 # ---------------------------------------------------------------------------
 
 def test_resume_session_cleanup_launches_terminal_command() -> None:
-    from pathlib import Path
 
     manager = _inventory_stub()
     ports = RuntimeCommandPorts(cleanup_manager=manager)

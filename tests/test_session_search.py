@@ -10,6 +10,81 @@ from codex_usage_hud.core.session_search import SessionSearchIndex, parse_rollou
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 
 
+def test_body_fields_exclude_hidden_instructions_and_reasoning(tmp_path: Path) -> None:
+    rollout = tmp_path / "message-sources.jsonl"
+    records = [
+        {"type": "response_item", "payload": {"type": "message", "role": role,
+         "content": [{"text": f"{role}-marker"}]}}
+        for role in ("developer", "system", "unknown", "user", "assistant")
+    ]
+    records += [
+        {"type": "response_item", "payload": {"type": "message", "role": "assistant",
+         "channel": "analysis", "content": [{"text": "hidden-analysis-marker"}]}},
+        {"type": "response_item", "payload": {"type": "reasoning", "summary": [{"text": "hidden-reasoning-marker"}]}},
+        {"type": "event_msg", "payload": {"type": "item_completed", "item": {
+            "type": "Reasoning", "text": "hidden-item-reasoning-marker"}}},
+        {"type": "event_msg", "payload": {"type": "item_completed", "item": {
+            "type": "AgentMessage", "phase": "analysis", "text": "hidden-item-analysis-marker"}}},
+        {"type": "event_msg", "payload": {"type": "item_completed", "item": {
+            "type": "AgentMessage", "phase": "final_answer", "text": "VisibleAnswerUnique"}}},
+        {"type": "event_msg", "payload": {"type": "item_completed", "item": {
+            "type": "UserMessage", "content": [{"text": "visible-item-user-marker"}]}}},
+        {"type": "response_item", "payload": {"type": "function_call_output", "output": "ToolOnlyUnique"}},
+    ]
+    rollout.write_text("\n".join(json.dumps(record) for record in records), encoding="utf-8")
+    user, assistant, tool, _paths = parse_rollout((rollout,))
+    assert "user-marker" in user and "visible-item-user-marker" in user
+    assert "assistant-marker" in assistant and "VisibleAnswerUnique" in assistant
+    assert tool == "ToolOnlyUnique"
+    assert all(marker not in user + assistant + tool for marker in (
+        "developer-marker", "system-marker", "unknown-marker", "hidden-analysis-marker",
+        "hidden-reasoning-marker", "hidden-item-reasoning-marker", "hidden-item-analysis-marker",
+    ))
+    index = SessionSearchIndex(tmp_path / "message-sources.sqlite")
+    index.upsert("session", (rollout,))
+    assert index.search("developer-marker")["matches"] == []
+    assert index.search("VisibleAnswerUnique")["matches"][0]["kinds"] == ["assistant"]
+    assert index.search("ToolOnlyUnique")["matches"][0]["kinds"] == ["tool"]
+
+
+def test_legacy_body_cache_reextracts_unchanged_rollouts_on_load(tmp_path: Path) -> None:
+    import pickle
+    import sqlite3
+
+    rollout = tmp_path / "legacy-message.jsonl"
+    rollout.write_text("\n".join(json.dumps(record) for record in [
+        {"type": "response_item", "payload": {"type": "message", "role": "developer",
+         "content": [{"text": "hidden-developer-marker"}]}},
+        {"type": "response_item", "payload": {"type": "message", "role": "user",
+         "content": [{"text": "visible-question-marker"}]}},
+    ]), encoding="utf-8")
+    index = SessionSearchIndex(tmp_path / "legacy.sqlite")
+    index.upsert("session", (rollout,), title="Original title", workdir="E:/project")
+    stamps = (rollout.stat().st_size, rollout.stat().st_mtime_ns)
+    connection = sqlite3.connect(index.path)
+    connection.execute(
+        "UPDATE session_search_documents SET fingerprints=?, assistant_text=?, searchable=?",
+        (json.dumps(list(session_search_module.rollout_fingerprints((rollout,)))),
+         "hidden-developer-marker", "hidden-developer-marker visible-question-marker"),
+    )
+    connection.commit()
+    connection.close()
+    with index._snapshot_path().open("rb") as handle:
+        snapshot = pickle.load(handle)
+    snapshot["version"] = session_search_module._SNAPSHOT_VERSION - 1
+    with index._snapshot_path().open("wb") as handle:
+        pickle.dump(snapshot, handle)
+
+    fresh = SessionSearchIndex(index.path)
+    assert fresh.load()["indexed"] == 1
+    assert fresh.search("hidden-developer-marker")["matches"] == []
+    assert fresh.search("visible-question-marker")["matches"][0]["kinds"] == ["user"]
+    assert fresh.phrase_matches(["session"], "hidden-developer-marker") == {"session": False}
+    assert fresh.preview_matches(["session"], "visible-question-marker")["session"]["kind"] == "user"
+    assert fresh.search("Original title")["matches"]
+    assert (rollout.stat().st_size, rollout.stat().st_mtime_ns) == stamps
+
+
 def test_rollout_search_reads_late_content_beyond_two_megabytes(tmp_path: Path) -> None:
     rollout = tmp_path / "large.jsonl"
     late_marker = "late-content-marker"

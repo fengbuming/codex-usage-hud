@@ -1096,15 +1096,23 @@ TEXT = r"""
         const itemId = String(action.dataset.sessionCleanupJumpId || "").trim();
         const inventoryRevision = String(action.dataset.sessionCleanupInventoryRevision || "").trim();
         if (!itemId || !inventoryRevision) return;
+        const searchQuery = String(sessionCleanupState.search || "").trim();
+        const jumpContext = {
+          query: searchQuery,
+          revision: inventoryRevision,
+          matches: sessionCleanupRows().map((item) => ({
+            id: String(item.id || ""), title: String(item.title || ""),
+            updatedAt: item.updatedAt, kinds: [],
+          })),
+        };
         const submitted = submitSettingsCommand(
           { action: "openSessionCleanupSession", itemId, inventoryRevision,
-            searchQuery: sessionCleanupState.searchResultMatches.has(itemId)
-              ? String(sessionCleanupState.searchResultQuery || "") : "" },
+            searchQuery },
           "正在打开会话...",
           { preserveOverlay: true },
         );
         if (submitted) {
-          sessionViewDomain.prepareSearchJump(itemId);
+          sessionViewDomain.prepareSearchJump(itemId, jumpContext);
           markSessionCleanupJumpInflight(itemId, "jump");
           // 跳转意图是离开设置页、去到 Codex 会话，提交成功后即收起设置页让位。
           closeSettingsModal();

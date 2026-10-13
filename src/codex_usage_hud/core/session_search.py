@@ -162,7 +162,8 @@ _CJK_RUN_RE = re.compile(r"[\u4e00-\u9fff]")
 # loading can never execute code. ``stamps`` carries the SQLite ``indexed_at``
 # value observed at write time; on load, documents whose stamp no longer
 # matches SQLite are rebuilt from their rows.
-_SNAPSHOT_VERSION = 4
+_SNAPSHOT_VERSION = 5
+_EXTRACTION_VERSION = 2
 _SNAPSHOT_SUFFIX = ".memory"
 _SNAPSHOT_MIN_INTERVAL = 300.0
 # Entries below this count are parsed inline; larger batches (full builds)
@@ -671,18 +672,32 @@ def parse_rollout(paths: Sequence[Path]) -> tuple[str, str, str, tuple[str, ...]
                         target, source = assistant, payload
                     elif payload_type == "message":
                         role = str(payload.get("role") or "").casefold()
-                        target = user if role in {"user", "human"} else assistant
-                        source = payload
+                        channel = str(payload.get("channel") or "").casefold()
+                        target = (
+                            user if role in {"user", "human"}
+                            else assistant if role == "assistant" and channel not in {"analysis", "reasoning"}
+                            else None
+                        )
+                        source = payload if target is not None else None
                     elif payload_type in _TOOL_CALL_TYPES:
                         target, source = tools, payload
                     elif payload_type in _CHANGE_PAYLOAD_TYPES:
                         target, source = tools, payload
                     elif payload_type in {"reasoning", "analysis"}:
-                        target, source = assistant, payload
+                        target, source = None, None
                     elif payload_type in _ITEM_PAYLOAD_TYPES:
                         item = payload.get("item")
                         target = tools
                         source = item if isinstance(item, Mapping) else None
+                        if isinstance(item, Mapping):
+                            item_type = str(item.get("type") or "").casefold()
+                            phase = str(item.get("phase") or item.get("channel") or "").casefold()
+                            if item_type in {"reasoning", "analysis"} or phase in {"analysis", "reasoning"}:
+                                target, source = None, None
+                            elif item_type in {"agentmessage", "agent_message", "assistant_message"}:
+                                target = assistant
+                            elif item_type in {"usermessage", "user_message", "user_message_item"}:
+                                target = user
                         if isinstance(item, Mapping) and _has_change_evidence(
                             item, str(item.get("type") or ""), raw_line
                         ):
@@ -1113,6 +1128,7 @@ class SessionSearchIndex:
         # (snapshot stale or missing); >0 means the pickle should be rewritten
         # so the repair cost is not paid again on every restart.
         self._last_load_reconciled = 0
+        self._extraction_checked = False
 
     def ensure_scan_index(self) -> bool:
         """Create the covering (session_id, indexed_at) scan index if missing.
@@ -1163,11 +1179,37 @@ class SessionSearchIndex:
             except sqlite3.Error:
                 self._fts_available = False
         connection.commit()
+        # Old caches classified every non-user message as an assistant reply.
+        # Re-extract once on the background index load, preserving coverage and
+        # metadata; unchanged rollout timestamps must not retain false body hits.
+        with self._lock:
+            if not self._extraction_checked:
+                rows = connection.execute(
+                    f"SELECT session_id, fingerprints, title, workdir, model_provider, client_kind FROM {_DOC_TABLE}"
+                ).fetchall()
+                try:
+                    for session_id, encoded, title, workdir, provider, client in rows:
+                        fingerprints = self._decode_fingerprints(encoded)
+                        if str(encoded) == self._encode_fingerprints(fingerprints):
+                            continue
+                        self._upsert_connection(
+                            connection, session_id, tuple(Path(value[0]) for value in fingerprints),
+                            title=title, workdir=workdir, model_provider=provider, client_kind=client,
+                        )
+                    connection.commit()
+                    self._extraction_checked = True
+                except Exception:
+                    connection.rollback()
+                    connection.close()
+                    raise
         return connection
 
     @staticmethod
     def _encode_fingerprints(value: Sequence[tuple[str, int, int]]) -> str:
-        return json.dumps(list(value), ensure_ascii=False, separators=(",", ":"))
+        return json.dumps(
+            {"version": _EXTRACTION_VERSION, "files": list(value)},
+            ensure_ascii=False, separators=(",", ":"),
+        )
 
     @staticmethod
     def _decode_fingerprints(value: object) -> tuple[tuple[str, int, int], ...]:
@@ -1175,6 +1217,8 @@ class SessionSearchIndex:
             payload = json.loads(str(value or "[]"))
         except (TypeError, ValueError, json.JSONDecodeError):
             return ()
+        if isinstance(payload, dict):
+            payload = payload.get("files")
         if not isinstance(payload, list):
             return ()
         result: list[tuple[str, int, int]] = []
@@ -1642,7 +1686,7 @@ class SessionSearchIndex:
             is None
         )
         old_searchable = ""
-        if existing and self._decode_fingerprints(existing[0]) == fingerprints:
+        if existing and str(existing[0]) == encoded:
             (
                 user_text,
                 assistant_text,
@@ -1793,7 +1837,7 @@ class SessionSearchIndex:
                 f"SELECT fingerprints FROM {_DOC_TABLE} WHERE session_id = ?",
                 (canonical,),
             ).fetchone()
-            if row is None or self._decode_fingerprints(row[0]) != fingerprints:
+            if row is None or str(row[0]) != self._encode_fingerprints(fingerprints):
                 stale.append((canonical, [str(item) for item in entry[1]]))
             else:
                 fresh.append(entry)
