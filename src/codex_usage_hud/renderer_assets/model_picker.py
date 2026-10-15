@@ -3,9 +3,13 @@
 TEXT = r"""
   function createModelPickerDomain(ctx, shared) {
     const { normalize, visible, cssEscape } = shared;
-    const models = Array.isArray(codexModelPickerCatalog)
+    const catalogModels = Array.isArray(codexModelPickerCatalog)
       ? codexModelPickerCatalog.filter((model) => model && typeof model === "object" && model.model)
       : [];
+    let models = catalogModels.slice();
+    let catalogSignature = "";
+    let observedTriggerParent = null;
+    const ownedLabels = new Map();
     const syntheticSelect = Symbol("codexUsageHudModelPickerSelect");
     let installed = false;
 
@@ -19,7 +23,11 @@ TEXT = r"""
       let fiber = reactFiberForNode(node);
       for (let depth = 0; fiber && depth < limit; depth += 1, fiber = fiber.return) {
         try {
-          if (predicate(fiber)) return fiber;
+          let root = fiber;
+          for (let count = 0; root.return && count < 300; count += 1) root = root.return;
+          const committed = root.stateNode?.current && root.stateNode.current !== root
+            ? fiber.alternate || fiber : fiber;
+          if (predicate(committed)) return committed;
         } catch (_) {}
       }
       return null;
@@ -96,6 +104,73 @@ TEXT = r"""
           && Array.isArray(props?.modelOptions)
           && typeof props?.onSelectModel === "function";
       }, 120)?.memoizedProps || null;
+    }
+
+    function selectionContext() {
+      for (const trigger of Array.from(document.querySelectorAll("button[aria-haspopup], button[data-state]"))) {
+        if (!visible(trigger)) continue;
+        const props = modelPickerModernProps(trigger);
+        if (!props) continue;
+        const owner = findFiber(trigger, (fiber) => Object.hasOwn(fiber?.memoizedProps || {}, "conversationId"), 120);
+        return { trigger, props, conversationId: owner?.memoizedProps?.conversationId,
+          selectedModel: String(props.model || ""), reasoningEffort: String(props.reasoningEffort || ""),
+          nativeModels: props.models };
+      }
+      return null;
+    }
+
+    function refreshProviderModels(selection) {
+      const payload = ctx.state?.payload?.() || {};
+      const settings = payload.settings || {};
+      const provider = String(payload.activeSessionProvider || settings.default_provider || settings.app_provider || "").toLowerCase();
+      const preferred = String(settings.provider_registry?.[provider]?.desktopModel || "");
+      const current = selection && !selection.nativeModels.some((model) => model.model === selection.selectedModel)
+        ? selection.selectedModel : "";
+      const signature = JSON.stringify([provider, preferred, current, selection?.reasoningEffort || ""]);
+      if (signature === catalogSignature) return;
+      catalogSignature = signature;
+      removeSyntheticItems();
+      models = catalogModels.slice();
+      for (const model of [preferred, current]) {
+        if (!model || models.some((item) => item.model === model)) continue;
+        const effort = model === current ? selection.reasoningEffort || "low" : "low";
+        models.push({ model, displayName: model, defaultReasoningEffort: effort,
+          supportedReasoningEfforts: [{ reasoningEffort: effort }], inputModalities: ["text"] });
+      }
+    }
+
+    function restoreModelLabel(node, state) {
+      if (node.textContent === state.applied) node.textContent = state.original;
+      if (node.getAttribute("title") === state.applied) {
+        if (state.title === null) node.removeAttribute("title");
+        else node.setAttribute("title", state.title);
+      }
+      ownedLabels.delete(node);
+    }
+
+    function patchModelLabel(selection) {
+      const custom = selection?.selectedModel && !selection.nativeModels.some((model) => model.model === selection.selectedModel);
+      const label = selection?.trigger?.querySelector?.("span.truncate.whitespace-nowrap");
+      for (const [node, state] of ownedLabels) {
+        if (node !== label || !custom) restoreModelLabel(node, state);
+      }
+      if (custom && label) {
+        const state = ownedLabels.get(label) || { original: label.textContent, title: label.getAttribute("title") };
+        state.applied = selection.selectedModel;
+        ownedLabels.set(label, state);
+        if (label.textContent !== state.applied) label.textContent = state.applied;
+        if (label.getAttribute("title") !== state.applied) label.setAttribute("title", state.applied);
+      }
+      const parent = selection?.trigger?.parentElement || null;
+      if (parent !== observedTriggerParent) {
+        observedTriggerParent = parent;
+        ctx.observers?.clear?.("model_picker_trigger");
+        if (parent && typeof MutationObserver === "function") {
+          const observer = new MutationObserver(schedulePatch);
+          observer.observe(parent, { childList: true, subtree: true, characterData: true });
+          ctx.observers?.set?.("model_picker_trigger", observer);
+        }
+      }
     }
 
     function modelPickerLabelKey(value) {
@@ -249,6 +324,9 @@ TEXT = r"""
     }
 
     function patchCodexModelPicker() {
+      const selection = selectionContext();
+      refreshProviderModels(selection);
+      patchModelLabel(selection);
       if (!models.length) return;
       const context = modelPickerContext();
       if (context?.items?.length && typeof context.selectModel === "function") {
@@ -284,8 +362,10 @@ TEXT = r"""
       }
     }
 
-    function schedulePatch() {
-      if (!installed || !models.length) return;
+    function schedulePatch(event = null) {
+      if (!installed) return;
+      if (event?.type && !models.length && !ownedLabels.size && observedTriggerParent
+        && !observedTriggerParent.contains?.(event.target)) return;
       ctx.frames.cancel("model_picker");
       for (const timer of (window[modelPickerPatchTimersName] || [])) {
         ctx.lifecycle.clearTimeout(timer);
@@ -320,13 +400,16 @@ TEXT = r"""
         ctx.lifecycle.clearTimeout(timer);
       }
       removeSyntheticItems();
+      for (const [node, state] of ownedLabels) restoreModelLabel(node, state);
+      ctx.observers?.clear?.("model_picker_trigger");
+      observedTriggerParent = null;
       delete window[modelPickerPatchHandlerName];
       delete window[modelPickerPatchRafName];
       delete window[modelPickerPatchTimersName];
       delete window[modelPickerSelectionName];
     }
 
-    return { install, apply, dispose };
+    return { install, apply, dispose, selectionContext };
   }
 
   const modelPickerDomain = ctx.domains.register(

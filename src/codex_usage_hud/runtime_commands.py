@@ -1936,7 +1936,11 @@ def handle_general_command(
                     )
                 suffix = f"；Codex provider 已更新：{', '.join(provider_ids)}" if provider_ids else ""
                 status = _status(f"供应商配置已保存，正在刷新 Codex 新会话配置{suffix}。")
-                status["codexProvidersSaved"] = {"providerIds": provider_ids}
+                status["codexProvidersSaved"] = {
+                    "providerIds": provider_ids,
+                    "desktopModelUpdates": codex_provider_result.get("desktopModelUpdates", []),
+                    "desktopModelConfiguration": codex_provider_result.get("desktopModelConfiguration"),
+                }
                 return status
             return _status("设置已保存，相关显示会自动刷新。")
         if action.startswith("restReminder"):

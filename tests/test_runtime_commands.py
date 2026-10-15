@@ -652,6 +652,7 @@ def test_general_provider_save_prompts_for_default_codex_restart() -> None:
 
 def test_general_provider_config_only_save_does_not_prompt_restart() -> None:
     config = UserConfig.defaults()
+    model_update = {"providerId": "custom", "customModel": "glm-5.3-flash", "model": "glm-5.3-flash"}
     ports = GeneralCommandPorts(
         load_config=lambda: config,
         save_config=lambda value: None,
@@ -675,6 +676,8 @@ def test_general_provider_config_only_save_does_not_prompt_restart() -> None:
             "providerIds": ["custom"],
             "defaultProviderEdited": True,
             "requiresCodexRestart": False,
+            "desktopModelUpdates": [model_update],
+            "desktopModelConfiguration": model_update,
         },
     )
 
@@ -690,6 +693,8 @@ def test_general_provider_config_only_save_does_not_prompt_restart() -> None:
 
     assert status["restartVisible"] is False
     assert "重启 Codex Desktop" not in status["message"]
+    assert status["codexProvidersSaved"]["desktopModelUpdates"] == [model_update]
+    assert status["codexProvidersSaved"]["desktopModelConfiguration"] == model_update
 
 
 def test_renderer_default_switch_reloads_without_history_scan() -> None:

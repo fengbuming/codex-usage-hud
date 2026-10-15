@@ -1858,12 +1858,14 @@ TEXT = r"""
     // waiting for the next settings-domain payload.
     if ("currentSession" in domains || "sessionSwitch" in domains) {
       settingsShellDomain.syncCodexCliQuickLaunchMenu?.();
+      modelPickerDomain.apply();
     }
     if ("budget" in domains) {
       budgetDomain.apply(root, { ...(payload || {}), ...(domains.budget || {}) });
     }
     if ("settings" in domains) {
       settingsShellDomain.apply(root, { ...(payload || {}), ...(domains.settings || {}) });
+      modelPickerDomain.apply();
     }
     if ("overlay" in domains) {
       applyOverlayPayload(root, { ...(payload || {}), ...(domains.overlay || {}) });

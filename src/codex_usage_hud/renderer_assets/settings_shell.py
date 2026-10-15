@@ -2162,6 +2162,7 @@ _TEXT_PREFIX = r"""
           configText: String(detail.configText || ""),
           useProxy: detail.useProxy === true,
           proxyPort: String(detail.proxyPort || "7897"),
+          desktopModel: String(detail.desktopModel || ""),
           apiKey: "",
           currentApiKey: String(detail.apiKey || ""),
           isNew: !defined,
@@ -2803,6 +2804,9 @@ _TEXT_PREFIX = r"""
           return false;
         }
         pricingWorkflowState.providerModelsFetching = true;
+        const requestId = typedSettingsRequestId("provider-models");
+        pricingWorkflowState.providerModelsRequestId = requestId;
+        pricingWorkflowState.providerModelsDialog = layer;
         if (statusNode) {
           statusNode.textContent = "正在测试连通性...";
         }
@@ -2811,7 +2815,7 @@ _TEXT_PREFIX = r"""
         return submitSettingsCommand(
           {
             action: "fetchProviderModels",
-            requestId: typedSettingsRequestId("provider-models"),
+            requestId,
             baseUrl,
             apiKey: activeApiKey,
             useProxy: layer.querySelector('[data-provider-config-field="use_proxy"]')?.checked === true,
@@ -2825,9 +2829,12 @@ _TEXT_PREFIX = r"""
       function applyProviderConnectivityStatus(status) {
         const isError = String(status.kind || "") === "error";
         if (!pricingWorkflowState.providerModelsFetching) return;
+        if (pricingWorkflowState.providerModelsRequestId
+          && String(status?.requestId || "") !== pricingWorkflowState.providerModelsRequestId) return;
         const connected = status?.providerConnected;
         if (connected !== true && !isError) return;
         const layer = providerConfigDialogLayer();
+        if (pricingWorkflowState.providerModelsDialog && pricingWorkflowState.providerModelsDialog !== layer) return;
         const statusNode = layer?.querySelector('[data-provider-config-connectivity-status=""]');
         pricingWorkflowState.providerModelsFetching = false;
         const testButton = layer?.querySelector('[data-action="settings-provider-test-connectivity"]');
@@ -2837,11 +2844,7 @@ _TEXT_PREFIX = r"""
             statusNode.textContent = status?.message && isError ? status.message : "连通性测试失败。";
             statusNode.classList.add("codex-usage-hud-provider-config-fetch-status-error");
           }
-          const modelsNode = layer?.querySelector('[data-provider-config-models=""]');
-          if (modelsNode) {
-            modelsNode.hidden = true;
-            modelsNode.innerHTML = "";
-          }
+          renderProviderDesktopModelOptions(layer, []);
           showProviderChatTest(layer, { force: true });
           return;
         }
@@ -2851,21 +2854,22 @@ _TEXT_PREFIX = r"""
         }
         showProviderChatTest(layer, { force: false });
         const modelList = Array.isArray(status?.models) ? status.models.filter(Boolean).map(String) : [];
-        const modelsNode = layer?.querySelector('[data-provider-config-models=""]');
-        if (modelsNode) {
-          if (modelList.length) {
-            modelsNode.hidden = false;
-            const unique = [...new Set(modelList)];
-            modelsNode.innerHTML = `
-              <option value="" selected disabled>可用模型（${unique.length}）</option>
-              ${unique.map((model) =>
-                `<option value="${escapeHtml(model)}">${escapeHtml(model)}</option>`).join("")}
-            `;
-          } else {
-            modelsNode.hidden = true;
-            modelsNode.innerHTML = "";
-          }
-        }
+        renderProviderDesktopModelOptions(layer, modelList);
+      }
+
+      function providerDesktopModelOptionsHtml(models, selected = "") {
+        const values = [...new Set([selected, ...(models || [])].map((model) => String(model || "").trim()).filter(Boolean))];
+        return `<option value="" ${selected ? "" : "selected"}>默认（Desktop 模型选择器）</option>`
+          + values.map((model) => `<option value="${escapeHtml(model)}" ${model === selected ? "selected" : ""}>${escapeHtml(model)}</option>`).join("");
+      }
+
+      function renderProviderDesktopModelOptions(layer, models) {
+        const select = layer?.querySelector('[data-provider-config-models=""]');
+        if (!select) return;
+        const selected = String(select.value || "");
+        select.innerHTML = providerDesktopModelOptionsHtml(models, selected);
+        select.value = selected;
+        select.hidden = false;
       }
 
       function showProviderChatTest(layer, { force = false } = {}) {
@@ -2972,6 +2976,7 @@ _TEXT_PREFIX = r"""
           target.envKey = String(registryEntry.envKey || target.originalEnvKey || target.envKey || "");
           target.baseUrl = String(registryEntry.baseUrl || target.baseUrl || "");
           target.configText = String(registryEntry.configText || target.configText || "");
+          target.desktopModel = String(registryEntry.desktopModel || "");
         }
         // 供应商显示名称：编辑时回显 config.toml 的 name 键，缺省与 Provider ID 一致；
         // 新增时留空并跟随 Provider ID 输入联动，保存时缺省同样回退为 Provider ID。
@@ -3047,7 +3052,7 @@ _TEXT_PREFIX = r"""
                   <span class="codex-usage-hud-provider-config-apikey-field">
                     <input data-provider-config-field="api_key" type="password" value="${escapeHtml(isNew ? "" : (target?.currentApiKey || ""))}" placeholder="${isNew ? "请输入 API key" : (target?.hasApiKey ? "已填充当前密钥，可修改" : "请输入 API key")}" autocomplete="new-password">
                     <button type="button" class="codex-usage-hud-settings-icon-action codex-usage-hud-provider-config-eye" data-action="settings-provider-toggle-api-key" aria-label="显示明文" title="显示明文"><span aria-hidden="true">👁</span></button>
-                    <select class="codex-usage-hud-provider-config-models" data-provider-config-models="" hidden aria-label="可用模型"></select>
+                    <select class="codex-usage-hud-provider-config-models" data-provider-config-models="" data-provider-config-field="desktop_model" ${target?.desktopModel ? "" : "hidden"} aria-label="Desktop 默认模型" title="选择此供应商在 Desktop 中使用的模型，保存后生效">${providerDesktopModelOptionsHtml([], target?.desktopModel || "")}</select>
                     <button type="button" class="codex-usage-hud-settings-action codex-usage-hud-provider-config-fetch" data-action="settings-provider-test-connectivity">测试连通性</button>
                   </span>
                 </label>
@@ -3082,7 +3087,7 @@ _TEXT_PREFIX = r"""
                 <span>此处内容会写回用户 config.toml；Base URL 和环境变量名会与上面的字段同步。</span>
               </label>
             </details>
-            <div class="codex-usage-hud-settings-confirm-body">保存后新会话可直接使用，无需重启。API key 会保存在 Codex config.toml 中；供应商名称、ID 和已有会话保留。</div>
+            <div class="codex-usage-hud-settings-confirm-body">保存后新会话可直接使用，无需重启。同供应商的当前会话从下一条消息使用所选模型。API key 会保存在 Codex config.toml 中；供应商名称、ID 和已有会话保留。</div>
             <div class="codex-usage-hud-provider-config-status" data-provider-config-status="true" role="alert" aria-live="polite"></div>
             <div class="codex-usage-hud-provider-config-proxy-note">此供应商的代理选择同时用于 Desktop 和 CLI；Desktop 使用此设置时需保持 HUD 运行。</div>
             <div class="codex-usage-hud-settings-confirm-actions">
@@ -3223,6 +3228,7 @@ _TEXT_PREFIX = r"""
           ? providerSectionBasicString(sectionText, "env_key").trim()
           : String(envNode?.value || "").trim();
         const apiKey = String(apiKeyNode?.value || "");
+        const desktopModel = String(layer.querySelector('[data-provider-config-field="desktop_model"]')?.value || "").trim();
         const useProxy = layer.querySelector('[data-provider-config-field="use_proxy"]')?.checked === true;
         const proxyPort = Number(layer.querySelector('[data-provider-config-field="proxy_port"]')?.value || "7897");
         if (!Number.isInteger(proxyPort) || proxyPort < 1 || proxyPort > 65535) {
@@ -3299,6 +3305,7 @@ _TEXT_PREFIX = r"""
           configText: sectionText,
           useProxy,
           proxyPort: String(proxyPort),
+          desktopModel,
           apiKey,
           isNew: isNew || existingCodex?.isNew === true,
           hasApiKey: !!apiKey || existingCodex?.hasApiKey === true,
@@ -5215,7 +5222,9 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
           if (!failed && requestId && provider && requestId === codexProviderSwitchMenuState.pendingRequestId) {
             if (codexProviderSwitchMenuState.refreshPendingRequestId !== requestId) {
               codexProviderSwitchMenuState.refreshPendingRequestId = requestId;
-              refreshCodexProviderRuntime(provider, requestId).then(() => {
+              refreshCodexProviderRuntime(provider, requestId, {
+                modelConfiguration: status?.providerSetDefault?.desktopModelConfiguration,
+              }).then(() => {
                 finishDefaultProviderSwitch({
                   requestId,
                   provider,
@@ -5244,10 +5253,13 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
           const requestId = String(status.requestId || "");
           if (requestId && requestId !== lastProviderSaveRefreshRequestId) {
             lastProviderSaveRefreshRequestId = requestId;
-            refreshCodexProviderRuntime().then(() => {
+            refreshCodexProviderRuntime("", "", {
+              modelUpdates: status.codexProvidersSaved.desktopModelUpdates || [],
+              modelConfiguration: status.codexProvidersSaved.desktopModelConfiguration,
+            }).then(() => {
               if (lastProviderSaveRefreshRequestId !== requestId) return;
               clearSettingsRestartPrompt();
-              setSettingsStatus("供应商已保存，新会话可直接使用，无需重启。", "");
+              setSettingsStatus("供应商已保存，无需重启。同供应商的当前会话从下一条消息使用所选模型。", "");
             }).catch((error) => {
               if (lastProviderSaveRefreshRequestId !== requestId) return;
               setSettingsStatus(`配置已保存，但新会话配置刷新失败：${String(error?.message || error)}。请重新切换供应商后再新建会话。`, "error");
@@ -5606,6 +5618,11 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
 
       function closeSettingsConfirm() {
         const layer = document.querySelector(`#${settingsModalId} [data-settings-confirm="true"]`);
+        if (layer && pricingWorkflowState.providerModelsDialog === layer) {
+          pricingWorkflowState.providerModelsDialog = null;
+          pricingWorkflowState.providerModelsRequestId = "";
+          pricingWorkflowState.providerModelsFetching = false;
+        }
         if (layer) layer.remove();
       }
 
@@ -5867,6 +5884,7 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
             section_text: String(draft.configText || ""),
             use_proxy: draft.useProxy === true,
             proxy_port: Number(draft.proxyPort || "7897"),
+            desktop_model: String(draft.desktopModel || "").trim(),
             is_new: draft.isNew === true,
           };
         });
@@ -7700,18 +7718,86 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
         throw new Error("未找到 Codex 会话管理器");
       }
 
-      async function refreshCodexProviderRuntime(provider = "", requestId = "") {
+      function desktopModelReasoningEffort(model, catalog, requested = "") {
+        const info = catalog.find((item) => item.model === model || item.id === model);
+        if (!info) return requested || "low";
+        const supported = (info.supportedReasoningEfforts || []).map((item) => String(item.reasoningEffort || ""));
+        return supported.includes(requested) ? requested : String(info.defaultReasoningEffort || supported[0] || "low");
+      }
+
+      async function syncDesktopProviderModels(manager, read, options, assertCurrent) {
+        const configuration = options.modelConfiguration;
+        const updates = Array.isArray(options.modelUpdates) ? options.modelUpdates : [];
+        const globalChange = configuration && (configuration.customModel || configuration.restoredNativeModel);
+        const activeUpdates = updates.filter((item) => item.customModel || item.preferenceChanged);
+        if (!globalChange && !activeUpdates.length) return;
+        const list = await manager.sendRequest("model/list", { includeHidden: true, cursor: null, limit: 100 });
+        assertCurrent();
+        const catalog = Array.isArray(list?.data) ? list.data : [];
+        const nativeDefault = catalog.find((item) => item.isDefault)?.model || catalog[0]?.model || "";
+        if (globalChange) {
+          const model = String(configuration.model || nativeDefault);
+          if (configuration.model && String(read.config?.model || "") !== configuration.model) {
+            throw new Error("有效默认模型与保存结果不一致");
+          }
+          const requested = configuration.customModel && configuration.modelChanged
+            ? "" : String(configuration.reasoningEffort || "");
+          const effort = desktopModelReasoningEffort(model, catalog, requested);
+          if (configuration.model && effort !== String(read.config?.model_reasoning_effort || "")) {
+            assertCurrent();
+            const saved = await manager.setDefaultModelConfig(model, effort, null);
+            if (saved?.status === "okOverridden") throw new Error("当前配置层覆盖了供应商模型设置");
+            assertCurrent();
+            const confirmed = await manager.sendRequest("config/read", { includeLayers: false, cwd: null });
+            if (String(confirmed.config?.model || "") !== model
+              || String(confirmed.config?.model_reasoning_effort || "") !== effort) throw new Error("Desktop 未确认默认模型设置");
+          }
+        }
+        const selection = modelPickerDomain.selectionContext();
+        const threadId = String(selection?.conversationId || "");
+        if (!threadId || !/^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(threadId)) return;
+        const candidates = globalChange ? [...activeUpdates, configuration] : activeUpdates;
+        const current = await manager.sendRequest("thread/read", { threadId, includeTurns: false });
+        assertCurrent();
+        if (modelPickerDomain.selectionContext()?.conversationId !== threadId) return;
+        const actualProvider = String(current?.thread?.modelProvider || "").trim().toLowerCase();
+        const update = candidates.find((item) => String(item.providerId || "").toLowerCase() === actualProvider);
+        if (!update) return;
+        const model = String(update.model || nativeDefault);
+        if (!model) throw new Error("未找到 Desktop 默认模型");
+        const conversation = await manager.getConversation(threadId);
+        assertCurrent();
+        if (modelPickerDomain.selectionContext()?.conversationId !== threadId) return;
+        if (conversation?.latestModel === model) return;
+        const effort = desktopModelReasoningEffort(model, catalog, update.customModel ? "" : String(update.reasoningEffort || ""));
+        const applied = await manager.updateThreadSettingsForNextTurn(threadId, { model, effort });
+        if (applied === false) throw new Error("当前会话未确认模型更新");
+        assertCurrent();
+        const confirmed = await manager.getConversation(threadId);
+        if (confirmed?.latestModel && confirmed.latestModel !== model) throw new Error("当前会话仍在使用旧模型");
+      }
+
+      async function refreshCodexProviderRuntime(provider = "", requestId = "", options = {}) {
+        const generation = (refreshCodexProviderRuntime.generation || 0) + 1;
+        refreshCodexProviderRuntime.generation = generation;
+        const assertCurrent = () => {
+          if (refreshCodexProviderRuntime.generation !== generation) throw new Error("配置刷新请求已被后续操作替代");
+          if (requestId && codexProviderSwitchMenuState.pendingRequestId !== requestId) throw new Error("切换请求已结束");
+        };
         const { manager, scope } = await resolveCodexProviderRuntime();
         const read = await manager.sendRequest("config/read", { includeLayers: false, cwd: null });
+        assertCurrent();
         const actual = String(read?.config?.model_provider || "openai").trim().toLowerCase();
         if (provider && actual !== provider) throw new Error(`有效默认供应商仍为 ${actual}`);
+        if (options.modelConfiguration || options.modelUpdates?.length) {
+          await syncDesktopProviderModels(manager, read, options, assertCurrent);
+        }
         // Refresh native config caches before clearing prewarm so any subsequent
         // prewarm reads the selected provider. Keep existing threads and drafts.
         await scope.queryClient.invalidateQueries({ queryKey: ["user-saved-config"] });
-        if (requestId && codexProviderSwitchMenuState.pendingRequestId !== requestId) {
-          throw new Error("切换请求已结束");
-        }
+        assertCurrent();
         await manager.clearPrewarmedThreads();
+        if (typeof modelPickerDomain !== "undefined") modelPickerDomain.apply();
       }
 
       function renderCodexProviderSwitchMenu() {
@@ -8069,6 +8155,7 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
         codexBridgeRequest("thread/fork", {
           threadId: sourceId,
           modelProvider: target,
+          ...(targetEntry.desktopModel ? { model: String(targetEntry.desktopModel) } : {}),
           threadSource: "user",
           ephemeral: false,
         }).then((response) => {

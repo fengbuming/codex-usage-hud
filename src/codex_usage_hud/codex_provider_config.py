@@ -46,6 +46,8 @@ QUOTED_STRING_PATTERN = re.compile(
     r"(?m)^[\t ]*(?P<key>[A-Za-z0-9_-]+)[\t ]*=[\t ]*"
     r"\"(?P<value>(?:\\.|[^\"\\\r\n])*)\"[\t ]*(?:#.*)?\r?$"
 )
+DESKTOP_MODEL_MARKER = "# codex-hud-desktop-model: "
+DESKTOP_MODEL_STATE_MARKER = "# codex-hud-desktop-model-state: "
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,6 +67,7 @@ class CodexProviderDefinition:
     section_text: str = ""
     use_proxy: bool = False
     proxy_port: int = 7897
+    desktop_model: str = ""
 
 
 def default_codex_config_path() -> Path:
@@ -452,6 +455,84 @@ def _set_quoted_value(body: str, key: str, value: str, newline: str) -> str:
     return body + separator + f'{key} = "{escaped}"'
 
 
+def _hud_comment_value(text: str, marker: str) -> object:
+    match = re.search(r"(?m)^[\t ]*" + re.escape(marker) + r"([^\r\n]*)", text)
+    if match:
+        try:
+            return json.loads(match.group(1))
+        except (TypeError, ValueError):
+            pass
+    return None
+
+
+def _without_hud_comment(text: str, marker: str) -> str:
+    return re.sub(
+        r"(?m)^[\t ]*" + re.escape(marker) + r"[^\r\n]*(?:\r?\n|$)", "", text
+    )
+
+
+def _with_hud_comment(text: str, marker: str, value: object, newline: str) -> str:
+    text = _without_hud_comment(text, marker)
+    return text.rstrip("\r\n") + newline + marker + json.dumps(value, ensure_ascii=False) + newline
+
+
+def _provider_desktop_model(section: str) -> str:
+    value = _hud_comment_value(section, DESKTOP_MODEL_MARKER)
+    return value.strip() if isinstance(value, str) else ""
+
+
+def _desktop_native_model(text: str) -> dict[str, object]:
+    parsed = _parse_toml_mapping(text)
+    first_table = TOML_TABLE_HEADER_PATTERN.search(text)
+    head = text[:first_table.start()] if first_table else text
+    state = _hud_comment_value(head, DESKTOP_MODEL_STATE_MARKER)
+    if isinstance(state, Mapping) and state.get("model") and parsed.get("model") == state.get("model"):
+        return {"model": state.get("nativeModel"), "reasoningEffort": state.get("nativeReasoningEffort")}
+    return {"model": parsed.get("model"), "reasoningEffort": parsed.get("model_reasoning_effort")}
+
+
+def _apply_default_desktop_model(
+    text: str, provider_id: str, model: str,
+) -> tuple[str, dict[str, object]]:
+    """Apply a provider preference, retaining the native choice across switches.
+
+    Preferences are HUD comments rather than unsupported provider TOML keys.
+    Only a model still owned by this override is restored; a model changed in
+    the native picker or by an external editor becomes the new native choice.
+    """
+    newline = _preferred_newline(text)
+    first_table = TOML_TABLE_HEADER_PATTERN.search(text)
+    head_end = first_table.start() if first_table else len(text)
+    head, tail = text[:head_end], text[head_end:]
+    parsed = _parse_toml_mapping(text)
+    state = _hud_comment_value(head, DESKTOP_MODEL_STATE_MARKER)
+    owns_model = isinstance(state, Mapping) and bool(state.get("model")) and parsed.get("model") == state.get("model")
+    restored = False
+    if model:
+        native = _desktop_native_model(text)
+        state = {"nativeModel": native["model"], "nativeReasoningEffort": native["reasoningEffort"],
+                 "providerId": provider_id, "model": model}
+        head = _set_quoted_value(head, "model", model, newline)
+        head = _with_hud_comment(head, DESKTOP_MODEL_STATE_MARKER, state, newline)
+    elif isinstance(state, Mapping):
+        if owns_model:
+            for key, value in (("model", state.get("nativeModel")),
+                               ("model_reasoning_effort", state.get("nativeReasoningEffort"))):
+                if isinstance(value, str):
+                    head = _set_quoted_value(head, key, value, newline)
+                else:
+                    head = re.sub(r"(?m)^[\t ]*" + re.escape(key) + r"[\t ]*=[^\r\n]*(?:\r?\n|$)", "", head)
+            restored = True
+        head = _without_hud_comment(head, DESKTOP_MODEL_STATE_MARKER)
+    candidate = head + tail
+    effective = _parse_toml_mapping(candidate)
+    return candidate, {"providerId": provider_id, "customModel": model,
+                       "model": str(effective.get("model") or ""),
+                       "reasoningEffort": str(effective.get("model_reasoning_effort") or ""),
+                       "modelChanged": effective.get("model") != parsed.get("model"),
+                       "restoredNativeModel": restored}
+
+
 def _with_bearer_key(body: str, api_key: str, newline: str, env_key: str = "") -> str:
     # Codex resolves env_key before the inline token, so even a valid bearer
     # cannot rescue an environment variable absent from its running process.
@@ -676,6 +757,7 @@ def read_provider_definitions(
             section_text=section_text,
             use_proxy=metadata.get("enabled") is True,
             proxy_port=int(metadata.get("port", 7897)),
+            desktop_model=_provider_desktop_model(section_text),
         )
     return result
 
@@ -751,6 +833,7 @@ def save_provider_configs(
     default_provider = str(parsed_config.get("model_provider") or "").strip().casefold()
     raw_model_providers = parsed_config.get("model_providers")
     seen_ids: set[str] = set()
+    desktop_model_updates: list[dict[str, object]] = []
     env_before: dict[str, str] = {}
     env_after: dict[str, str] = {}
     profiles_to_create: list[tuple[Path, str]] = []
@@ -908,6 +991,24 @@ def save_provider_configs(
             if is_default_provider:
                 default_bearer_changed = hot_key != str(raw_default_entry.get("experimental_bearer_token") or "")
 
+        if "desktop_model" in update or "desktopModel" in update:
+            value = update.get("desktop_model", update.get("desktopModel"))
+            if value is not None and not isinstance(value, str):
+                raise ValueError("Desktop 模型名称必须是文本。")
+            desktop_model = str(value or "").strip()
+            if len(desktop_model) > 256 or any(ord(char) < 32 or ord(char) == 127 for char in desktop_model):
+                raise ValueError("Desktop 模型名称必须是单行文本，且不超过 256 个字符。")
+            section = _section_range(candidate_text, provider_id)
+            newline = _preferred_newline(candidate_text)
+            body = _without_hud_comment(section[2], DESKTOP_MODEL_MARKER)
+            if desktop_model:
+                body = _with_hud_comment(body, DESKTOP_MODEL_MARKER, desktop_model, newline)
+            candidate_text = _replace_section_body(candidate_text, provider_id, body)
+            desktop_model_updates.append({
+                "providerId": provider_id.casefold(), "customModel": desktop_model,
+                "preferenceChanged": desktop_model != (existing.desktop_model if existing else ""),
+            })
+
         if "use_proxy" in update:
             section = _section_range(candidate_text, provider_id)
             newline = _preferred_newline(candidate_text)
@@ -962,6 +1063,16 @@ def save_provider_configs(
                     candidate_text, provider_id
                 )
 
+    default_model_configuration = None
+    for update in desktop_model_updates:
+        if update["providerId"] == default_provider:
+            candidate_text, default_model_configuration = _apply_default_desktop_model(
+                candidate_text, default_provider, str(update["customModel"]),
+            )
+    native_model = _desktop_native_model(candidate_text)
+    for update in desktop_model_updates:
+        update["model"] = update["customModel"] or str(native_model["model"] or "")
+        update["reasoningEffort"] = str(native_model["reasoningEffort"] or "")
     _validate_toml(candidate_text)
     config_changed = candidate_text != original_text
     config_written = False
@@ -1055,6 +1166,8 @@ def save_provider_configs(
         "defaultProviderCredentialsChanged": default_credentials_changed,
         "requiresCodexRestart": requires_codex_restart,
         "hotProviderIds": hot_provider_ids,
+        "desktopModelUpdates": desktop_model_updates,
+        "desktopModelConfiguration": default_model_configuration,
     }
 
 
@@ -1131,13 +1244,17 @@ def set_default_codex_provider(
             candidate_text = _replace_section_body(
                 candidate_text, requested, _with_bearer_key(section[2], hot_key, newline)
             )
+    candidate_text, model_configuration = _apply_default_desktop_model(
+        candidate_text, normalized, _provider_desktop_model(_provider_section_text(candidate_text, requested)),
+    )
     candidate_parsed = _parse_toml_mapping(candidate_text)
     if str(candidate_parsed.get("model_provider") or "").strip().casefold() != normalized:
         raise ValueError("config.toml 顶层 model_provider 写入后校验失败。")
     if candidate_text == original_text:
-        return {"changed": False, "providerId": requested}
+        return {"changed": False, "providerId": requested, "desktopModelConfiguration": model_configuration}
     _write_text_atomically(path, candidate_text, original_text, private=bool(hot_key))
-    return {"changed": True, "providerId": requested, "configPath": str(path)}
+    return {"changed": True, "providerId": requested, "configPath": str(path),
+            "desktopModelConfiguration": model_configuration}
 
 
 def clone_provider_with_bearer_key(
