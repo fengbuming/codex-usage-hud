@@ -2163,6 +2163,9 @@ _TEXT_PREFIX = r"""
           useProxy: detail.useProxy === true,
           proxyPort: String(detail.proxyPort || "7897"),
           desktopModel: String(detail.desktopModel || ""),
+          desktopModels: Array.isArray(detail.desktopModels)
+            ? detail.desktopModels.map((model) => String(model || "").trim()).filter(Boolean)
+            : [String(detail.desktopModel || "").trim()].filter(Boolean),
           apiKey: "",
           currentApiKey: String(detail.apiKey || ""),
           isNew: !defined,
@@ -2773,6 +2776,7 @@ _TEXT_PREFIX = r"""
       function testProviderConnectivityFromDialog() {
         const layer = providerConfigDialogLayer();
         if (!layer) return false;
+        if (pricingWorkflowState.providerModelsFetching && pricingWorkflowState.providerModelsDialog === layer) return false;
         const baseUrl = String(
           layer.querySelector('[data-provider-config-field="base_url"]')?.value || "",
         ).trim();
@@ -2807,11 +2811,14 @@ _TEXT_PREFIX = r"""
         const requestId = typedSettingsRequestId("provider-models");
         pricingWorkflowState.providerModelsRequestId = requestId;
         pricingWorkflowState.providerModelsDialog = layer;
+        const picker = layer.querySelector('[data-provider-config-models=""]');
+        if (picker) picker.dataset.modelsLoading = "true";
         if (statusNode) {
-          statusNode.textContent = "正在测试连通性...";
+          statusNode.textContent = "正在获取模型列表...";
         }
-        const testButton = layer.querySelector('[data-action="settings-provider-test-connectivity"]');
+        const testButton = layer.querySelector('[data-provider-config-models-refresh=""]');
         if (testButton) testButton.disabled = true;
+        syncProviderDesktopModelPicker(layer);
         return submitSettingsCommand(
           {
             action: "fetchProviderModels",
@@ -2821,7 +2828,7 @@ _TEXT_PREFIX = r"""
             useProxy: layer.querySelector('[data-provider-config-field="use_proxy"]')?.checked === true,
             proxyPort: Number(layer.querySelector('[data-provider-config-field="proxy_port"]')?.value || "7897"),
           },
-          "正在测试连通性...",
+          "正在获取模型列表...",
           { preserveOverlay: true },
         );
       }
@@ -2837,14 +2844,16 @@ _TEXT_PREFIX = r"""
         if (pricingWorkflowState.providerModelsDialog && pricingWorkflowState.providerModelsDialog !== layer) return;
         const statusNode = layer?.querySelector('[data-provider-config-connectivity-status=""]');
         pricingWorkflowState.providerModelsFetching = false;
-        const testButton = layer?.querySelector('[data-action="settings-provider-test-connectivity"]');
+        const picker = layer?.querySelector('[data-provider-config-models=""]');
+        if (picker) picker.dataset.modelsLoading = "false";
+        const testButton = layer?.querySelector('[data-provider-config-models-refresh=""]');
         if (testButton) testButton.disabled = false;
         if (isError || connected !== true) {
           if (statusNode) {
             statusNode.textContent = status?.message && isError ? status.message : "连通性测试失败。";
             statusNode.classList.add("codex-usage-hud-provider-config-fetch-status-error");
           }
-          renderProviderDesktopModelOptions(layer, []);
+          syncProviderDesktopModelPicker(layer);
           showProviderChatTest(layer, { force: true });
           return;
         }
@@ -2857,19 +2866,167 @@ _TEXT_PREFIX = r"""
         renderProviderDesktopModelOptions(layer, modelList);
       }
 
-      function providerDesktopModelOptionsHtml(models, selected = "") {
-        const values = [...new Set([selected, ...(models || [])].map((model) => String(model || "").trim()).filter(Boolean))];
-        return `<option value="" ${selected ? "" : "selected"}>默认（Desktop 模型选择器）</option>`
-          + values.map((model) => `<option value="${escapeHtml(model)}" ${model === selected ? "selected" : ""}>${escapeHtml(model)}</option>`).join("");
+      function providerDesktopModelSelection(target) {
+        const list = Array.isArray(target?.desktopModels)
+          ? target.desktopModels
+          : [target?.desktopModel];
+        return list.map((model) => String(model || "").trim()).filter(Boolean);
+      }
+
+      function providerDesktopModelOptionsHtml(models, selected = []) {
+        const chosen = Array.isArray(selected) ? selected : [selected];
+        const values = [...new Set([...chosen, ...(models || [])].map((model) => String(model || "").trim()).filter(Boolean))];
+        return values.map((model) => {
+          const checked = chosen.includes(model);
+          const isDefault = checked && model === chosen[0];
+          return `<label class="codex-usage-hud-provider-config-model-option"${isDefault ? ' data-provider-config-model-default="true"' : ""}>
+            <input type="checkbox" data-provider-config-model-option="" value="${escapeHtml(model)}" ${checked ? "checked" : ""}>
+            <span title="${escapeHtml(model)}">${escapeHtml(model)}</span>
+            ${isDefault ? '<small>默认</small>' : ""}
+          </label>`;
+        }).join("");
+      }
+
+      function syncProviderDesktopModelBadges(list) {
+        const nodes = Array.from(list?.querySelectorAll?.('[data-provider-config-model-option=""]') || []);
+        const firstChecked = nodes.find((node) => node.checked);
+        nodes.forEach((node) => {
+          const option = node.closest?.(".codex-usage-hud-provider-config-model-option");
+          if (!option) return;
+          const isDefault = node === firstChecked;
+          option.toggleAttribute("data-provider-config-model-default", isDefault);
+          let badge = option.querySelector("small");
+          if (isDefault && !badge) {
+            badge = document.createElement("small");
+            badge.textContent = "默认";
+            option.appendChild(badge);
+          } else if (!isDefault && badge) {
+            badge.remove();
+          }
+        });
+      }
+
+      function syncProviderDesktopModelPicker(layer) {
+        const picker = layer?.querySelector('[data-provider-config-models=""]');
+        if (!picker) return;
+        const nodes = Array.from(picker.querySelectorAll('[data-provider-config-model-option=""]'));
+        const selected = providerDesktopModelSelectionValues(layer);
+        const summary = picker.querySelector('[data-provider-config-models-summary=""]');
+        if (summary) {
+          summary.textContent = selected.length ? `模型 · ${selected.length}` : "选择模型";
+          summary.title = selected.join("、");
+        }
+        const panel = picker.querySelector('[data-provider-config-models-panel=""]');
+        picker.querySelector('[data-provider-config-models-toggle=""]')?.setAttribute("aria-expanded", String(panel?.matches(":popover-open") === true));
+        const query = String(picker.querySelector('[data-provider-config-models-search=""]')?.value || "").trim().toLowerCase();
+        const matches = nodes.filter((node) => {
+          const option = node.closest(".codex-usage-hud-provider-config-model-option");
+          option.hidden = !String(node.value).toLowerCase().includes(query);
+          return !option.hidden;
+        });
+        const empty = picker.querySelector('[data-provider-config-models-empty=""]');
+        if (empty) {
+          empty.hidden = matches.length > 0;
+          empty.textContent = nodes.length ? "没有匹配的模型"
+            : picker.dataset.modelsLoading === "true" ? "正在获取模型列表..." : "未获取到模型，请填写连接信息后重试。";
+        }
+        const selectAll = picker.querySelector('[data-provider-config-models-select-all=""]');
+        if (selectAll) {
+          selectAll.textContent = query ? "全选搜索结果" : "全选";
+          selectAll.disabled = !matches.length || matches.every((node) => node.checked);
+        }
+        const clear = picker.querySelector('[data-provider-config-models-clear=""]');
+        if (clear) clear.disabled = !selected.length;
+        const refresh = picker.querySelector('[data-provider-config-models-refresh=""]');
+        if (refresh) refresh.disabled = picker.dataset.modelsLoading === "true";
+      }
+
+      function setProviderDesktopModelsChecked(layer, checked) {
+        const list = layer?.querySelector?.('[data-provider-config-models-list=""]');
+        list?.querySelectorAll?.('[data-provider-config-model-option=""]').forEach((node) => {
+          if (!checked || !node.closest(".codex-usage-hud-provider-config-model-option").hidden) node.checked = checked;
+        });
+        syncProviderDesktopModelBadges(list);
+        syncProviderDesktopModelPicker(layer);
+      }
+
+      function providerDesktopModelSelectionValues(layer) {
+        const nodes = layer?.querySelectorAll?.('[data-provider-config-model-option=""]');
+        return Array.from(nodes || [])
+          .filter((node) => node.checked)
+          .map((node) => String(node.value || "").trim())
+          .filter(Boolean);
       }
 
       function renderProviderDesktopModelOptions(layer, models) {
-        const select = layer?.querySelector('[data-provider-config-models=""]');
-        if (!select) return;
-        const selected = String(select.value || "");
-        select.innerHTML = providerDesktopModelOptionsHtml(models, selected);
-        select.value = selected;
-        select.hidden = false;
+        const container = layer?.querySelector('[data-provider-config-models=""]');
+        if (!container) return;
+        const list = container.querySelector('[data-provider-config-models-list=""]');
+        if (!list) return;
+        const selected = providerDesktopModelSelectionValues(layer);
+        list.innerHTML = providerDesktopModelOptionsHtml(models, selected);
+        container.dataset.modelsLoaded = "true";
+        syncProviderDesktopModelPicker(layer);
+      }
+
+      function bindProviderDesktopModelPicker(layer) {
+        const picker = layer.querySelector('[data-provider-config-models=""]');
+        if (!picker) return;
+        const list = picker.querySelector('[data-provider-config-models-list=""]');
+        const search = picker.querySelector('[data-provider-config-models-search=""]');
+        const toggle = picker.querySelector('[data-provider-config-models-toggle=""]');
+        const panel = picker.querySelector('[data-provider-config-models-panel=""]');
+        list?.addEventListener("change", () => {
+          syncProviderDesktopModelBadges(list);
+          syncProviderDesktopModelPicker(layer);
+        });
+        search?.addEventListener("input", () => syncProviderDesktopModelPicker(layer));
+        picker.querySelector('[data-provider-config-models-select-all=""]')?.addEventListener("click", () => setProviderDesktopModelsChecked(layer, true));
+        picker.querySelector('[data-provider-config-models-clear=""]')?.addEventListener("click", () => setProviderDesktopModelsChecked(layer, false));
+        picker.querySelector('[data-provider-config-models-refresh=""]')?.addEventListener("click", () => testProviderConnectivityFromDialog());
+        panel?.addEventListener("beforetoggle", (event) => {
+          if (event.newState !== "open") return;
+          const rect = toggle.getBoundingClientRect();
+          const width = Math.min(380, window.innerWidth - 32);
+          const below = window.innerHeight - rect.bottom - 16;
+          const above = rect.top - 16;
+          const down = below >= 260 || below >= above;
+          panel.style.width = `${width}px`;
+          panel.style.left = `${Math.max(16, Math.min(rect.right - width, window.innerWidth - width - 16))}px`;
+          panel.style.top = down ? `${rect.bottom + 5}px` : "auto";
+          panel.style.bottom = down ? "auto" : `${window.innerHeight - rect.top + 5}px`;
+          panel.style.maxHeight = `${Math.max(80, Math.min(320, (down ? below : above) - 5))}px`;
+          if (picker.dataset.modelsLoaded !== "true") testProviderConnectivityFromDialog();
+        });
+        panel?.addEventListener("toggle", (event) => {
+          toggle?.setAttribute("aria-expanded", String(event.newState === "open"));
+          if (event.newState === "open") search?.focus();
+        });
+        panel?.addEventListener("keydown", (event) => {
+          if (event.key !== "Escape" || !panel.matches(":popover-open")) return;
+          event.preventDefault();
+          event.stopPropagation();
+          panel.hidePopover();
+          toggle?.setAttribute("aria-expanded", "false");
+          toggle?.focus();
+        });
+        ["base_url", "api_key", "use_proxy", "proxy_port"].forEach((field) => {
+          const node = layer.querySelector(`[data-provider-config-field="${field}"]`);
+          const invalidateModels = () => {
+            picker.dataset.modelsLoaded = "false";
+            picker.dataset.modelsLoading = "false";
+            if (pricingWorkflowState.providerModelsDialog === layer) {
+              pricingWorkflowState.providerModelsFetching = false;
+              pricingWorkflowState.providerModelsDialog = null;
+            }
+            const status = layer.querySelector('[data-provider-config-connectivity-status=""]');
+            if (status) status.textContent = "";
+            syncProviderDesktopModelPicker(layer);
+          };
+          node?.addEventListener("input", invalidateModels);
+          node?.addEventListener("change", invalidateModels);
+        });
+        syncProviderDesktopModelPicker(layer);
       }
 
       function showProviderChatTest(layer, { force = false } = {}) {
@@ -2977,6 +3134,9 @@ _TEXT_PREFIX = r"""
           target.baseUrl = String(registryEntry.baseUrl || target.baseUrl || "");
           target.configText = String(registryEntry.configText || target.configText || "");
           target.desktopModel = String(registryEntry.desktopModel || "");
+          target.desktopModels = Array.isArray(registryEntry.desktopModels)
+            ? registryEntry.desktopModels.map((model) => String(model || "").trim()).filter(Boolean)
+            : [String(registryEntry.desktopModel || "").trim()].filter(Boolean);
         }
         // 供应商显示名称：编辑时回显 config.toml 的 name 键，缺省与 Provider ID 一致；
         // 新增时留空并跟随 Provider ID 输入联动，保存时缺省同样回退为 Provider ID。
@@ -3048,15 +3208,33 @@ _TEXT_PREFIX = r"""
                   <input data-provider-config-field="env_key" value="${escapeHtml(targetEnvKey)}" autocomplete="off">
                 </label>`}
               <div class="codex-usage-hud-provider-config-apikey">
-                <label>API key
+                <div class="codex-usage-hud-provider-config-apikey-entry">
+                  <label for="codex-usage-hud-provider-api-key-${version}">API key</label>
                   <span class="codex-usage-hud-provider-config-apikey-field">
-                    <input data-provider-config-field="api_key" type="password" value="${escapeHtml(isNew ? "" : (target?.currentApiKey || ""))}" placeholder="${isNew ? "请输入 API key" : (target?.hasApiKey ? "已填充当前密钥，可修改" : "请输入 API key")}" autocomplete="new-password">
+                    <input id="codex-usage-hud-provider-api-key-${version}" data-provider-config-field="api_key" type="password" value="${escapeHtml(isNew ? "" : (target?.currentApiKey || ""))}" placeholder="${isNew ? "请输入 API key" : (target?.hasApiKey ? "已填充当前密钥，可修改" : "请输入 API key")}" autocomplete="new-password">
                     <button type="button" class="codex-usage-hud-settings-icon-action codex-usage-hud-provider-config-eye" data-action="settings-provider-toggle-api-key" aria-label="显示明文" title="显示明文"><span aria-hidden="true">👁</span></button>
-                    <select class="codex-usage-hud-provider-config-models" data-provider-config-models="" data-provider-config-field="desktop_model" ${target?.desktopModel ? "" : "hidden"} aria-label="Desktop 默认模型" title="选择此供应商在 Desktop 中使用的模型，保存后生效">${providerDesktopModelOptionsHtml([], target?.desktopModel || "")}</select>
-                    <button type="button" class="codex-usage-hud-settings-action codex-usage-hud-provider-config-fetch" data-action="settings-provider-test-connectivity">测试连通性</button>
+                    <span class="codex-usage-hud-provider-config-models" data-provider-config-models="">
+                      <button type="button" class="codex-usage-hud-settings-action codex-usage-hud-provider-config-models-toggle" data-provider-config-models-toggle="" popovertarget="codex-usage-hud-provider-models-${version}" aria-label="选择要添加到 Codex 的模型" aria-expanded="false" title="获取供应商模型，勾选后添加到 Codex 原生模型选择器">
+                        <span data-provider-config-models-summary="" aria-live="polite"></span><span class="codex-usage-hud-provider-config-models-chevron" aria-hidden="true">⌄</span>
+                      </button>
+                      <div id="codex-usage-hud-provider-models-${version}" popover="auto" class="codex-usage-hud-provider-config-models-panel" data-provider-config-models-panel="">
+                        <div class="codex-usage-hud-provider-config-models-toolbar">
+                          <input type="search" data-provider-config-models-search="" placeholder="搜索模型" aria-label="搜索供应商模型" autocomplete="off">
+                          <button type="button" data-provider-config-models-refresh="" aria-label="刷新模型列表" title="重新检测连接并获取模型列表">↻</button>
+                          <button type="button" data-provider-config-models-select-all="">全选</button>
+                          <button type="button" data-provider-config-models-clear="">取消全选</button>
+                        </div>
+                        <div class="codex-usage-hud-provider-config-models-list" data-provider-config-models-list="" role="group" aria-label="可添加的模型">${providerDesktopModelOptionsHtml([], providerDesktopModelSelection(target))}</div>
+                        <div class="codex-usage-hud-provider-config-models-empty" data-provider-config-models-empty="" role="status"></div>
+                        <div class="codex-usage-hud-provider-config-models-note">列表中首个勾选项为默认模型。</div>
+                      </div>
+                    </span>
                   </span>
-                </label>
-                <div class="codex-usage-hud-provider-config-fetch-status" data-provider-config-connectivity-status="" aria-live="polite"></div>
+                </div>
+                <div class="codex-usage-hud-provider-config-models-feedback">
+                  <span class="codex-usage-hud-provider-config-fetch-status" data-provider-config-connectivity-status="" aria-live="polite"></span>
+                  <span class="codex-usage-hud-provider-config-models-hint">勾选第三方自定义模型，保存后可在 Codex 原生模型选择器中切换。</span>
+                </div>
                 <details class="codex-usage-hud-provider-config-chat-test" data-provider-config-chat-test="" hidden>
                   <summary>没有可用的模型列表？改用自定义模型名发送简短聊天测试</summary>
                   <div class="codex-usage-hud-provider-config-chat-test-body">
@@ -3173,6 +3351,7 @@ _TEXT_PREFIX = r"""
           syncProviderSectionFromFields(layer);
         });
         sectionNode?.addEventListener("input", () => syncProviderFieldsFromSection(layer));
+        bindProviderDesktopModelPicker(layer);
         // 编辑时自动选中 API key 输入框，便于直接替换密钥；
         // 新增时聚焦 Base URL 方便输入地址。
         const apiKeyNode = layer.querySelector('[data-provider-config-field="api_key"]');
@@ -3228,7 +3407,8 @@ _TEXT_PREFIX = r"""
           ? providerSectionBasicString(sectionText, "env_key").trim()
           : String(envNode?.value || "").trim();
         const apiKey = String(apiKeyNode?.value || "");
-        const desktopModel = String(layer.querySelector('[data-provider-config-field="desktop_model"]')?.value || "").trim();
+        const desktopModels = providerDesktopModelSelectionValues(layer);
+        const desktopModel = desktopModels[0] || "";
         const useProxy = layer.querySelector('[data-provider-config-field="use_proxy"]')?.checked === true;
         const proxyPort = Number(layer.querySelector('[data-provider-config-field="proxy_port"]')?.value || "7897");
         if (!Number.isInteger(proxyPort) || proxyPort < 1 || proxyPort > 65535) {
@@ -3306,6 +3486,7 @@ _TEXT_PREFIX = r"""
           useProxy,
           proxyPort: String(proxyPort),
           desktopModel,
+          desktopModels,
           apiKey,
           isNew: isNew || existingCodex?.isNew === true,
           hasApiKey: !!apiKey || existingCodex?.hasApiKey === true,
@@ -5885,6 +6066,9 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
             use_proxy: draft.useProxy === true,
             proxy_port: Number(draft.proxyPort || "7897"),
             desktop_model: String(draft.desktopModel || "").trim(),
+            desktop_models: Array.isArray(draft.desktopModels)
+              ? draft.desktopModels.map((model) => String(model || "").trim()).filter(Boolean)
+              : [],
             is_new: draft.isNew === true,
           };
         });

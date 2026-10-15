@@ -36,6 +36,7 @@ class ProviderRegistryEntry:
     use_proxy: bool = False
     proxy_port: int = 7897
     desktop_model: str = ""
+    desktop_models: tuple[str, ...] = ()
     from_base_config: bool = False
     from_profile: bool = False
     from_provider_definition: bool = False
@@ -145,6 +146,7 @@ def discover_provider_registry(
                         "use_proxy": definition.use_proxy,
                         "proxy_port": definition.proxy_port,
                         "desktop_model": definition.desktop_model,
+                        "desktop_models": definition.desktop_models,
                     }
                 )
 
@@ -186,6 +188,7 @@ def discover_provider_registry(
             use_proxy=bool(state.get("use_proxy")),
             proxy_port=int(state.get("proxy_port", 7897)),
             desktop_model=str(state.get("desktop_model") or ""),
+            desktop_models=tuple(state.get("desktop_models") or ()),
             from_base_config=bool(state.get("from_base_config")),
             from_profile=bool(state.get("from_profile")),
             from_provider_definition=bool(state.get("from_provider_definition")),

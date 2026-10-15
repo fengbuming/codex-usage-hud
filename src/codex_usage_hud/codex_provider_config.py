@@ -68,6 +68,7 @@ class CodexProviderDefinition:
     use_proxy: bool = False
     proxy_port: int = 7897
     desktop_model: str = ""
+    desktop_models: tuple[str, ...] = ()
 
 
 def default_codex_config_path() -> Path:
@@ -476,9 +477,24 @@ def _with_hud_comment(text: str, marker: str, value: object, newline: str) -> st
     return text.rstrip("\r\n") + newline + marker + json.dumps(value, ensure_ascii=False) + newline
 
 
-def _provider_desktop_model(section: str) -> str:
+def _provider_desktop_models(section: str) -> tuple[str, ...]:
     value = _hud_comment_value(section, DESKTOP_MODEL_MARKER)
-    return value.strip() if isinstance(value, str) else ""
+    raw_models = (
+        [value] if isinstance(value, str)
+        else value if isinstance(value, list)
+        else []
+    )
+    models: list[str] = []
+    for model in raw_models:
+        normalized = str(model or "").strip()
+        if normalized and normalized not in models:
+            models.append(normalized)
+    return tuple(models)
+
+
+def _provider_desktop_model(section: str) -> str:
+    models = _provider_desktop_models(section)
+    return models[0] if models else ""
 
 
 def _desktop_native_model(text: str) -> dict[str, object]:
@@ -758,6 +774,7 @@ def read_provider_definitions(
             use_proxy=metadata.get("enabled") is True,
             proxy_port=int(metadata.get("port", 7897)),
             desktop_model=_provider_desktop_model(section_text),
+            desktop_models=_provider_desktop_models(section_text),
         )
     return result
 
@@ -991,22 +1008,41 @@ def save_provider_configs(
             if is_default_provider:
                 default_bearer_changed = hot_key != str(raw_default_entry.get("experimental_bearer_token") or "")
 
-        if "desktop_model" in update or "desktopModel" in update:
+        if any(key in update for key in ("desktop_model", "desktopModel", "desktop_models", "desktopModels")):
             value = update.get("desktop_model", update.get("desktopModel"))
             if value is not None and not isinstance(value, str):
                 raise ValueError("Desktop 模型名称必须是文本。")
+            raw_models = update.get("desktop_models", update.get("desktopModels"))
+            if raw_models is None:
+                raw_models = [value] if str(value or "").strip() else []
+            if not isinstance(raw_models, list):
+                raise ValueError("Desktop 模型列表必须是数组。")
+            desktop_models: list[str] = []
+            for model in raw_models:
+                if not isinstance(model, str):
+                    raise ValueError("Desktop 模型名称必须是文本。")
+                candidate = model.strip()
+                if len(candidate) > 256 or any(ord(char) < 32 or ord(char) == 127 for char in candidate):
+                    raise ValueError("Desktop 模型名称必须是单行文本，且不超过 256 个字符。")
+                if candidate and candidate not in desktop_models:
+                    desktop_models.append(candidate)
             desktop_model = str(value or "").strip()
-            if len(desktop_model) > 256 or any(ord(char) < 32 or ord(char) == 127 for char in desktop_model):
-                raise ValueError("Desktop 模型名称必须是单行文本，且不超过 256 个字符。")
+            if desktop_model:
+                if desktop_model in desktop_models:
+                    desktop_models.remove(desktop_model)
+                desktop_models.insert(0, desktop_model)
             section = _section_range(candidate_text, provider_id)
             newline = _preferred_newline(candidate_text)
             body = _without_hud_comment(section[2], DESKTOP_MODEL_MARKER)
-            if desktop_model:
-                body = _with_hud_comment(body, DESKTOP_MODEL_MARKER, desktop_model, newline)
+            if desktop_models:
+                body = _with_hud_comment(body, DESKTOP_MODEL_MARKER, desktop_models, newline)
             candidate_text = _replace_section_body(candidate_text, provider_id, body)
+            previous_models = existing.desktop_models if existing else ()
             desktop_model_updates.append({
-                "providerId": provider_id.casefold(), "customModel": desktop_model,
-                "preferenceChanged": desktop_model != (existing.desktop_model if existing else ""),
+                "providerId": provider_id.casefold(),
+                "customModel": desktop_models[0] if desktop_models else "",
+                "customModels": desktop_models,
+                "preferenceChanged": tuple(desktop_models) != tuple(previous_models),
             })
 
         if "use_proxy" in update:

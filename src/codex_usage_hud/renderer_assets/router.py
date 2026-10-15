@@ -1357,12 +1357,6 @@ TEXT = r"""
         toggleProviderApiKeyVisibility();
         return;
       }
-      if (action.dataset.action === "settings-provider-test-connectivity") {
-        event.preventDefault();
-        event.stopPropagation();
-        testProviderConnectivityFromDialog();
-        return;
-      }
       if (action.dataset.action === "settings-provider-chat-test") {
         event.preventDefault();
         event.stopPropagation();

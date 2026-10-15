@@ -136,3 +136,68 @@ def test_reapplying_preference_is_idempotent_even_with_brackets_in_model_id(conf
     assert config_path.read_bytes() == original
     state = providers._hud_comment_value(config_path.read_text(encoding="utf-8"), providers.DESKTOP_MODEL_STATE_MARKER)
     assert state["nativeModel"] == "gpt-6.1-sol"
+
+
+def test_multiple_models_attach_to_picker_with_first_as_default(config_path):
+    result = providers.save_provider_configs({
+        "provider_id": "cheaprouter",
+        "base_url": "https://cheap.example/v1",
+        "desktop_model": "glm-5.3-flash",
+        "desktop_models": ["glm-5.3-flash", "glm-5.3", "deepseek-v4"],
+    }, config_path=config_path)
+    update = result["desktopModelUpdates"][0]
+    assert update["customModel"] == "glm-5.3-flash"
+    assert update["customModels"] == ["glm-5.3-flash", "glm-5.3", "deepseek-v4"]
+    assert read_config(config_path)["model"] == "gpt-6.1-sol"
+    definition = providers.read_provider_definitions(config_path)["cheaprouter"]
+    assert definition.desktop_model == "glm-5.3-flash"
+    assert definition.desktop_models == ("glm-5.3-flash", "glm-5.3", "deepseek-v4")
+    registry = discover_provider_registry(
+        user_config=UserConfig.defaults(), config_path=config_path, include_history=False
+    )
+    payload = _provider_registry_payload(SimpleNamespace(provider_registry=registry))
+    assert payload["cheaprouter"]["desktopModels"] == ["glm-5.3-flash", "glm-5.3", "deepseek-v4"]
+    assert payload["cheaprouter"]["desktopModel"] == "glm-5.3-flash"
+
+
+def test_legacy_single_model_reads_back_as_one_item_list(config_path):
+    providers.save_provider_configs({
+        "provider_id": "cheaprouter",
+        "base_url": "https://cheap.example/v1",
+        "desktop_model": "glm-5.3-flash",
+    }, config_path=config_path)
+    definition = providers.read_provider_definitions(config_path)["cheaprouter"]
+    assert definition.desktop_models == ("glm-5.3-flash",)
+    assert definition.desktop_model == "glm-5.3-flash"
+
+
+def test_deselecting_all_models_clears_preference(config_path):
+    providers.save_provider_configs({
+        "provider_id": "cheaprouter",
+        "base_url": "https://cheap.example/v1",
+        "desktop_model": "glm-5.3-flash",
+        "desktop_models": ["glm-5.3-flash", "glm-5.3"],
+    }, config_path=config_path)
+    result = providers.save_provider_configs({
+        "provider_id": "cheaprouter",
+        "base_url": "https://cheap.example/v1",
+        "desktop_model": "",
+        "desktop_models": [],
+    }, config_path=config_path)
+    assert result["desktopModelUpdates"][0]["customModels"] == []
+    definition = providers.read_provider_definitions(config_path)["cheaprouter"]
+    assert definition.desktop_models == ()
+    assert definition.desktop_model == ""
+
+
+@pytest.mark.parametrize("models", [["ok", "bad\n[model_providers.x]"], ["ok", {"m": 1}], ["ok", "x" * 257]])
+def test_invalid_model_list_does_not_write_partial_config(config_path, models):
+    original = config_path.read_bytes()
+    with pytest.raises(ValueError, match="Desktop 模型"):
+        providers.save_provider_configs({
+            "provider_id": "cheaprouter",
+            "base_url": "https://cheap.example/v1",
+            "desktop_model": "ok",
+            "desktop_models": models,
+        }, config_path=config_path)
+    assert config_path.read_bytes() == original

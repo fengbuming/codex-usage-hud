@@ -131,7 +131,7 @@ def _navigation_script(
     if (hostId === "local") {{
       const composers = document.querySelectorAll("[data-above-composer-conversation-id]");
       for (const composer of composers) {{
-        if (composer.closest("#codex-usage-hud-root")) continue;
+        if (composer.closest?.("#codex-usage-hud-root")) continue;
         if (composer.getAttribute("data-above-composer-conversation-id") === input.threadId) {{
           return true;
         }}

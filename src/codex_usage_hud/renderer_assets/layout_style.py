@@ -5452,6 +5452,11 @@ TEXT = r"""
             font-size: 10px;
             font-weight: 700;
           }
+          #${rootId} .codex-usage-hud-provider-config-apikey-entry {
+            display: grid;
+            min-width: 0;
+            gap: 4px;
+          }
           #${rootId} .codex-usage-hud-provider-config-apikey-field {
             min-width: 0;
             display: flex;
@@ -5487,26 +5492,133 @@ TEXT = r"""
             flex: 0 0 auto;
           }
           #${rootId} .codex-usage-hud-provider-config-models {
-            flex: 0 1 auto;
-            min-width: 130px;
-            max-width: 220px;
-            box-sizing: border-box;
+            flex: 0 0 auto;
+          }
+          #${rootId} .codex-usage-hud-provider-config-models-toggle {
+            display: inline-flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
             min-height: 31px;
-            padding: 4px 6px;
+            min-width: 90px;
+            padding: 0 9px;
+          }
+          #${rootId} [data-provider-config-models-summary] {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+          }
+          #${rootId} .codex-usage-hud-provider-config-models-chevron { color: var(--codex-usage-hud-muted, #8492a6); }
+          #${rootId} .codex-usage-hud-provider-config-models-toggle[aria-expanded="true"] .codex-usage-hud-provider-config-models-chevron { transform: rotate(180deg); }
+          #${rootId} .codex-usage-hud-provider-config-models-panel {
+            position: fixed;
+            inset: auto;
+            margin: 0;
+            box-sizing: border-box;
+            display: flex;
+            flex-direction: column;
+            padding: 8px;
             border: 1px solid #47494f;
-            border-radius: 5px;
-            background: #14171b;
-            color: #f1f3f5;
-            outline: none;
+            border-radius: 6px;
+            background: #1d1e20;
+            color: var(--codex-usage-hud-text, #e8eef7);
+            font-size: 11px;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, .3);
+            overflow-y: auto;
+          }
+          #${rootId} .codex-usage-hud-provider-config-models-panel:not(:popover-open) { display: none; }
+          #${rootId} .codex-usage-hud-provider-config-models-toolbar {
+            display: flex;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 8px;
+            padding-bottom: 7px;
+          }
+          #${rootId} .codex-usage-hud-provider-config-models-toolbar input {
+            min-width: 80px;
+            flex: 1 1 120px;
+            width: 0;
+            padding: 5px 7px;
+            border: 1px solid #47494f;
+            border-radius: 4px;
+            background: transparent;
+            color: inherit;
             font: inherit;
+          }
+          #${rootId} .codex-usage-hud-provider-config-models-toolbar button {
+            padding: 5px 2px;
+            border: 0;
+            background: transparent;
+            color: var(--codex-usage-hud-accent, #f3d27a);
+            font: inherit;
+            white-space: nowrap;
+            cursor: pointer;
+          }
+          #${rootId} .codex-usage-hud-provider-config-models-toolbar button:disabled {
+            opacity: .4;
+            cursor: default;
+          }
+          #${rootId} .codex-usage-hud-provider-config-models-list {
+            display: grid;
+            min-height: 0;
+            max-height: 176px;
+            overflow-y: auto;
+            overscroll-behavior: contain;
+          }
+          #${rootId} .codex-usage-hud-provider-config-apikey .codex-usage-hud-provider-config-model-option {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            min-height: 29px;
+            padding: 0 5px;
+            border-radius: 3px;
+            color: inherit;
+            font-size: 11px;
             font-weight: 400;
+            cursor: pointer;
           }
-          #${rootId} .codex-usage-hud-provider-config-models:focus {
-            border-color: var(--codex-usage-hud-accent, #f3d27a);
+          #${rootId} .codex-usage-hud-provider-config-model-option:hover {
+            background: color-mix(in srgb, var(--codex-usage-hud-accent, #f3d27a) 8%, transparent);
           }
-          #${rootId} .codex-usage-hud-provider-config-models[hidden] {
+          #${rootId} .codex-usage-hud-provider-config-model-option input {
+            flex: 0 0 auto;
+            width: 13px;
+            height: 13px;
+            margin: 0;
+            accent-color: var(--codex-usage-hud-accent, #f3d27a);
+          }
+          #${rootId} .codex-usage-hud-provider-config-model-option > span {
+            min-width: 0;
+            flex: 1;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+          }
+          #${rootId} .codex-usage-hud-provider-config-model-option small {
+            color: var(--codex-usage-hud-accent, #f3d27a);
+            font-size: 10px;
+            white-space: nowrap;
+          }
+          #${rootId} .codex-usage-hud-provider-config-model-option[hidden],
+          #${rootId} .codex-usage-hud-provider-config-models-empty[hidden] {
             display: none;
           }
+          #${rootId} .codex-usage-hud-provider-config-models-hint,
+          #${rootId} .codex-usage-hud-provider-config-models-note,
+          #${rootId} .codex-usage-hud-provider-config-models-empty {
+            color: var(--codex-usage-hud-muted, #8492a6);
+            font-size: 10px;
+            line-height: 1.5;
+          }
+          #${rootId} .codex-usage-hud-provider-config-models-feedback {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: baseline;
+            gap: 2px 10px;
+          }
+          #${rootId} .codex-usage-hud-provider-config-fetch-status:empty { display: none; }
+          #${rootId} .codex-usage-hud-provider-config-models-note { padding: 6px 5px 0; }
+          #${rootId} .codex-usage-hud-provider-config-models-empty { padding: 8px 5px; }
           #${rootId} .codex-usage-hud-provider-config-fetch-status {
             min-height: 14px;
             color: var(--codex-usage-hud-muted, #8492a6);

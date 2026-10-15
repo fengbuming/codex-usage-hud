@@ -123,7 +123,10 @@ TEXT = r"""
       const payload = ctx.state?.payload?.() || {};
       const settings = payload.settings || {};
       const provider = String(payload.activeSessionProvider || settings.default_provider || settings.app_provider || "").toLowerCase();
-      const preferred = String(settings.provider_registry?.[provider]?.desktopModel || "");
+      const entry = settings.provider_registry?.[provider] || {};
+      const preferred = Array.isArray(entry.desktopModels)
+        ? entry.desktopModels.map((model) => String(model || "").trim()).filter(Boolean)
+        : [String(entry.desktopModel || "").trim()].filter(Boolean);
       const current = selection && !selection.nativeModels.some((model) => model.model === selection.selectedModel)
         ? selection.selectedModel : "";
       const signature = JSON.stringify([provider, preferred, current, selection?.reasoningEffort || ""]);
@@ -131,7 +134,7 @@ TEXT = r"""
       catalogSignature = signature;
       removeSyntheticItems();
       models = catalogModels.slice();
-      for (const model of [preferred, current]) {
+      for (const model of [...preferred, current]) {
         if (!model || models.some((item) => item.model === model)) continue;
         const effort = model === current ? selection.reasoningEffort || "low" : "low";
         models.push({ model, displayName: model, defaultReasoningEffort: effort,

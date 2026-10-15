@@ -944,6 +944,7 @@ def _provider_registry_payload(context: object) -> dict[str, object]:
             "useProxy": bool(getattr(entry, "use_proxy", False)),
             "proxyPort": int(getattr(entry, "proxy_port", 7897)),
             "desktopModel": str(getattr(entry, "desktop_model", "") or ""),
+            "desktopModels": list(getattr(entry, "desktop_models", ()) or ()),
             "envKey": str(getattr(entry, "env_key", "") or ""),
             "officialAccount": bool(getattr(entry, "official_account", False)),
             "requiresOpenaiAuth": bool(getattr(entry, "requires_openai_auth", False)),
