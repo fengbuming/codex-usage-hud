@@ -358,6 +358,27 @@ TEXT = r"""
         return activeSessionComposerVisible();
       }
 
+      function activeSessionCanonicalIdFromRow(sourceRow) {
+        // Desktop can retain a client-new-thread key on a persisted sidebar
+        // row. Its nearest conversation owner holds the real id; use only
+        // committed props from that row, never a title match or another row.
+        const key = Object.getOwnPropertyNames(sourceRow || {})
+          .find((name) => name.startsWith("__reactFiber$"));
+        let fiber = key ? sourceRow[key] : null;
+        let root = fiber;
+        for (let depth = 0; root?.return && depth < 300; depth += 1) root = root.return;
+        const useAlternate = !!root?.stateNode?.current && root.stateNode.current !== root;
+        const hostId = sourceRow?.getAttribute?.("data-app-action-sidebar-thread-host-id") || "";
+        for (let depth = 0; fiber && depth < 32; depth += 1, fiber = fiber.return) {
+          const props = (useAlternate ? fiber.alternate : fiber)?.memoizedProps;
+          if (!props || !Object.prototype.hasOwnProperty.call(props, "conversationId")) continue;
+          if (hostId && props.hostId && props.hostId !== hostId) return "";
+          const id = normalize(props.conversationId || "");
+          return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id) ? id : "";
+        }
+        return "";
+      }
+
       function activeSessionRefFromRow(row) {
         const sourceRow = activeSessionIdentityRow(row);
         const href = activeSessionRowHref(sourceRow);
@@ -377,6 +398,16 @@ TEXT = r"""
           return { rawSessionId: "", sessionId: "", title };
         }
         if (activeSessionIdIsProvisional(rawSessionId)) {
+          const canonicalId = activeSessionCanonicalIdFromRow(sourceRow);
+          if (canonicalId) {
+            const hostId = sourceRow?.getAttribute?.("data-app-action-sidebar-thread-host-id") || "";
+            return {
+              rawSessionId: normalize(rawSessionId),
+              rendererSessionId: hostId ? `${hostId}:${canonicalId}` : canonicalId,
+              sessionId: canonicalId,
+              title,
+            };
+          }
           return {
             rawSessionId: normalize(rawSessionId),
             rendererSessionId: normalize(rawSessionId),
