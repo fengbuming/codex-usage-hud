@@ -7861,14 +7861,17 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
 
       async function resolveCodexProviderRuntime() {
         // Resolve the loaded native manager by capability rather than a build's
-        // hashed asset/export names. Codex does not expose prewarm invalidation
+        // hashed asset/export names. Newer builds moved the manager from
+        // app-shared to app-initial. Inspect both loaded entry points.
+        // Codex does not expose prewarm invalidation
         // on electronBridge. This adapter must fail closed on unsupported builds.
         const links = Array.from(document.querySelectorAll('link[href]'))
           .map((link) => link.href)
-          .filter((href) => /\/assets\/app-shared-[^/]+\.js$/.test(href));
+          .filter((href) => /\/assets\/(?:app-shared|app-initial)-[^/]+\.js$/.test(href));
         let managerForHost = null;
         for (const href of links) {
-          const module = await import(href);
+          let module;
+          try { module = await import(href); } catch (_) { continue; }
           managerForHost = Object.values(module).find((value) => {
             if (typeof value !== "function") return false;
             try {

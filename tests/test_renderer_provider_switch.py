@@ -1,7 +1,70 @@
 """Exercise the real menu switching lifecycle with a deterministic browser clock."""
 import subprocess
 
+import pytest
+
 from codex_usage_hud.renderer_assets.settings_shell import TEXT
+
+
+@pytest.mark.parametrize(
+    "manager_bundle,shared_unavailable",
+    [("app-shared", False), ("app-initial", False), ("app-initial", True)],
+)
+def test_runtime_resolves_manager_across_desktop_bundles(
+    tmp_path, manager_bundle, shared_unavailable
+):
+    start = TEXT.index("      async function resolveCodexProviderRuntime()")
+    end = TEXT.index("      function desktopModelReasoningEffort", start)
+    resolver = TEXT[start:end].replace("await import(href)", "await importModule(href)")
+    script = (r'''
+const assert = require('node:assert/strict');
+const managerBundle = MANAGER_BUNDLE;
+const sharedUnavailable = SHARED_UNAVAILABLE;
+const imported = [];
+const manager = {clearPrewarmedThreads() {}, sendRequest() {}};
+const scope = {node: {}, query() {}, get() {}, set() {}};
+const root = {__reactContainer$test: {stateNode: {current: {
+  memoizedState: {memoizedState: {current: scope}},
+}}}};
+const window = {};
+const document = {
+  querySelectorAll() { return [
+    {href: 'app://-/assets/app-shared-legacy123.js'},
+    {href: 'app://-/assets/app-shared-style.css'},
+    {href: 'app://-/assets/app-initial-current456.js'},
+    {href: 'app://-/assets/unrelated-789.js'},
+  ]; },
+  getElementById(id) { assert.equal(id, 'root'); return root; },
+};
+function managerForHost(candidate, hostId) {
+  if (candidate !== scope || hostId !== 'local') {
+    throw new Error('AppServerManager RPC is unavailable for hostId: ' + hostId);
+  }
+  return manager;
+}
+async function importModule(href) {
+  imported.push(href);
+  if (sharedUnavailable && href.includes('app-shared-')) throw new Error('old chunk unavailable');
+  // The manager keeps its behavior while minified export names change.
+  return href.includes(managerBundle + '-') ? {renamedExport: managerForHost} : {unrelated() {}};
+}
+'''.replace('MANAGER_BUNDLE', repr(manager_bundle)).replace(
+        'SHARED_UNAVAILABLE', str(shared_unavailable).lower()
+    ) + resolver + r'''
+(async () => {
+  const result = await resolveCodexProviderRuntime();
+  assert.equal(result.manager, manager);
+  assert.equal(result.scope, scope);
+  assert(!imported.some(href => href.endsWith('.css') || href.includes('unrelated-')));
+  if (managerBundle === 'app-initial') assert.equal(imported.length, 2);
+  document.querySelectorAll = () => [];
+  await assert.rejects(resolveCodexProviderRuntime(), /当前版本不支持清理预热会话/);
+})().catch(error => { console.error(error); process.exitCode = 1; });
+''')
+    path = tmp_path / "provider_runtime_bundles.js"
+    path.write_text(script, encoding="utf-8")
+    result = subprocess.run(["node", str(path)], capture_output=True, text=True, encoding="utf-8")
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_provider_switch_feedback_and_correlated_completion(tmp_path):
