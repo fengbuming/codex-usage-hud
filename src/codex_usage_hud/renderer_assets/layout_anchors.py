@@ -294,16 +294,16 @@ TEXT = r"""
         const titleEdge = headerTitleTextEdge(headerNode, header);
         const leftControlEdge = headerLeftControlEdge(headerNode, header, controls);
         const fallbackLeft = Math.max(160, Math.min(header.width * .14, 240));
-        const left = clamp(
-          header.left + Math.max(fallbackLeft, titleEdge, leftControlEdge),
-          header.left + 8,
-          header.right - 8
-        );
         const rightMargin = Math.max(12, header.width * .04);
         const right = clamp(
           Math.min(header.right - rightMargin, headerRightControlStart(headerNode, header, controls) - 10),
-          left,
+          header.left + 8,
           header.right - 8
+        );
+        const left = clamp(
+          header.left + Math.max(fallbackLeft, titleEdge, leftControlEdge),
+          header.left + 8,
+          right
         );
         return { left, right, width: Math.max(1, right - left) };
       }
@@ -316,7 +316,12 @@ TEXT = r"""
           const width = clamp(widthOverride || PANEL.top.fallbackWidth, minWidth, Math.max(minWidth, innerWidth - 16));
           return { left: innerWidth - width - 12, top: 12, width, height };
         }
-        const slot = topHeaderSlot(headerNode, header);
+        let slot = topHeaderSlot(headerNode, header);
+        if (slot.width < minWidth) {
+          const fallbackLeft = header.left + Math.max(160, Math.min(header.width * .14, 240));
+          const left = Math.max(8, header.left + 8, Math.min(fallbackLeft, slot.right - minWidth));
+          slot = { ...slot, left, width: Math.max(1, slot.right - left) };
+        }
         const fitMinWidth = Math.min(minWidth, Math.max(1, slot.width));
         // Automatic top HUD geometry owns the whole title-bar slot. The
         // fallback width is only for the no-header path; keeping it here would
@@ -337,6 +342,31 @@ TEXT = r"""
           maxWidth: slot.width,
           area: { left: slot.left, top, width: slot.width, height, right: slot.right },
         };
+      }
+
+      function fitTopContentRect(panel, anchor) {
+        if (panel.dataset.expanded === "true" || anchor.source !== "header-slot") return anchor;
+        const strip = panel.querySelector('[data-field="topCollapsedProgress"]');
+        const layout = budgetDomain.measureCollapsedProgressStrip(strip);
+        // Keep the existing full-fit and <=40px tail marquee paths. Only the
+        // clipped, non-scrolling middle case may borrow space from the title.
+        const minWidth = minWidthFor("top", false);
+        const needsMinimum = anchor.width < minWidth;
+        if (!needsMinimum && (!layout?.clipped || layout.scrolling)) return anchor;
+        const headerNode = conversationHeaderElement();
+        const header = headerNode?.getBoundingClientRect();
+        if (!header) return anchor;
+        const fallbackLeft = header.left + Math.max(160, Math.min(header.width * .14, 240));
+        const right = anchor.area.right;
+        const requiredWidth = needsMinimum
+          ? minWidth
+          : anchor.width + Math.ceil(layout.required - layout.available);
+        const leftFloor = needsMinimum
+          ? Math.max(header.left + 8, Math.min(fallbackLeft, right - minWidth))
+          : fallbackLeft;
+        const left = Math.max(8, leftFloor, right - requiredWidth);
+        if (left >= anchor.left) return anchor;
+        return { ...anchor, left, width: right - left };
       }
 
       function footerControlRects(composerNode, composer) {

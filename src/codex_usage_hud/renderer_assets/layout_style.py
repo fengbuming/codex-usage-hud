@@ -718,6 +718,7 @@ TEXT = r"""
             box-sizing: border-box;
             display: flex;
             align-items: center;
+            gap: 8px;
             height: 0;
             overflow: hidden;
             padding: 0 11px;
@@ -730,6 +731,9 @@ TEXT = r"""
           #${rootId} .codex-usage-hud-progress-strip .codex-usage-hud-progress-track-text {
             padding: 0 10px;
             font-size: 11px;
+          }
+          #${rootId} .codex-usage-hud-progress-strip .codex-usage-hud-progress-right-text {
+            max-width: none;
           }
           #${rootId} .codex-usage-hud-progress-strip .codex-usage-hud-progress-size-probe {
             padding: 0 10px;

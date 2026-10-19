@@ -25,7 +25,7 @@ TEXT = r"""
           // A persisted width belongs only to an active manual drag/resize;
           // feeding it into requestAnchor recreates stale narrow geometry after
           // a session switch or composer rebuild.
-          const widthOverride = forceAutoFit || name === "request"
+          const widthOverride = forceAutoFit || name === "request" || !state.manual
             ? null
             : state.width;
           const anchor = name === "top"
@@ -48,11 +48,48 @@ TEXT = r"""
             }
           }
           applyRect(panel, left, top, width, height);
+          if (name === "top" && (!state.manual || forceAutoFit)) {
+            const fitted = fitTopContentRect(panel, anchor);
+            if (fitted !== anchor) {
+              panel.dataset.topContentFit = "true";
+              applyRect(panel, fitted.left, fitted.top, fitted.width, height);
+            } else {
+              delete panel.dataset.topContentFit;
+            }
+          }
+          if (name === "top") {
+            // Borrowing title space is bounded by native controls. If that is
+            // still insufficient (or the user chose a narrow manual width),
+            // scroll the full intrinsic rails instead of clipping their copy.
+            const layout = budgetDomain.measureCollapsedProgressStrip(
+              panel.querySelector('[data-field="topCollapsedProgress"]'),
+            );
+            if (layout?.clipped) panel.dataset.topContentScroll = "true";
+            else delete panel.dataset.topContentScroll;
+          }
         }
         refreshAllMarquees(root);
         applyRuntimeErrorsPanelState();
         refreshLayoutObservers();
         startBootstrapObserver();
+      }
+
+      function refreshTopContentFit() {
+        const panel = document.querySelector(`#${rootId} [data-panel="top"]`);
+        if (!panel || panel.dataset.expanded === "true") return;
+        const layout = budgetDomain.measureCollapsedProgressStrip(
+          panel.querySelector('[data-field="topCollapsedProgress"]'),
+        );
+        const manual = getPanelState("top").manual;
+        if (manual) {
+          if (layout?.clipped) panel.dataset.topContentScroll = "true";
+          else delete panel.dataset.topContentScroll;
+          budgetDomain.refreshCollapsedProgressStrip(panel.querySelector('[data-field="topCollapsedProgress"]'));
+          return;
+        }
+        if (panel.dataset.topContentFit === "true" || (layout?.clipped && !layout.scrolling)) {
+          scheduleForPanels(["top"]);
+        }
       }
 
       function applyPanelToggleGeometry(name) {
@@ -75,6 +112,7 @@ TEXT = r"""
           : clamp(rect.bottom - height, 8, Math.max(8, innerHeight - height - 8));
         applyRect(panel, rect.left, top, rect.width, height);
         refreshAllMarquees(root);
+        if (name === "top" && !expanded) refreshTopContentFit();
       }
 
       function syncPositionSettled(names = Object.keys(PANEL), options = {}) {
@@ -479,6 +517,7 @@ TEXT = r"""
       manualRequestRect,
       manualTopRect,
       syncPosition,
+      refreshTopContentFit,
       applyPanelToggleGeometry,
       syncPositionSettled,
       scheduleForPanels,

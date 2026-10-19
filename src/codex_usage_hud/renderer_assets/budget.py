@@ -14,6 +14,18 @@ TEXT = r"""
   function measureProgressRailWidth(rail) {
     const probe = rail?.querySelector?.(":scope > .codex-usage-hud-progress-size-probe");
     if (!probe) return 0;
+    // The probe stretches with its rail; only its unshrunk copies are intrinsic.
+    const copies = Array.from(probe.children || []);
+    if (copies.length) {
+      const style = getComputedStyle(probe);
+      const padding = (Number.parseFloat(style.paddingLeft) || 0)
+        + (Number.parseFloat(style.paddingRight) || 0);
+      const gap = Number.parseFloat(style.columnGap || style.gap) || 0;
+      const textWidth = copies.reduce((sum, copy) => (
+        sum + Math.max(copy.scrollWidth || 0, copy.getBoundingClientRect().width)
+      ), 0);
+      return Math.ceil(textWidth + padding + gap * (copies.length - 1) + 2);
+    }
     const measured = Math.max(
       probe.scrollWidth || 0,
       probe.getBoundingClientRect?.().width || 0,
@@ -134,23 +146,13 @@ TEXT = r"""
     return `${widths.join(",")}|${overflow}`;
   }
 
-  function refreshCollapsedProgressStrip(node) {
+  function measureCollapsedProgressStrip(node) {
     if (!node?.classList?.contains("codex-usage-hud-progress-strip") || !node.isConnected) return;
     const viewport = progressStripViewport(node);
     if (!viewport) return;
     const rails = Array.from(node.querySelectorAll(":scope > .codex-usage-hud-progress-rail"));
-    if (rails.length <= 1) {
-      clearCollapsedProgressStrip(node);
-      delete node.dataset.layoutSignature;
-      return;
-    }
-
     const widths = rails.map(measureProgressRailWidth);
-    if (widths.some((width) => width <= 0)) {
-      clearCollapsedProgressStrip(node);
-      delete node.dataset.layoutSignature;
-      return;
-    }
+    if (!widths.length || widths.some((width) => width <= 0)) return;
 
     const available = Math.max(1, viewport.clientWidth || viewport.getBoundingClientRect().width || 0);
     const gapStyle = getComputedStyle(node);
@@ -159,10 +161,35 @@ TEXT = r"""
     const remainingAfterSession = Math.max(0, available - widths[0] - (gap * Math.max(0, rails.length - 1)));
     const tailShare = remainingAfterSession / Math.max(1, rails.length - 1);
     const required = widths.reduce((sum, width) => sum + width, 0) + (gap * Math.max(0, rails.length - 1));
-    if (required <= available + 1 || tailShare > collapsedTailPeekWidth) {
+    return {
+      rails, widths, available, required,
+      clipped: required > available + 1,
+      scrolling: rails.length > 1 && required > available + 1 && !(tailShare > collapsedTailPeekWidth),
+    };
+  }
+
+  function refreshCollapsedProgressStrip(node) {
+    if (!node?.classList?.contains("codex-usage-hud-progress-strip") || !node.isConnected) return;
+    const layout = measureCollapsedProgressStrip(node);
+    if (!layout) {
+      if (node) {
+        clearCollapsedProgressStrip(node);
+        delete node.dataset.layoutSignature;
+      }
+      return;
+    }
+    const { rails, widths, available, required, scrolling, clipped } = layout;
+    const forceScroll = node.closest?.('[data-panel="top"]')?.dataset.topContentScroll === "true";
+    if (!scrolling && !(clipped && forceScroll)) {
       clearCollapsedProgressStrip(node);
       delete node.dataset.layoutSignature;
-      rails[0].style.width = `${widths[0]}px`;
+      if (rails.length > 1) {
+        rails[0].style.width = `${widths[0]}px`;
+        // Unequal labels need unequal minima, even when the total fits.
+        node.style.gridTemplateColumns = widths.map((width, index) => (
+          index === 0 ? `${width}px` : `minmax(${width}px, 1fr)`
+        )).join(" ");
+      }
       return;
     }
 
@@ -225,14 +252,16 @@ TEXT = r"""
       const layer = document.createElement("span");
       layer.className = className;
       layer.title = tooltip;
-      if (rightText && textClass === "codex-usage-hud-progress-text") {
+      if (rightText) {
         const leftNode = document.createElement("span");
         leftNode.className = textClass;
         leftNode.dataset.progressLabel = "true";
         leftNode.textContent = label;
         leftNode.title = tooltip;
         const rightNode = document.createElement("span");
-        rightNode.className = "codex-usage-hud-progress-right-text";
+        rightNode.className = textClass === "codex-usage-hud-progress-text"
+          ? "codex-usage-hud-progress-right-text"
+          : textClass;
         rightNode.textContent = rightText;
         rightNode.title = tooltip;
         layer.append(leftNode, rightNode);
@@ -303,6 +332,7 @@ TEXT = r"""
       container.querySelectorAll(":scope > .codex-usage-hud-progress-rail").forEach(refreshProgressRailLabel);
       if (container.classList.contains("codex-usage-hud-progress-strip")) {
         refreshCollapsedProgressStrip(container);
+        ctx.domains?.get("layout")?.refreshTopContentFit();
       }
     });
     return items.length > 0;
@@ -316,6 +346,9 @@ TEXT = r"""
     if (main) main.dataset.progress = hasCollapsed ? "true" : "false";
     renderProgressList(root.querySelector('[data-field="topCacheProgress"]'), progress.cache ? [progress.cache] : []);
     renderProgressList(root.querySelector('[data-field="topBudgetProgress"]'), progress.budget || []);
+    // The three lists share one coalesced budget frame. Refresh the entire
+    // domain last, so the collapsed strip cannot lose its callback to a list.
+    ctx.lifecycle.frame("budget", () => refresh(root));
   }
 
     let installed = false;
@@ -350,6 +383,7 @@ TEXT = r"""
       if (!root) return;
       root.querySelectorAll(".codex-usage-hud-progress-rail").forEach(refreshProgressRailLabel);
       root.querySelectorAll(".codex-usage-hud-progress-strip").forEach(refreshCollapsedProgressStrip);
+      ctx.domains?.get("layout")?.refreshTopContentFit();
     }
 
     function dispose() {
@@ -370,6 +404,7 @@ TEXT = r"""
       dispose,
       refresh,
       refreshProgressRailLabel,
+      measureCollapsedProgressStrip,
       refreshCollapsedProgressStrip,
     };
   }
