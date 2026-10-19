@@ -1,8 +1,11 @@
 from pathlib import Path
 from types import SimpleNamespace
+from datetime import datetime, timedelta, timezone
 
 from codex_usage_hud.core import ParsedSession, UsageSummary
 from codex_usage_hud.config import UserConfig
+from codex_usage_hud.renderer_payload_builder import payload_from_snapshot
+from codex_usage_hud.renderer_payloads import payload_domains
 from codex_usage_hud.snapshot_builder import (
     RuntimeSnapshotBuilder,
     SnapshotBuilderPorts,
@@ -190,12 +193,57 @@ def test_reused_ready_budget_stays_measured() -> None:
     source.budget_ready = True
     source.today_tokens = 1234
     source.today_cost_usd = 1.25
+    source.observed_models_by_provider = {"previous": ["unpriced-model"]}
 
     snapshot = build_snapshot(context, ports, reuse_budget_from=source)
 
     assert snapshot.budget_ready is True
     assert snapshot.today_tokens == 1234
     assert snapshot.today_cost_usd == 1.25
+    assert snapshot.observed_models_by_provider == {"previous": ["unpriced-model"]}
+
+
+def test_budget_keeps_priced_subtotal_and_missing_models_after_provider_switch(monkeypatch) -> None:
+    context, ports = _reuse_context()
+    day = datetime(2026, 10, 16, tzinfo=timezone.utc)
+    week = day - timedelta(days=4)
+    monkeypatch.setattr(
+        "codex_usage_hud.snapshot_builder.runtime_policies.budget_windows",
+        lambda _config: (day, week),
+    )
+    today_total = UsageSummary(tokens=1200, cost_usd=1.25, priced_event_count=1, total_event_count=2)
+    week_total = UsageSummary(tokens=4200, cost_usd=3.5, priced_event_count=2, total_event_count=4)
+    models = {"previous": ["unpriced-model"], "current": ["gpt-test"]}
+    context.usage_cache = SimpleNamespace(
+        summarize=lambda *args, **kwargs: (today_total, week_total),
+        observed_models_for_week=lambda *args: models,
+    )
+    context.user_config.weekly_adjustment_usd = 2.0
+    context.daily_budget_usd = 1.0
+    context.weekly_budget_usd = 5.0
+    context.budget_thresholds = [0.8, 1.0]
+    snapshot = build_snapshot(context, ports)
+    assert snapshot.today_cost_usd == 1.25
+    assert snapshot.week_cost_usd == 5.5
+    assert snapshot.week_before_today_cost_usd == 2.25
+    assert snapshot.today_tokens == 1200
+    assert snapshot.week_tokens == 4200
+    assert snapshot.budget_warnings
+    payload = payload_from_snapshot(snapshot).to_json()
+    assert "不可用" not in payload["topLine"]
+    assert payload["observedModelsByProvider"] == models
+    assert payload_domains(payload)["settings"]["observedModelsByProvider"] == models
+
+
+def test_budget_with_only_unpriced_events_has_zero_priced_subtotal() -> None:
+    context, ports = _reuse_context()
+    summary = UsageSummary(tokens=1200, priced_event_count=0, total_event_count=2)
+    context.usage_cache = SimpleNamespace(summarize=lambda *args, **kwargs: (summary, summary))
+    snapshot = build_snapshot(context, ports)
+    assert snapshot.today_cost_usd == 0.0
+    assert snapshot.week_cost_usd == 0.0
+    assert snapshot.week_before_today_cost_usd == 0.0
+    assert "不可用" not in payload_from_snapshot(snapshot).to_json()["topLine"]
 
 
 def test_once_snapshot_does_not_defer_cold_budget_aggregation() -> None:

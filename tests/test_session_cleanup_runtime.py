@@ -247,7 +247,8 @@ def test_session_cleanup_worker_publishes_matching_terminal_state_before_refresh
         assert worker.close()
 
 
-def test_session_cleanup_worker_deletes_provider_history_before_config(monkeypatch) -> None:
+@pytest.mark.parametrize("retained_cli", [0, 1])
+def test_session_cleanup_worker_deletes_provider_history_before_config(monkeypatch, retained_cli) -> None:
     delete_config = MagicMock(return_value={"status": "ok", "providerId": "muyuan"})
     monkeypatch.setattr("codex_usage_hud.session_cleanup_runtime.delete_provider_for_context", delete_config)
     manager = MagicMock()
@@ -260,6 +261,8 @@ def test_session_cleanup_worker_deletes_provider_history_before_config(monkeypat
         "completed",
         deletedCount=2,
         actualBytes=1234,
+        remainingCount=retained_cli,
+        retainedCliCount=retained_cli,
     )
     # 历史成功之后才能删除配置，避免留下无法续跑的历史。
     context = SimpleNamespace(
@@ -292,6 +295,10 @@ def test_session_cleanup_worker_deletes_provider_history_before_config(monkeypat
         final_operation = manager.mark_operation.call_args_list[-1].kwargs
         assert final_operation["actualBytes"] == 1234
         assert final_operation["deletedCount"] == 2
+        assert final_operation["retainedCliCount"] == retained_cli
+        message = final_operation["providerResult"]["message"]
+        assert "已删除 2 条会话记录" in message
+        assert ("保留 1 条正在活动的 CLI 会话" in message) is bool(retained_cli)
     finally:
         assert worker.close()
 

@@ -2374,7 +2374,7 @@ def _handle_renderer_settings_command(
         return send_cli_chat_probe(provider, model, message)
 
     def delete_provider(command: Mapping[str, object]) -> Mapping[str, object]:
-        # 勾选历史删除时，先由后台任务完整清理会话，再移除配置，避免留下无法续跑的会话。
+        # 勾选历史删除时，后台保留活动 CLI、清理其余会话，成功后再移除配置。
         if bool(command.get("deleteSessionHistory")):
             provider = normalize_provider(command.get("provider") or command.get("providerId"))
             if not provider:
@@ -2413,7 +2413,7 @@ def _handle_renderer_settings_command(
             )
             return {
                 **_status(
-                    "已提交后台强制清理；全部会话删除完成后移除供应商配置。"
+                    "已提交后台清理；保留正在活动的 CLI 会话，其余清理完成后移除供应商配置。"
                 ),
                 "providerId": provider,
                 "providerDeleteRequestId": request_id,

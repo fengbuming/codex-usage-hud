@@ -303,3 +303,72 @@ console.log("pricing unread indicators ok");
     )
     assert completed.returncode == 0, f"{completed.stdout}\n{completed.stderr}"
     assert "pricing unread indicators ok" in completed.stdout
+
+
+def test_weekly_missing_price_models_follow_provider_and_refresh_in_open_settings(tmp_path) -> None:
+    body = r"""
+payload = {
+  model: "priced-model",
+  activeSessionProvider: "new-provider",
+  observedModels: ["priced-model"],
+  observedModelsByProvider: {
+    "old-provider": ["missing-1", "missing-2", "missing-3", "missing-4", "missing-5"],
+    "new-provider": ["priced-model"],
+  },
+  settings: {
+    app_provider: "new-provider",
+    provider_order: ["new-provider", "old-provider"],
+    provider_registry: { "new-provider": {}, "old-provider": {} },
+    model_prices: {},
+    provider_settings: {
+      "new-provider": { model_prices: { "priced-model": { model: "priced-model", input: 1 } } },
+      "old-provider": { model_prices: {} },
+    },
+  },
+};
+settingsShellDomain.renderSettingsModal("settings");
+assert.match(modalHtml.value, /缺价 5/);
+assert.equal(settingsShellDomain.detectedPriceModelsHtml(settingsProviderDraft.providers["new-provider"].settings), "");
+settingsShellDomain.switchSettingsProvider("old-provider");
+assert.match(editorHtml.value, /missing-1/);
+assert.match(editorHtml.value, /missing-5/);
+assert.match(editorHtml.value, /已跳过金额计算/);
+assert.doesNotMatch(settingsShellDomain.detectedPriceModelsHtml(settingsProviderDraft.providers["old-provider"].settings), /data-model="priced-model"/);
+
+// New sessions/pricing discoveries must update the notice without repainting edited price inputs.
+const notice = makeNode();
+const oldBadge = makeNode({ dataset: { missingPriceProvider: "old-provider" }, textContent: "缺价 5" });
+root.querySelectorAll = (selector) => selector === '[data-missing-price-provider]' ? [oldBadge] : [];
+const originalQuery = document.querySelector;
+document.querySelector = (selector) => String(selector).includes('[data-detected-price-models="true"]')
+  ? notice : originalQuery(selector);
+payload.observedModelsByProvider["old-provider"].push("newly-discovered");
+renders.editor = 0;
+settingsShellDomain.applySettingsPayload(root, payload);
+assert.match(notice.innerHTML, /newly-discovered/);
+assert.equal(oldBadge.textContent, "缺价 6");
+assert.equal(oldBadge.hidden, false);
+assert.equal(renders.editor, 0);
+
+// Provider-specific prices and wildcard model profiles suppress resolved notices.
+payload.settings.provider_settings["old-provider"].model_prices = {
+  wildcard: { model: "family", model_pattern: "missing-*", input: 1 },
+  "newly-discovered": { model: "newly-discovered", input: 1 },
+};
+settingsShellDomain.applySettingsPayload(root, payload);
+assert.equal(notice.innerHTML, "");
+assert.equal(oldBadge.hidden, true);
+
+// Current-session discovery still works before the weekly cache is warm.
+settingsShellDomain.switchSettingsProvider("new-provider");
+payload.model = "live-unpriced";
+assert.match(settingsShellDomain.detectedPriceModelsHtml(settingsProviderDraft.providers["new-provider"].settings), /live-unpriced/);
+console.log("weekly missing price models ok");
+"""
+    script_path = tmp_path / "weekly_missing_price_models.js"
+    script_path.write_text("\n".join([_HOST_STUBS, SETTINGS_SHELL, body]), encoding="utf-8")
+    completed = subprocess.run(
+        ["node", str(script_path)], capture_output=True, text=True, encoding="utf-8", check=False
+    )
+    assert completed.returncode == 0, f"{completed.stdout}\n{completed.stderr}"
+    assert "weekly missing price models ok" in completed.stdout

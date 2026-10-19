@@ -90,6 +90,7 @@ class _ThreadRecord:
 class _SessionMetadata:
     model_provider: str = "unknown"
     client_kind: str = "unknown"
+    session_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -442,6 +443,7 @@ def _session_metadata(path: Path | None) -> _SessionMetadata:
                     model_provider=explicit_provider
                     or fallback_provider
                     or "unknown",
+                    session_id=_canonical_uuid(payload.get("id")),
                     client_kind=classify_session_client(
                         payload.get("originator") or fallback_originator,
                         payload.get("source")
@@ -455,6 +457,16 @@ def _session_metadata(path: Path | None) -> _SessionMetadata:
         model_provider=fallback_provider or "unknown",
         client_kind=classify_session_client(fallback_originator, fallback_source),
     )
+
+
+def _provider_rollout_session_id(path: Path, metadata: _SessionMetadata) -> str:
+    # Codex may append a recorder UUID after the thread UUID:
+    # rollout-<timestamp>-<thread_id>_<recorder_id>.jsonl. The suffix is not
+    # another thread. Cross-check the primary filename UUID with session_meta.
+    filename_id = _canonical_uuid(path.stem.split("_", 1)[0][-36:])
+    if metadata.session_id and filename_id and metadata.session_id != filename_id:
+        raise SessionCleanupError("Provider 会话文件名与元数据身份冲突。")
+    return metadata.session_id or filename_id
 
 
 def _missing_paginated_history_source(
@@ -1797,7 +1809,7 @@ class SessionCleanupManager:
             if path is not None and not _path_under(path, allowed):
                 raise SessionCleanupError("Provider 会话文件不在允许的会话目录内。")
             if path is not None:
-                file_id = _canonical_uuid(path.stem[-36:])
+                file_id = _provider_rollout_session_id(path, _session_metadata(path))
                 if file_id and file_id != record.session_id:
                     raise SessionCleanupError("Provider 会话文件与数据库身份冲突。")
             selected[record.session_id] = (
@@ -1811,12 +1823,13 @@ class SessionCleanupManager:
             for path in root.rglob("*.jsonl"):
                 if _search_path_key(path) in mapped_paths:
                     continue
-                owner = _session_metadata(path).model_provider
+                metadata = _session_metadata(path)
+                owner = metadata.model_provider
                 if owner == "unknown":
                     owner = self._deep_provider_for_path(path)
                 if owner != provider:
                     continue
-                session_id = _canonical_uuid(path.stem[-36:])
+                session_id = _provider_rollout_session_id(path, metadata)
                 if not session_id or not _path_under(path, allowed):
                     raise SessionCleanupError(
                         "Provider 历史文件的会话身份或路径无法确认。"
@@ -1876,36 +1889,55 @@ class SessionCleanupManager:
         capability = self.probe_capability()
         if not capability.available:
             raise SessionCleanupError(capability.reason)
-        if desktop_lifecycle is None:
-            raise SessionCleanupError("强制删除需要 Codex 会话停止及删除通道。")
         items = self._provider_history_items(provider)
-        # Desktop only owns its own App Server connection. Its deletion receipt
-        # cannot establish that a separate CLI recorder has stopped writing.
-        # Check the whole batch before causing any Desktop or local side effects.
-        if any(item.client_kind == "cli" for item in items):
-            raise SessionCleanupError(
-                "此供应商包含 CLI 会话，无法通过 Desktop 确认 CLI 已停止。"
-                "请先退出 CLI，并在会话管理中清理这些会话，再删除供应商。"
+        if desktop_lifecycle is None and any(item.client_kind != "cli" for item in items):
+            raise SessionCleanupError("强制删除需要 Codex 会话停止及删除通道。")
+        # CLI history does not need a Desktop deletion receipt. Preserve only
+        # CLI threads currently doing work; recheck just before local deletion
+        # because another session can start while a Desktop item is stopping.
+        def active_cli(item: SessionCleanupItem) -> bool:
+            return item.client_kind == "cli" and item._session_id in self._protected_ids(
+                self.active_session_ids
             )
+
+        retained_cli: set[str] = set()
+
+        def retain_cli(item: SessionCleanupItem) -> None:
+            retained_cli.add(item._session_id)
+            results.append({
+                "id": item.id, "state": "retained", "actualBytes": 0,
+                "error": "", "reason": "active-cli",
+            })
+
         results: list[dict[str, object]] = []
         publisher = getattr(self, "progress_publisher", None)
         for index, item in enumerate(items, 1):
             receipt: object = None
             deleted = False
             try:
+                if active_cli(item):
+                    retain_cli(item)
+                    continue
                 if self.usage_snapshot_prepare is not None:
                     receipt = self.usage_snapshot_prepare(item)
-                report = desktop_lifecycle(item)
-                # 当前和运行中会话必须先经 Desktop 停止；孤立记录仅允许在确认卸载后本地清理。
-                if not bool(report.get("verified")) and not (
-                    not any(path.exists() for path in item._rollout_paths)
-                    and bool(report.get("quiesced"))
-                    and bool(report.get("localOnly"))
-                ):
-                    raise SessionCleanupError(
-                        str(report.get("error") or "Codex 会话未能停止或删除。")
-                    )
-                deleted = bool(report.get("verified"))
+                if item.client_kind != "cli":
+                    report = desktop_lifecycle(item)
+                    # Desktop 会话先停止；CLI 历史直接清理，活动 CLI 始终保留。
+                    if not bool(report.get("verified")) and not (
+                        not any(path.exists() for path in item._rollout_paths)
+                        and bool(report.get("quiesced"))
+                        and bool(report.get("localOnly"))
+                    ):
+                        raise SessionCleanupError(
+                            str(report.get("error") or "Codex 会话未能停止或删除。")
+                        )
+                    deleted = bool(report.get("verified"))
+                elif active_cli(item):
+                    if receipt and self.usage_snapshot_discard is not None:
+                        self.usage_snapshot_discard(receipt)
+                    receipt = None
+                    retain_cli(item)
+                    continue
                 self._delete_local_batch([item], allow_missing=True)
                 deleted = True
                 self._verify_deleted_batch([item], verify_history=True)
@@ -1938,25 +1970,32 @@ class SessionCleanupManager:
             )
             if callable(publisher):
                 publisher(snapshot)
-        # 重新按归属扫描，不能只检查最初选中的记录；并发生成的残留必须导致失败。
+        # 重新按归属扫描；仅活动 CLI 是预期保留，其它新增残留仍导致失败。
         remaining = self._provider_history_items(provider)
+        for item in remaining:
+            if item._session_id not in retained_cli and active_cli(item):
+                retain_cli(item)
+        unexpected_remaining = [
+            item for item in remaining if item._session_id not in retained_cli
+        ]
         deleted_count = sum(row["state"] == "deleted" for row in results)
-        errors = [str(row["error"]) for row in results if row["state"] != "deleted"]
+        errors = [str(row["error"]) for row in results if row["state"] == "failed"]
         self._reload_after_execute()
         return self.mark_operation(
             request_id=request_id,
             action="providerHistoryDelete",
-            state="completed" if not remaining and not errors else "failed",
+            state="completed" if not unexpected_remaining and not errors else "failed",
             progress=100,
             provider=provider,
             sessionCount=len(items),
             deletedCount=deleted_count,
             failedCount=len(errors),
             remainingCount=len(remaining),
+            retainedCliCount=sum(item._session_id in retained_cli for item in remaining),
             results=results,
             actualBytes=sum(int(row["actualBytes"]) for row in results),
             error="；".join(errors[:2])
-            or ("清理期间出现新的供应商会话，请重试。" if remaining else ""),
+            or ("清理期间出现新的供应商会话，请重试。" if unexpected_remaining else ""),
         )
 
     def materialize_target_rollouts(

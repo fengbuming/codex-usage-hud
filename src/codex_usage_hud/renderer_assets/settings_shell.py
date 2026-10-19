@@ -20,6 +20,7 @@ _TEXT_PREFIX = r"""
       };
       const codexProviderDrafts = new Map();
       const codexProviderDirty = new Set();
+      const providerDeleteUiState = new Map();
       let autoSavedSettingsSignature = "";
       const codexCliState = {
         open: false,
@@ -1782,14 +1783,19 @@ _TEXT_PREFIX = r"""
 
       function configuredPriceModels(settings) {
         const prices = settings?.model_prices && typeof settings.model_prices === "object" ? settings.model_prices : {};
-        return Object.entries(prices).map(([key, price]) => String(price?.model || key || "").trim()).filter(Boolean);
+        return Object.entries(prices).map(([key, price]) => String(price?.model_pattern || price?.model || key || "").trim()).filter(Boolean);
       }
 
-      function observedPriceModels() {
+      function observedPriceModels(provider = "") {
         const payload = currentPayload() || {};
-        const values = [];
-        if (payload.model) values.push(payload.model);
-        if (Array.isArray(payload.observedModels)) values.push(...payload.observedModels);
+        const normalizedProvider = String(provider || "").trim().toLowerCase();
+        const weeklyModels = payload.observedModelsByProvider?.[normalizedProvider];
+        const values = Array.isArray(weeklyModels) ? [...weeklyModels] : [];
+        const activeProvider = String(payload.activeSessionProvider || payload.settings?.app_provider || "").trim().toLowerCase();
+        if (!normalizedProvider || normalizedProvider === activeProvider) {
+          if (payload.model) values.push(payload.model);
+          if (Array.isArray(payload.observedModels)) values.push(...payload.observedModels);
+        }
         const seen = new Set();
         return values.map((item) => String(item || "").trim()).filter((item) => {
           if (!item || item === "n/a") return false;
@@ -1800,9 +1806,9 @@ _TEXT_PREFIX = r"""
         });
       }
 
-      function unknownPriceModels(settings) {
+      function unknownPriceModels(settings, provider = settingsProviderDraft?.activeProvider || "") {
         const configured = configuredPriceModels(settings);
-        return observedPriceModels().filter(
+        return observedPriceModels(provider).filter(
           (model) => !configured.some((pattern) => priceModelPatternMatches(pattern, model))
         );
       }
@@ -1940,13 +1946,13 @@ _TEXT_PREFIX = r"""
         }).join("");
       }
 
-      function detectedPriceModelsHtml(settings) {
-        const models = unknownPriceModels(settings);
+      function detectedPriceModelsHtml(settings, provider = settingsProviderDraft?.activeProvider || "") {
+        const models = unknownPriceModels(settings, provider);
         if (!models.length) return "";
         return `
           <div class="codex-usage-hud-price-detected">
-            <span>检测到未计价模型</span>
-            ${models.slice(0, 4).map((model) => `<button type="button" class="codex-usage-hud-settings-action" data-action="settings-add-detected-model" data-model="${escapeHtml(model)}">${escapeHtml(model)}</button>`).join("")}
+            <span>以下模型未添加单价，已跳过金额计算（点击添加）</span>
+            ${models.map((model) => `<button type="button" class="codex-usage-hud-settings-action" data-action="settings-add-detected-model" data-model="${escapeHtml(model)}">${escapeHtml(model)}</button>`).join("")}
           </div>
         `;
       }
@@ -1973,7 +1979,7 @@ _TEXT_PREFIX = r"""
         const seen = new Set();
         const append = (values) => values.forEach((value) => {
           const provider = String(value || "").trim().toLowerCase();
-          if (!provider || seen.has(provider)) return;
+          if (!provider || seen.has(provider) || providerDeleteUiState.has(provider)) return;
           seen.add(provider);
           names.push(provider);
         });
@@ -2406,6 +2412,7 @@ _TEXT_PREFIX = r"""
         const badge = settingsProviderTabBadge(settings, provider);
         const dirty = settingsDirtyProviders.has(provider);
         const displayName = providerDisplayName(settings, provider);
+        const missingPrices = unknownPriceModels(draft.providers[provider]?.settings, provider).length;
         return `
           <button type="button" class="codex-usage-hud-provider-tab" role="tab"
             data-action="settings-provider-tab" data-provider-tab="true" data-provider="${escapeHtml(provider)}"
@@ -2413,6 +2420,7 @@ _TEXT_PREFIX = r"""
             aria-label="切换到 Provider ${escapeHtml(displayName)}">
             <span>${escapeHtml(displayName)}</span>
             ${badge ? `<span class="codex-usage-hud-provider-tab-badge">${escapeHtml(badge)}</span>` : ""}
+            <span class="codex-usage-hud-provider-tab-badge" data-missing-price-provider="${escapeHtml(provider)}" title="本周有模型未添加单价，已跳过金额计算" ${missingPrices ? "" : "hidden"}>缺价 ${missingPrices}</span>
             ${dirty ? '<span class="codex-usage-hud-provider-dirty-dot" aria-hidden="true"></span><span class="codex-usage-hud-settings-visually-hidden">有未保存修改</span>' : ""}
           </button>
         `;
@@ -2512,7 +2520,7 @@ _TEXT_PREFIX = r"""
               <div>模型</div><div>输入</div><div>缓存读取</div><div>缓存写入</div><div>输出</div><div class="codex-usage-hud-price-advanced">渠道</div><div class="codex-usage-hud-price-advanced">Base URL</div>
             </div>
             <div data-price-rows="true">${priceRowsHtml(providerSettings)}</div>
-            ${detectedPriceModelsHtml(providerSettings)}
+            <div data-detected-price-models="true">${detectedPriceModelsHtml(providerSettings, activeProvider)}</div>
             <div class="codex-usage-hud-price-actions">
               <button type="button" class="codex-usage-hud-settings-action" data-action="settings-add-model">添加模型</button>
               <input data-setting-key="pricing_url" value="${escapeHtml(pricingUrlValue)}" placeholder="${escapeHtml(pricingUrlPlaceholder)}" aria-label="计费单价获取地址" title="${escapeHtml(pricingUrlPlaceholder)}">
@@ -3437,6 +3445,10 @@ _TEXT_PREFIX = r"""
           return false;
         }
         const existing = settingsProviderDraft.providers[provider];
+        if (isNew && providerDeleteUiState.get(provider)?.pending) {
+          setProviderConfigDialogError(`Provider ${provider} 正在后台删除，请等待完成后再添加。`);
+          return false;
+        }
         if (isNew && existing) {
           setProviderConfigDialogError(`Provider ${provider} 已存在。`);
           return false;
@@ -3455,6 +3467,7 @@ _TEXT_PREFIX = r"""
         }
         // API key 随原供应商配置热读；保存后自动刷新预创建会话。
         if (isNew) {
+          providerDeleteUiState.delete(provider);
           const sourceProvider = String(sourceNode?.value || "").trim().toLowerCase();
           const sourceEntry = settingsProviderDraft.providers[sourceProvider];
           const sourceTable = sourceEntry?.settings?.model_prices
@@ -3584,7 +3597,7 @@ _TEXT_PREFIX = r"""
             <div class="codex-usage-hud-settings-confirm-body">默认会删除 config.toml 中该供应商的相关配置，引用它的 Provider profile，以及响应的 API key 用户环境变量。下面两项为可选删除内容，默认不勾选。</div>
             <div class="codex-usage-hud-provider-delete-options">
               <label><input type="checkbox" data-provider-delete-model-prices="true"><span>同时删除模型单价配置</span></label>
-              <label><input type="checkbox" data-provider-delete-session-history="true"><span>强制删除全部会话（包括当前、运行中和已归档会话）</span></label>
+              <label><input type="checkbox" data-provider-delete-session-history="true"><span>删除相关会话（包括当前、运行中和已归档的 App 会话；保留正在活动的 CLI 会话）</span></label>
             </div>
             <div class="codex-usage-hud-settings-confirm-actions">
               <button type="button" class="codex-usage-hud-settings-action" data-action="settings-provider-delete-cancel" data-variant="ghost">取消</button>
@@ -3610,7 +3623,18 @@ _TEXT_PREFIX = r"""
         pricingWorkflowState.providerDeleteRequestId = requestId;
         pricingWorkflowState.providerDeleteProvider = provider;
         pricingWorkflowState.providerDeleteHasSessionHistory = deleteSessionHistory;
-        openProviderDeleteLoading(requestId, provider, deleteSessionHistory);
+        providerDeleteUiState.set(provider, {
+          requestId,
+          pending: true,
+          entry: settingsProviderDraft?.providers?.[provider],
+          index: settingsProviderDraft?.order.indexOf(provider) ?? -1,
+          codexDraft: codexProviderDrafts.get(provider),
+          dirty: settingsDirtyProviders.has(provider),
+          codexDirty: codexProviderDirty.has(provider),
+          quickLaunch: settingsProviderDraft?.quickLaunchProviders?.has(provider),
+        });
+        closeSettingsConfirm();
+        removeProviderFromSettingsUi(provider);
         const submitted = submitSettingsCommand(
           {
             action: "deleteProvider",
@@ -3624,11 +3648,8 @@ _TEXT_PREFIX = r"""
             : "正在删除供应商 config.toml 配置...",
           { preserveOverlay: true },
         );
-        if (submitted) {
-          settingsDirtyProviders.delete(provider);
-          codexProviderDirty.delete(provider);
-          renderSettingsProviderTabs();
-        } else {
+        if (!submitted) {
+          restoreProviderInSettingsUi(provider, requestId);
           clearProviderDeleteWorkflow();
           closeSettingsConfirm();
         }
@@ -5593,6 +5614,7 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
             renderSessionTransferDialog();
           }
         }
+        syncProviderDeleteUi(payload, status);
         const modal = document.getElementById(settingsModalId);
         if (!modal || modal.hidden) return;
         const state = updateStateFromPayload(payload);
@@ -5638,9 +5660,6 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
                 providerResult?.message || `供应商 ${providerDisplayName(hudSettingsFromPayload(), expectedProvider)} 已删除。`,
               );
               setSettingsStatus(message, "");
-              // config 删除已在同步 dispatch 阶段完成，此处幂等地确保供应商从界面移除
-              // （后台历史清理的 terminal 事件也能覆盖到这里）。
-              removeProviderFromSettingsUi(expectedProvider);
               providerDeleteTerminalHandled = true;
             }
             clearProviderDeleteWorkflow();
@@ -5662,10 +5681,7 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
               const terminalError = String(status.kind || "") === "error";
               // 入队只是开始，保留关联信息直到后台清理和配置删除均完成。
               const pendingHistory = Boolean(status.providerDeletePending) && !terminalError;
-              // 前台提交后立即关闭遮罩；后台清理期间仍保留供应商及结果关联。
-              const providerToRemove = String(
-                status.provider || status.providerId || pricingWorkflowState.providerDeleteProvider || "",
-              ).trim().toLowerCase();
+              // 界面已先行移除供应商，后台清理期间只保留结果关联。
               const loadingLayer = modal.querySelector('[data-provider-delete-loading="true"]');
               const loadingRequestId = String(loadingLayer?.dataset.providerDeleteRequestId || "");
               if (
@@ -5673,9 +5689,6 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
                 && (!loadingRequestId || !statusRequestId || loadingRequestId === statusRequestId)
               ) {
                 closeSettingsConfirm();
-              }
-              if (!terminalError && !pendingHistory) {
-                removeProviderFromSettingsUi(providerToRemove);
               }
               if (!pendingHistory) clearProviderDeleteWorkflow();
             }
@@ -5813,23 +5826,15 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
         pricingWorkflowState.providerDeleteHasSessionHistory = false;
       }
 
-      // 从设置界面的 supplier draft 中移除已删除的供应商并刷新供应商 tab/编辑器。
-      // config.toml 删除已在 daemon 同步完成，status 或 terminal 事件到达时调用一次
-      // 即可让遮罩消失时供应商从设置界面移除；对重复事件保持幂等。
+      // 确认后立即隐藏；旧 payload 和重开设置不能让后台删除中的供应商重新出现。
       function removeProviderFromSettingsUi(provider) {
-        if (!settingsProviderDraft) return;
         provider = String(provider || "").trim().toLowerCase();
-        if (!provider || !settingsProviderDraft.providers?.[provider]) return;
-        const liveSettings = hudSettingsFromPayload();
-        if (liveSettings?.provider_registry && typeof liveSettings.provider_registry === "object") {
-          delete liveSettings.provider_registry[provider];
+        if (!provider) return;
+        if (!providerDeleteUiState.has(provider)) {
+          providerDeleteUiState.set(provider, { requestId: "", pending: false });
         }
-        if (liveSettings?.provider_settings && typeof liveSettings.provider_settings === "object") {
-          delete liveSettings.provider_settings[provider];
-        }
-        if (Array.isArray(liveSettings?.provider_order)) {
-          liveSettings.provider_order = liveSettings.provider_order.filter((item) => String(item || "").trim().toLowerCase() !== provider);
-        }
+        if (!settingsProviderDraft) return;
+        if (!settingsProviderDraft.providers?.[provider]) return;
         delete settingsProviderDraft.providers?.[provider];
         settingsProviderDraft.order = settingsProviderDraft.order.filter(
           (item) => item !== provider,
@@ -5848,6 +5853,57 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
         }
         renderSettingsProviderEditor();
         renderSettingsProviderTabs();
+      }
+
+      function restoreProviderInSettingsUi(provider, requestId = "") {
+        const saved = providerDeleteUiState.get(provider);
+        if (!saved?.pending || (requestId && saved.requestId !== requestId)) return;
+        providerDeleteUiState.delete(provider);
+        if (!settingsProviderDraft || !saved.entry) return;
+        settingsProviderDraft.providers[provider] = saved.entry;
+        if (!settingsProviderDraft.order.includes(provider)) {
+          settingsProviderDraft.order.splice(Math.max(0, saved.index), 0, provider);
+        }
+        if (saved.codexDraft) codexProviderDrafts.set(provider, saved.codexDraft);
+        if (saved.dirty) settingsDirtyProviders.add(provider);
+        if (saved.codexDirty) codexProviderDirty.add(provider);
+        if (saved.quickLaunch) settingsProviderDraft.quickLaunchProviders?.add(provider);
+        renderSettingsProviderEditor();
+        renderSettingsProviderTabs();
+      }
+
+      // 即使设置已关闭也处理回执；每个请求独立对账，避免旧回执影响下一次删除。
+      function syncProviderDeleteUi(payload, status) {
+        const operation = payload?.sessionCleanup?.operation;
+        const terminal = String(operation?.action || "") === "providerDelete"
+          && ["completed", "partial", "failed"].includes(String(operation.state || ""));
+        const results = [];
+        if (terminal) results.push({
+          provider: operation.provider || operation.providerResult?.providerId,
+          requestId: operation.requestId,
+          failed: String(operation.state || "") === "failed",
+        });
+        if (String(status?.action || "") === "deleteProvider"
+          && (String(status.kind || "") === "error" || !status.providerDeletePending)) {
+          results.push({
+            provider: status.provider || status.providerId,
+            requestId: status.requestId || status.providerDeleteRequestId,
+            failed: String(status.kind || "") === "error",
+          });
+        }
+        results.forEach((result) => {
+          const requestId = String(result.requestId || "");
+          const provider = String(result.provider || "").trim().toLowerCase()
+            || Array.from(providerDeleteUiState).find(([, entry]) => entry.requestId === requestId)?.[0];
+          const saved = providerDeleteUiState.get(provider);
+          if (!saved?.pending || (requestId && saved.requestId !== requestId)) return;
+          if (result.failed) {
+            restoreProviderInSettingsUi(provider, requestId);
+          } else {
+            providerDeleteUiState.set(provider, { requestId: saved.requestId, pending: false });
+            removeProviderFromSettingsUi(provider);
+          }
+        });
       }
 
       function handleSettingsCommandSubmissionError(error, command = {}) {
@@ -5870,6 +5926,10 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
         setSettingsStatus(`设置命令提交失败：${error?.message || error}`, "error");
         if (String(command?.action || "") !== "deleteProvider") return;
         const requestId = String(command?.requestId || command?.id || "");
+        restoreProviderInSettingsUi(
+          String(command.provider || command.providerId || "").trim().toLowerCase(),
+          requestId,
+        );
         const expectedRequestId = String(pricingWorkflowState.providerDeleteRequestId || "");
         if (expectedRequestId && requestId && expectedRequestId !== requestId) return;
         const loadingLayer = document.querySelector(
@@ -5924,7 +5984,7 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
           kicker: "正在删除",
           title: "正在删除供应商",
           body: deleteSessionHistory
-            ? "正在停止并删除全部相关会话；清理完成后移除供应商配置。"
+            ? "正在清理相关会话；保留正在活动的 CLI 会话，完成后移除供应商配置。"
             : "正在更新 config.toml 和模型单价配置，请勿关闭此窗口。",
           mode: "provider-delete",
         });
@@ -7221,6 +7281,21 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
         // （status 一旦丢了，提交就不会再触发重绘），所以这里按 payload 本身对账，
         // 保证任何后台写入都会反映到单价表上。
         syncSettingsProviderDraftFromPayload();
+        const detectedModels = document.querySelector(`#${settingsModalId} [data-detected-price-models="true"]`);
+        const provider = settingsProviderDraft?.activeProvider || "";
+        const providerSettings = settingsProviderDraft?.providers?.[provider]?.settings;
+        if (detectedModels && providerSettings) {
+          const html = detectedPriceModelsHtml(providerSettings, provider);
+          if (detectedModels.innerHTML !== html) detectedModels.innerHTML = html;
+        }
+        root?.querySelectorAll('[data-missing-price-provider]').forEach((badge) => {
+          const badgeProvider = badge.dataset.missingPriceProvider;
+          const entry = settingsProviderDraft?.providers?.[badgeProvider];
+          const count = entry ? unknownPriceModels(entry.settings, badgeProvider).length : 0;
+          badge.hidden = !count;
+          const text = `缺价 ${count}`;
+          if (badge.textContent !== text) badge.textContent = text;
+        });
         restReminderDomain.apply(root, payload || {});
         refreshComposerBadgeState(root);
         syncPricingUnreadIndicators(root);

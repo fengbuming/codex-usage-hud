@@ -223,6 +223,7 @@ _BUDGET_FIELDS = (
     "week_before_today_tokens",
     "week_before_today_cost_usd",
     "week_adjustment_usd",
+    "observed_models_by_provider",
     "family_tokens",
     "family_cost_usd",
     "family_member_count",
@@ -255,12 +256,8 @@ def _should_defer_cold_renderer_budget(
         return False
 
 
-def _complete_summary_cost(summary: UsageSummary) -> float | None:
-    """Return a budget amount only when every known event has a price."""
-    total = max(0, int(getattr(summary, "total_event_count", 0) or 0))
-    priced = min(total, max(0, int(getattr(summary, "priced_event_count", 0) or 0)))
-    if total > 0 and priced < total:
-        return None
+def _priced_summary_cost(summary: UsageSummary) -> float:
+    """Sum priced usage; events without configured prices do not block budgets."""
     return round(float(summary.cost_usd or 0.0), 6)
 
 
@@ -355,19 +352,23 @@ def _summarize_budget(
         )
     adjustment = context.user_config.weekly_adjustment_for_scope(scope)
     snapshot.today_tokens = today_total.tokens
-    today_cost = _complete_summary_cost(today_total)
-    week_cost = _complete_summary_cost(week_total)
+    today_cost = _priced_summary_cost(today_total)
+    week_cost = _priced_summary_cost(week_total)
     snapshot.today_cost_usd = today_cost
     snapshot.week_tokens = week_total.tokens
-    snapshot.week_cost_usd = (
-        None if week_cost is None else round(week_cost + adjustment, 6)
-    )
+    snapshot.week_cost_usd = round(week_cost + adjustment, 6)
     prior = runtime_usage.usage_before_today_in_week(
         week_total, today_total, day_start, week_start
     )
     snapshot.week_before_today_tokens = prior.tokens
-    snapshot.week_before_today_cost_usd = _complete_summary_cost(prior)
+    snapshot.week_before_today_cost_usd = _priced_summary_cost(prior)
     snapshot.week_adjustment_usd = adjustment
+    observed_models = getattr(context.usage_cache, "observed_models_for_week", None)
+    snapshot.observed_models_by_provider = (
+        observed_models(context.sessions_root, week_start)
+        if callable(observed_models)
+        else {}
+    )
     snapshot.daily_limit_usd = context.daily_budget_usd
     snapshot.weekly_limit_usd = context.weekly_budget_usd
     snapshot.day_start = day_start

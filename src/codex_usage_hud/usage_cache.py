@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
+from itertools import chain
 import logging
 from pathlib import Path
 import re
@@ -100,6 +101,9 @@ class UsageSummaryCache:
         self._insights_revision = 0
         self._insights_generated_at: datetime | None = None
         self._insights_projector = UsageInsightsProjector(self)
+        self._observed_models_week_memo: (
+            tuple[object, dict[str, list[str]]] | None
+        ) = None
 
     def _hydrate_persisted_entries(
         self,
@@ -794,6 +798,33 @@ class UsageSummaryCache:
             _merge_usage(day_total, entry.summary_day)
             _merge_usage(week_total, entry.summary_week)
         return day_total, week_total
+
+    def observed_models_for_week(
+        self, sessions_root: Path, week_start: datetime
+    ) -> dict[str, list[str]]:
+        """Project cached weekly models for every provider without another scan."""
+        scan_roots = self._scan_roots(self._cache_path(sessions_root))
+        key = (scan_roots, week_start, self._insights_revision)
+        memo = self._observed_models_week_memo
+        if memo is not None and memo[0] == key:
+            return {provider: list(values) for provider, values in memo[1].items()}
+        models: dict[str, set[str]] = {}
+        entries = (
+            entry
+            for path, entry in self._deduplicated_entries(self._entries.items())
+            if self._path_under_scan_roots(path, scan_roots)
+        )
+        for entry in chain(entries, self._deleted_entries):
+            if entry.week_start != week_start:
+                continue
+            provider = str(entry.model_provider or "unknown").strip().lower()
+            for model in entry.models_week:
+                text = str(model or "").strip()
+                if text and text != "unknown":
+                    models.setdefault(provider, set()).add(text)
+        result = {provider: sorted(values) for provider, values in sorted(models.items())}
+        self._observed_models_week_memo = (key, result)
+        return {provider: list(values) for provider, values in result.items()}
 
     def family_lifetime_usage(
         self,

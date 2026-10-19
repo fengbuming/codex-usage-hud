@@ -59,6 +59,47 @@ def test_usage_cache_reports_warm_only_after_matching_window_scan(
     assert not cache.is_warm_for(sessions, day + timedelta(days=1), week)
 
 
+def test_weekly_observed_models_keep_providers_and_survive_cache_restart(tmp_path: Path) -> None:
+    sessions = tmp_path / "sessions"
+    sessions.mkdir()
+    store = UsageSummaryStore(tmp_path / "summary.sqlite3")
+    day = datetime(2026, 10, 16, tzinfo=timezone.utc)
+    week = day - timedelta(days=4)
+    for name, provider, model, timestamp in (
+        ("previous", "old-provider", "unpriced-model", "2026-10-13T10:00:00Z"),
+        ("current", "new-provider", "gpt-5.6-sol", "2026-10-16T10:00:00Z"),
+        ("outside", "old-provider", "outside-week", "2026-10-01T10:00:00Z"),
+    ):
+        records = [
+            _record(timestamp, "session_meta", {"id": name, "model_provider": provider}),
+            _record(timestamp, "turn_context", {"model": model}),
+            _token_count(timestamp, 100),
+        ]
+        (sessions / f"{name}.jsonl").write_text(
+            "\n".join(json.dumps(record) for record in records) + "\n", encoding="utf-8"
+        )
+    cache = UsageSummaryCache(JsonlSessionParser(), summary_store=store)
+    cache.summarize(sessions, day, week)
+    expected = {"new-provider": ["gpt-5.6-sol"], "old-provider": ["unpriced-model"]}
+    assert cache.observed_models_for_week(sessions, week) == expected
+    # Provider scope only controls budget totals, never model discovery.
+    cache.summarize(sessions, day, week, included_providers=["new-provider"], allow_stale=True)
+    assert cache.observed_models_for_week(sessions, week) == expected
+    restarted = UsageSummaryCache(JsonlSessionParser(), summary_store=store)
+    restarted.recent_window_totals(sessions, day, week, included_providers=["new-provider"])
+    assert restarted.observed_models_for_week(sessions, week) == expected
+    # Repeated reads are isolated copies; incremental JSONL updates invalidate the memo.
+    changed = cache.observed_models_for_week(sessions, week)
+    changed["old-provider"].clear()
+    assert cache.observed_models_for_week(sessions, week) == expected
+    _append_record(sessions / "current.jsonl", _record(
+        "2026-10-16T11:00:00Z", "turn_context", {"model": "later-model"}
+    ))
+    _append_record(sessions / "current.jsonl", _token_count("2026-10-16T11:00:01Z", 200))
+    cache.summarize(sessions, day, week, allow_stale=True, refresh_paths=[sessions / "current.jsonl"])
+    assert cache.observed_models_for_week(sessions, week)["new-provider"] == ["gpt-5.6-sol", "later-model"]
+
+
 def test_usage_cache_bounds_retained_raw_tail_records(tmp_path: Path) -> None:
     sessions = tmp_path / "sessions"
     sessions.mkdir()

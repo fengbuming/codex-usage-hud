@@ -224,6 +224,10 @@ def payload_from_snapshot(
         request_row_details=_request_row_details(snapshot, limit=request_rows_limit),
         request_rows_total=_request_rows_total(snapshot),
         observed_models=_observed_models(snapshot),
+        observed_models_by_provider={
+            provider: list(models)
+            for provider, models in snapshot.observed_models_by_provider.items()
+        },
         settings=settings_payload,
         active_display_mode=str(active_display_mode or "renderer"),
         settings_path=str(settings_path or ""),

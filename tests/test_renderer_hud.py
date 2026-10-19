@@ -1878,7 +1878,9 @@ class RendererHudPayloadTests(unittest.TestCase):
         self.assertIn('layer.dataset.providerDeleteLoading = "true";', script)
         self.assertIn('layer.dataset.providerDeleteRequestId = String(requestId || "");', script)
         self.assertIn('layer.dataset.providerDeleteProvider = String(provider || "").trim().toLowerCase();', script)
-        self.assertIn("openProviderDeleteLoading(requestId, provider, deleteSessionHistory);", script)
+        start = script.index("function confirmProviderDeleteDialog()")
+        confirmation = script[start:script.index("function typedSettingsRequestId", start)]
+        self.assertNotIn("openProviderDeleteLoading(", confirmation)
         self.assertIn('data-provider-delete-loading="true"', script)
         self.assertIn("function clearProviderDeleteWorkflow()", script)
         self.assertIn("providerDeleteHasSessionHistory", script)
@@ -1889,8 +1891,8 @@ class RendererHudPayloadTests(unittest.TestCase):
         )
         self.assertIn("padding: 14px 18px 12px;", script)
         self.assertLess(
-            script.index("pricingWorkflowState.providerDeleteRequestId = requestId;"),
-            script.index("openProviderDeleteLoading(requestId, provider, deleteSessionHistory);"),
+            confirmation.index("removeProviderFromSettingsUi(provider);"),
+            confirmation.index("const submitted = submitSettingsCommand("),
         )
 
     def test_provider_delete_removes_draft_even_when_latest_registry_has_no_provider(self) -> None:
@@ -1950,7 +1952,7 @@ console.log(JSON.stringify(results));
         for observed in results:
             self.assertEqual(observed["pending"], {"closed": 1, "removed": 0, "requestId": "req-1"})
             self.assertEqual(observed["requestId"], "")
-        self.assertEqual(results[0]["removed"], 1)
+        self.assertEqual(results[0]["removed"], 0)
         self.assertEqual(results[1]["removed"], 0)
         self.assertEqual(results[1]["messages"][-1]["kind"], "error")
         self.assertIn("stop-failed", results[1]["messages"][-1]["message"])

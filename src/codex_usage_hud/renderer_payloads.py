@@ -36,6 +36,7 @@ class RendererHudPayload:
     request_row_details: list[dict[str, object]] = field(default_factory=list)
     request_rows_total: int = 0
     observed_models: list[str] = field(default_factory=list)
+    observed_models_by_provider: dict[str, list[str]] = field(default_factory=dict)
     settings: dict[str, object] = field(default_factory=dict)
     active_session_provider: str = ""
     active_display_mode: str = "renderer"
@@ -98,6 +99,10 @@ class RendererHudPayload:
             "requestRowDetails": [dict(item) for item in self.request_row_details],
             "requestRowsTotal": max(0, int(self.request_rows_total or 0)),
             "observedModels": list(self.observed_models),
+            "observedModelsByProvider": {
+                provider: list(models)
+                for provider, models in self.observed_models_by_provider.items()
+            },
             "settings": dict(self.settings),
             "activeSessionProvider": str(self.active_session_provider or ""),
             "activeDisplayMode": self.active_display_mode,
@@ -190,6 +195,7 @@ def payload_domains(payload: dict[str, object]) -> dict[str, dict[str, object]]:
         "settings", "activeDisplayMode", "settingsPath", "settingsBridgeUrl",
         "settingsCommandStatus", "sessionIndex", "restReminder", "supportImages", "theme",
         "updateState", "appVersion", "activeSessionProvider",
+        "model", "observedModels", "observedModelsByProvider",
     )
 
     def pick(keys: tuple[str, ...]) -> dict[str, object]:

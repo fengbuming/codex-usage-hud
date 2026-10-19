@@ -698,7 +698,7 @@ class SessionCleanupWorker:
                         request_id=request_id,
                     )
                 elif action == "providerDelete":
-                    # 强制清理及校验全部完成后再删配置；失败时保留配置供重试。
+                    # 活动 CLI 按约定保留；其余清理及校验成功后删配置，失败时保留配置供重试。
                     provider_id = (
                         str(command.get("provider") or command.get("providerId") or "")
                         .strip()
@@ -736,6 +736,11 @@ class SessionCleanupWorker:
                         if isinstance(history_operation, Mapping)
                         else 0
                     )
+                    retained_cli_count = int(
+                        history_operation.get("retainedCliCount") or 0
+                        if isinstance(history_operation, Mapping)
+                        else 0
+                    )
                     if bool(command.get("deleteSessionHistory")) and (
                         not isinstance(history_operation, Mapping)
                         or history_operation.get("state") != "completed"
@@ -747,9 +752,12 @@ class SessionCleanupWorker:
                     provider_result = delete_provider_for_context(self._context, command)
                     if bool(command.get("deleteSessionHistory")):
                         message = str(provider_result.get("message") or f"供应商 {provider_id} 已删除。")
+                        message = message.rstrip("。") + f"；已删除 {history_deleted} 条会话记录"
+                        if retained_cli_count:
+                            message += f"，保留 {retained_cli_count} 条正在活动的 CLI 会话"
                         provider_result = {
                             **provider_result,
-                            "message": message.rstrip("。") + f"；已强制删除 {history_deleted} 条会话记录。",
+                            "message": message + "。",
                         }
                     errors = getattr(self._context, "runtime_errors", None)
                     if errors is not None:
@@ -762,6 +770,7 @@ class SessionCleanupWorker:
                         provider=provider_id,
                         providerResult=provider_result,
                         historyDeletedCount=history_deleted,
+                        retainedCliCount=retained_cli_count,
                         deletedCount=history_deleted,
                         actualBytes=history_actual_bytes,
                         failedCount=0,

@@ -1043,6 +1043,8 @@ class ParsedSession:
     week_before_today_tokens: int = 0
     week_before_today_cost_usd: float | None = 0.0
     week_adjustment_usd: float = 0.0
+    # Weekly model discovery spans providers, independently of the active chat.
+    observed_models_by_provider: dict[str, list[str]] = field(default_factory=dict)
     # Lifetime usage for this session root plus forked subagents (local JSONL).
     family_tokens: int = 0
     family_cost_usd: float | None = None

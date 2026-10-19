@@ -64,24 +64,163 @@ def _create_state(path: Path, rows: list[tuple[object, ...]]) -> None:
 
 
 class SessionCleanupManagerTests(unittest.TestCase):
-    def test_forced_provider_delete_blocks_cli_before_desktop_or_local_side_effects(self):
+    def test_forced_provider_delete_keeps_active_cli_and_deletes_other_sessions(self):
         temporary, _root, state, index, rollouts, manager = self._fixture()
         self.addCleanup(temporary.cleanup)
-        # Mixed Desktop/CLI provider: even idle-looking CLI metadata cannot
-        # prove a private CLI App Server has released its recorder.
         cli = rollouts[SECOND_ID]
         cli.write_text(cli.read_text().replace('"routin"', '"openai-custom"'), encoding="utf-8")
         manager.active_session_ids = lambda: (SECOND_ID,)
-        before_files = {key: path.read_bytes() for key, path in rollouts.items()}
-        before_index = index.read_bytes()
+        before_cli = cli.read_bytes()
         lifecycle = MagicMock(return_value={"verified": True, "quiesced": False})
-        with self.assertRaisesRegex(SessionCleanupError, "CLI"):
-            manager.delete_provider_history("openai-custom", force=True, desktop_lifecycle=lifecycle)
-        lifecycle.assert_not_called()
-        self.assertEqual(before_files, {key: path.read_bytes() for key, path in rollouts.items()})
-        self.assertEqual(before_index, index.read_bytes())
+        prepared, committed = [], []
+        manager.usage_snapshot_prepare = lambda item: prepared.append(item._session_id) or item._session_id
+        manager.usage_snapshot_commit = committed.append
+        result = manager.delete_provider_history(
+            "openai-custom", force=True, desktop_lifecycle=lifecycle
+        )["operation"]
+        self.assertEqual(result["state"], "completed")
+        self.assertEqual(result["deletedCount"], 2)
+        self.assertEqual(result["retainedCliCount"], 1)
+        self.assertEqual(result["remainingCount"], 1)
+        self.assertEqual(result["failedCount"], 0)
+        self.assertEqual(result["error"], "")
+        self.assertEqual(cli.read_bytes(), before_cli)
+        self.assertFalse(rollouts[ROOT_ID].exists())
+        self.assertFalse(rollouts[CHILD_ID].exists())
+        self.assertEqual({call.args[0]._session_id for call in lifecycle.call_args_list}, {ROOT_ID, CHILD_ID})
+        self.assertEqual(set(prepared), {ROOT_ID, CHILD_ID})
+        self.assertEqual(set(committed), {ROOT_ID, CHILD_ID})
+        self.assertIn(SECOND_ID, index.read_text(encoding="utf-8"))
+        self.assertNotIn(ROOT_ID, index.read_text(encoding="utf-8"))
         with closing(sqlite3.connect(state)) as connection:
-            self.assertEqual(connection.execute("SELECT COUNT(*) FROM threads").fetchone()[0], 3)
+            self.assertEqual(connection.execute("SELECT id FROM threads").fetchall(), [(SECOND_ID,)])
+
+    def test_forced_provider_delete_removes_idle_cli_without_desktop_receipt(self):
+        temporary, root, state, index, rollouts, manager = self._fixture()
+        self.addCleanup(temporary.cleanup)
+        # Being the currently selected CLI thread alone is not active work.
+        manager.current_session_ids = lambda: (SECOND_ID,)
+        manager.active_session_ids = lambda: (ROOT_ID,)
+        history = root / "thread_history_1.sqlite"
+        with closing(sqlite3.connect(history)) as connection, connection:
+            connection.execute("CREATE TABLE thread_items(thread_id TEXT, body TEXT)")
+            connection.executemany("INSERT INTO thread_items VALUES(?,?)", [(SECOND_ID, "cli"), (ROOT_ID, "app")])
+        before_app = rollouts[ROOT_ID].read_bytes()
+        lifecycle = MagicMock(side_effect=AssertionError("CLI must not use Desktop lifecycle"))
+        result = manager.delete_provider_history(
+            "routin", force=True, desktop_lifecycle=lifecycle
+        )["operation"]
+        lifecycle.assert_not_called()
+        self.assertEqual(result["state"], "completed")
+        self.assertEqual(result["deletedCount"], 1)
+        self.assertEqual(result["retainedCliCount"], 0)
+        self.assertEqual(result["remainingCount"], 0)
+        self.assertFalse(rollouts[SECOND_ID].exists())
+        self.assertEqual(rollouts[ROOT_ID].read_bytes(), before_app)
+        self.assertNotIn(SECOND_ID, index.read_text(encoding="utf-8"))
+        with closing(sqlite3.connect(state)) as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM threads WHERE id=?", (SECOND_ID,)).fetchone()[0], 0)
+        with closing(sqlite3.connect(history)) as connection:
+            self.assertEqual(connection.execute("SELECT thread_id FROM thread_items").fetchall(), [(ROOT_ID,)])
+
+    def test_forced_provider_delete_cli_only_needs_no_desktop_channel(self):
+        temporary, _root, _state, _index, rollouts, manager = self._fixture()
+        self.addCleanup(temporary.cleanup)
+        result = manager.delete_provider_history("routin", force=True)["operation"]
+        self.assertEqual(result["state"], "completed")
+        self.assertEqual(result["deletedCount"], 1)
+        self.assertFalse(rollouts[SECOND_ID].exists())
+
+    def test_forced_provider_delete_mixed_cli_keeps_only_active_threads(self):
+        temporary, _root, state, _index, rollouts, manager = self._fixture()
+        self.addCleanup(temporary.cleanup)
+        for session_id in (ROOT_ID, CHILD_ID):
+            path = rollouts[session_id]
+            path.write_text(json.dumps({"type": "session_meta", "payload": {
+                "id": session_id, "model_provider": "routin", "source": "cli",
+                "originator": "codex-tui",
+            }}) + "\n", encoding="utf-8")
+        manager.active_session_ids = lambda: (ROOT_ID,)
+        manager.current_session_ids = lambda: (CHILD_ID,)
+        result = manager.delete_provider_history("routin", force=True)["operation"]
+        self.assertEqual(result["state"], "completed")
+        self.assertEqual(result["deletedCount"], 2)
+        self.assertEqual(result["retainedCliCount"], 1)
+        self.assertTrue(rollouts[ROOT_ID].exists())
+        self.assertFalse(rollouts[CHILD_ID].exists())
+        self.assertFalse(rollouts[SECOND_ID].exists())
+        with closing(sqlite3.connect(state)) as connection:
+            self.assertEqual(connection.execute("SELECT id FROM threads").fetchall(), [(ROOT_ID,)])
+
+    def test_forced_provider_delete_rechecks_cli_activity_after_usage_snapshot(self):
+        temporary, _root, _state, _index, rollouts, manager = self._fixture()
+        self.addCleanup(temporary.cleanup)
+        active = set()
+        manager.active_session_ids = lambda: active
+        prepared, committed, discarded = [], [], []
+
+        def prepare(item):
+            prepared.append(item._session_id)
+            active.add(item._session_id)
+            return "pending-usage"
+
+        manager.usage_snapshot_prepare = prepare
+        manager.usage_snapshot_commit = committed.append
+        manager.usage_snapshot_discard = discarded.append
+        result = manager.delete_provider_history("routin", force=True)["operation"]
+        self.assertEqual(result["state"], "completed")
+        self.assertEqual(result["deletedCount"], 0)
+        self.assertEqual(result["retainedCliCount"], 1)
+        self.assertEqual(prepared, [SECOND_ID])
+        self.assertEqual(committed, [])
+        self.assertEqual(discarded, ["pending-usage"])
+        self.assertTrue(rollouts[SECOND_ID].exists())
+
+    def test_forced_provider_delete_keeps_cli_that_starts_while_desktop_stops(self):
+        temporary, _root, _state, _index, rollouts, manager = self._fixture()
+        self.addCleanup(temporary.cleanup)
+        cli = rollouts[SECOND_ID]
+        cli.write_text(cli.read_text().replace('"routin"', '"openai-custom"'), encoding="utf-8")
+        active = set()
+        manager.active_session_ids = lambda: active
+
+        def lifecycle(item):
+            self.assertNotEqual(item.client_kind, "cli")
+            active.add(SECOND_ID)
+            return {"verified": True}
+
+        result = manager.delete_provider_history(
+            "openai-custom", force=True, desktop_lifecycle=lifecycle
+        )["operation"]
+        self.assertEqual(result["state"], "completed")
+        self.assertEqual(result["deletedCount"], 2)
+        self.assertEqual(result["retainedCliCount"], 1)
+        self.assertTrue(cli.exists())
+
+    def test_forced_provider_delete_preserves_new_active_cli_in_final_inventory(self):
+        temporary, root, _state, _index, rollouts, manager = self._fixture()
+        self.addCleanup(temporary.cleanup)
+        active = set()
+        manager.active_session_ids = lambda: active
+        new_id = "10000000-0000-4000-8000-000000000004"
+        path = root / "sessions" / f"rollout-{new_id}.jsonl"
+
+        def lifecycle(_item):
+            path.write_text(json.dumps({"type": "session_meta", "payload": {
+                "id": new_id, "model_provider": "openai-custom", "source": "cli",
+            }}) + "\n", encoding="utf-8")
+            active.add(new_id)
+            return {"verified": True}
+
+        result = manager.delete_provider_history(
+            "openai-custom", force=True, desktop_lifecycle=lifecycle
+        )["operation"]
+        self.assertEqual(result["state"], "completed")
+        self.assertEqual(result["deletedCount"], 2)
+        self.assertEqual(result["retainedCliCount"], 1)
+        self.assertEqual(result["remainingCount"], 1)
+        self.assertTrue(path.exists())
+        self.assertTrue(rollouts[SECOND_ID].exists())
 
     def test_cold_search_refreshes_after_resident_load_without_reopening(self):
         from codex_usage_hud.core.session_search import SessionSearchIndex
@@ -901,6 +1040,92 @@ class SessionCleanupManagerTests(unittest.TestCase):
         )
         self.assertEqual(result["operation"]["state"], "completed")
         self.assertFalse(rollouts[ROOT_ID].exists())
+
+    def test_forced_provider_delete_accepts_recorder_uuid_suffix(self) -> None:
+        for metadata_id, missing in ((ROOT_ID, False), (None, False), (None, True)):
+            with self.subTest(metadata_id=metadata_id, missing=missing):
+                temporary, root, state, _index, rollouts, manager = self._fixture()
+                self.addCleanup(temporary.cleanup)
+                path = root / "sessions" / f"rollout-2026-10-13T10-07-56-{ROOT_ID}_{SECOND_ID}.jsonl"
+                rollouts[ROOT_ID].rename(path)
+                metadata = {
+                    "model_provider": "openai-custom",
+                    "source": "vscode",
+                    "originator": "Codex Desktop",
+                }
+                if metadata_id:
+                    metadata["id"] = metadata_id
+                path.write_text(
+                    json.dumps({"type": "session_meta", "payload": metadata}) + "\n",
+                    encoding="utf-8",
+                )
+                if missing:
+                    path.unlink()
+                with closing(sqlite3.connect(state)) as connection, connection:
+                    connection.execute(
+                        "ALTER TABLE threads ADD COLUMN model_provider TEXT DEFAULT ''"
+                    )
+                    connection.execute(
+                        "UPDATE threads SET rollout_path=?, model_provider='openai-custom' WHERE id=?",
+                        (str(path), ROOT_ID),
+                    )
+                lifecycle = MagicMock(return_value={"verified": True})
+                result = manager.delete_provider_history(
+                    "openai-custom", force=True, desktop_lifecycle=lifecycle
+                )
+                self.assertEqual(result["operation"]["state"], "completed")
+                self.assertEqual(result["operation"]["deletedCount"], 2)
+                self.assertEqual(
+                    {call.args[0]._session_id for call in lifecycle.call_args_list},
+                    {ROOT_ID, CHILD_ID},
+                )
+                self.assertFalse(path.exists())
+                # The recorder suffix can equal another provider's real thread ID.
+                self.assertTrue(rollouts[SECOND_ID].exists())
+                with closing(sqlite3.connect(state)) as connection:
+                    self.assertEqual(connection.execute("SELECT id FROM threads").fetchall(), [(SECOND_ID,)])
+
+    def test_forced_provider_delete_recovers_suffixed_orphan_identity(self) -> None:
+        temporary, root, _state, _index, rollouts, manager = self._fixture()
+        self.addCleanup(temporary.cleanup)
+        orphan_id = "10000000-0000-4000-8000-000000000004"
+        path = root / "archived_sessions" / f"rollout-{orphan_id}_{SECOND_ID}.jsonl"
+        path.write_text(json.dumps({"type": "session_meta", "payload": {
+            "id": orphan_id, "model_provider": "openai-custom", "source": "vscode",
+        }}) + "\n", encoding="utf-8")
+        lifecycle = MagicMock(return_value={"verified": True})
+        result = manager.delete_provider_history(
+            "openai-custom", force=True, desktop_lifecycle=lifecycle
+        )
+        self.assertEqual(result["operation"]["state"], "completed")
+        self.assertEqual(result["operation"]["deletedCount"], 3)
+        self.assertIn(orphan_id, {call.args[0]._session_id for call in lifecycle.call_args_list})
+        self.assertFalse(path.exists())
+        self.assertTrue(rollouts[SECOND_ID].exists())
+
+    def test_forced_provider_delete_rejects_real_file_identity_conflicts(self) -> None:
+        for filename_id, metadata_id in (
+            (SECOND_ID, SECOND_ID), (ROOT_ID, SECOND_ID), (SECOND_ID, ROOT_ID),
+        ):
+            with self.subTest(filename_id=filename_id, metadata_id=metadata_id):
+                temporary, root, state, index, rollouts, manager = self._fixture()
+                self.addCleanup(temporary.cleanup)
+                path = root / "sessions" / f"rollout-{filename_id}_{ROOT_ID}.jsonl"
+                rollouts[ROOT_ID].rename(path)
+                path.write_text(json.dumps({"type": "session_meta", "payload": {
+                    "id": metadata_id, "model_provider": "openai-custom",
+                }}) + "\n", encoding="utf-8")
+                with closing(sqlite3.connect(state)) as connection, connection:
+                    connection.execute("UPDATE threads SET rollout_path=? WHERE id=?", (str(path), ROOT_ID))
+                before = path.read_bytes(), index.read_bytes()
+                lifecycle = MagicMock(return_value={"verified": True})
+                with self.assertRaisesRegex(SessionCleanupError, "身份冲突"):
+                    manager.delete_provider_history(
+                        "openai-custom", force=True, desktop_lifecycle=lifecycle
+                    )
+                lifecycle.assert_not_called()
+                self.assertEqual((path.read_bytes(), index.read_bytes()), before)
+                self.assertTrue(rollouts[SECOND_ID].exists())
 
     def test_forced_provider_delete_rejects_legacy_copy_owned_by_other_provider(self) -> None:
         temporary, root, _state, _index, rollouts, manager = self._fixture()
