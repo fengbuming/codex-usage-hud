@@ -3594,7 +3594,7 @@ _TEXT_PREFIX = r"""
         layer.innerHTML = `
           <div class="codex-usage-hud-settings-confirm-card codex-usage-hud-provider-delete-card" data-tone="danger" role="alertdialog" aria-modal="true" aria-label="删除供应商">
             <div class="codex-usage-hud-settings-confirm-title">删除供应商：${escapeHtml(providerDisplayName(settings, normalizedProvider))}？</div>
-            <div class="codex-usage-hud-settings-confirm-body">默认会删除 config.toml 中该供应商的相关配置，引用它的 Provider profile，以及响应的 API key 用户环境变量。下面两项为可选删除内容，默认不勾选。</div>
+            <div class="codex-usage-hud-settings-confirm-body">默认会删除 config.toml 中该供应商的相关配置，引用它的 Provider profile，以及响应的 API key 用户环境变量。下面两项为可选删除内容，默认不勾选。会话清理失败时保留残留记录，不影响删除供应商。</div>
             <div class="codex-usage-hud-provider-delete-options">
               <label><input type="checkbox" data-provider-delete-model-prices="true"><span>同时删除模型单价配置</span></label>
               <label><input type="checkbox" data-provider-delete-session-history="true"><span>删除相关会话（包括当前、运行中和已归档的 App 会话；保留正在活动的 CLI 会话）</span></label>
@@ -5659,7 +5659,7 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
               const message = String(
                 providerResult?.message || `供应商 ${providerDisplayName(hudSettingsFromPayload(), expectedProvider)} 已删除。`,
               );
-              setSettingsStatus(message, "");
+              setSettingsStatus(message, String(cleanupOperation.state || "") === "partial" ? "warning" : "");
               providerDeleteTerminalHandled = true;
             }
             clearProviderDeleteWorkflow();

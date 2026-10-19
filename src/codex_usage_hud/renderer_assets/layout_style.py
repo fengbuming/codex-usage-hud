@@ -3497,7 +3497,8 @@ TEXT = r"""
             margin: 0;
             accent-color: var(--codex-usage-hud-accent, #f3d27a);
           }
-          #${rootId} .codex-usage-hud-settings-status[data-kind="error"] {
+          #${rootId} .codex-usage-hud-settings-status[data-kind="error"],
+          #${rootId} .codex-usage-hud-settings-status[data-kind="warning"] {
             color: var(--codex-usage-hud-warning, #ffb86b);
           }
           #${rootId} .codex-usage-hud-settings-dialog[data-active-tab="storage"] {

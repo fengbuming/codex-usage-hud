@@ -2374,7 +2374,7 @@ def _handle_renderer_settings_command(
         return send_cli_chat_probe(provider, model, message)
 
     def delete_provider(command: Mapping[str, object]) -> Mapping[str, object]:
-        # 勾选历史删除时，后台保留活动 CLI、清理其余会话，成功后再移除配置。
+        # 可选会话清理失败不影响配置删除；活动 CLI 和无法清理的历史保留。
         if bool(command.get("deleteSessionHistory")):
             provider = normalize_provider(command.get("provider") or command.get("providerId"))
             if not provider:
@@ -2383,14 +2383,23 @@ def _handle_renderer_settings_command(
                 raise ValueError("默认 Codex App Provider 不支持删除供应商配置。")
             worker = getattr(context, "session_cleanup_worker", None)
             enqueue = getattr(worker, "enqueue", None)
-            if not callable(enqueue):
+
+            def delete_without_history(reason: str) -> Mapping[str, object]:
+                result = delete_provider_for_context(context, command)
+                message = str(result.get("message") or f"供应商 {provider} 已删除。")
                 return {
+                    **result,
                     **_status(
-                        "会话清理未能启动，供应商配置已保留。",
-                        kind="error",
+                        message.rstrip("。") + "；会话清理未能启动，残留记录已保留，可在会话管理中重试。",
+                        kind="warning",
                     ),
+                    "providerRemoved": True,
+                    "historyCleanupError": reason,
                     "providerDeleteHistoryEnqueueFailed": True,
                 }
+
+            if not callable(enqueue):
+                return delete_without_history("会话清理服务不可用。")
             provider_delete_command = dict(command)
             provider_delete_command["action"] = "providerDelete"
             try:
@@ -2399,13 +2408,7 @@ def _handle_renderer_settings_command(
                 error_detail = _exc_detail_log(
                     exc, tag="provider_delete_history_enqueue_failed"
                 )
-                return {
-                    **_status(
-                        f"会话清理未能启动，供应商配置已保留：{error_detail}",
-                        kind="error",
-                    ),
-                    "providerDeleteHistoryEnqueueFailed": True,
-                }
+                return delete_without_history(error_detail)
             request_id = str(
                 accepted.get("requestId")
                 if isinstance(accepted, Mapping)
@@ -2413,7 +2416,7 @@ def _handle_renderer_settings_command(
             )
             return {
                 **_status(
-                    "已提交后台清理；保留正在活动的 CLI 会话，其余清理完成后移除供应商配置。"
+                    "已提交后台删除；保留正在活动的 CLI 会话，无法清理的历史不影响删除供应商配置。"
                 ),
                 "providerId": provider,
                 "providerDeleteRequestId": request_id,

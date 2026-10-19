@@ -698,7 +698,7 @@ class SessionCleanupWorker:
                         request_id=request_id,
                     )
                 elif action == "providerDelete":
-                    # 活动 CLI 按约定保留；其余清理及校验成功后删配置，失败时保留配置供重试。
+                    # 供应商删除与可选会话清理解耦；清理失败只保留残留会话，不恢复供应商。
                     provider_id = (
                         str(command.get("provider") or command.get("providerId") or "")
                         .strip()
@@ -714,13 +714,28 @@ class SessionCleanupWorker:
                             "默认 Codex App Provider 不支持删除供应商配置。"
                         )
                     history_snapshot: Mapping[str, object] | None = None
+                    history_error = ""
                     if bool(command.get("deleteSessionHistory")):
-                        history_snapshot = self.manager.delete_provider_history(
-                            provider_id,
-                            request_id=request_id,
-                            force=True,
-                            desktop_lifecycle=self._force_delete_provider_session,
-                        )
+                        try:
+                            history_snapshot = self.manager.delete_provider_history(
+                                provider_id,
+                                request_id=request_id,
+                                force=True,
+                                desktop_lifecycle=self._force_delete_provider_session,
+                            )
+                        except Exception as exc:
+                            _LOGGER.exception("provider_history_cleanup_incomplete")
+                            history_error = str(exc) or type(exc).__name__
+                            try:
+                                previous = self.manager.snapshot(include_sessions=False)
+                            except Exception:
+                                previous = {}
+                            previous_operation = previous.get("operation", {})
+                            if isinstance(previous_operation, Mapping) and (
+                                str(previous_operation.get("requestId") or "") == request_id
+                                and previous_operation.get("action") == "providerHistoryDelete"
+                            ):
+                                history_snapshot = previous
                     history_operation = (
                         history_snapshot.get("operation")
                         if isinstance(history_snapshot, Mapping)
@@ -741,13 +756,24 @@ class SessionCleanupWorker:
                         if isinstance(history_operation, Mapping)
                         else 0
                     )
+                    history_failed_count = int(
+                        history_operation.get("failedCount") or 0
+                        if isinstance(history_operation, Mapping)
+                        else 0
+                    )
+                    history_remaining_count = int(
+                        history_operation.get("remainingCount") or 0
+                        if isinstance(history_operation, Mapping)
+                        else 0
+                    )
                     if bool(command.get("deleteSessionHistory")) and (
                         not isinstance(history_operation, Mapping)
                         or history_operation.get("state") != "completed"
                     ):
-                        raise SessionCleanupError(
-                            f"会话清理未完成（已删除 {history_deleted} 条），供应商配置已保留："
-                            f"{history_operation.get('error') if isinstance(history_operation, Mapping) else '结果不可用'}"
+                        history_error = history_error or str(
+                            history_operation.get("error") or "会话清理结果不可用。"
+                            if isinstance(history_operation, Mapping)
+                            else "会话清理结果不可用。"
                         )
                     provider_result = delete_provider_for_context(self._context, command)
                     if bool(command.get("deleteSessionHistory")):
@@ -755,6 +781,8 @@ class SessionCleanupWorker:
                         message = message.rstrip("。") + f"；已删除 {history_deleted} 条会话记录"
                         if retained_cli_count:
                             message += f"，保留 {retained_cli_count} 条正在活动的 CLI 会话"
+                        if history_error:
+                            message += "；部分会话清理未完成，残留记录已保留，可在会话管理中重试"
                         provider_result = {
                             **provider_result,
                             "message": message + "。",
@@ -762,18 +790,33 @@ class SessionCleanupWorker:
                     errors = getattr(self._context, "runtime_errors", None)
                     if errors is not None:
                         errors.resolve(source="session_cleanup", code=f"provider_delete_failed.{provider_id}")
+                        history_error_code = f"provider_history_cleanup_incomplete.{provider_id}"
+                        if history_error:
+                            errors.record(
+                                source="session_cleanup",
+                                code=history_error_code,
+                                severity="warning",
+                                message=f"供应商 {provider_id} 已删除，部分会话清理未完成：{history_error}"[:1200],
+                                context={"requestId": request_id, "provider": provider_id},
+                            )
+                        else:
+                            errors.resolve(source="session_cleanup", code=history_error_code)
                     snapshot = self.manager.mark_operation(
                         request_id=request_id,
                         action=action,
-                        state="completed",
+                        state="partial" if history_error else "completed",
                         progress=100,
                         provider=provider_id,
                         providerResult=provider_result,
+                        providerRemoved=True,
+                        historyCleanupError=history_error,
+                        historyFailedCount=history_failed_count,
+                        remainingCount=history_remaining_count,
                         historyDeletedCount=history_deleted,
                         retainedCliCount=retained_cli_count,
                         deletedCount=history_deleted,
                         actualBytes=history_actual_bytes,
-                        failedCount=0,
+                        failedCount=history_failed_count,
                     )
                     refresh_after_delete = history_deleted > 0
                 elif action == "sessionTransfer":

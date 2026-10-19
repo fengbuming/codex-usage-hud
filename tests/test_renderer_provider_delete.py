@@ -182,6 +182,36 @@ for (const failure of ['rejected', 'transport', 'status', 'worker', 'closed']) {
   assert.equal(c.providerDeleteUiState.has('target'), false);
 }
 console.log('immediate removal, stale payloads, rollback and request correlation passed');
+for (const closed of [false, true]) {
+  const {c, payload} = fixture();
+  const messages = [];
+  c.setSettingsStatus = (message, kind) => messages.push({message, kind});
+  c.confirmProviderDeleteDialog();
+  if (closed) c.settingsProviderDraft = null;
+  const partial = {sessionCleanup: {operation: {action: 'providerDelete', provider: 'target',
+    requestId: 'req-1', state: 'partial', providerRemoved: true,
+    historyCleanupError: 'forked history still references it',
+    providerResult: {message: '供应商已删除；部分会话清理未完成，残留记录已保留。'}}}};
+  apply(c, partial);
+  assert.equal(c.providerDeleteUiState.get('target').pending, false);
+  assert.deepEqual(names(c, payload), ['app', 'other'], 'cleanup failures cannot restore provider');
+  assert.equal(c.pricingWorkflowState.providerDeleteRequestId, '');
+  assert.equal(messages.at(-1).kind, 'warning');
+  assert.match(messages.at(-1).message, /供应商已删除/);
+  if (!closed) assert.equal(c.settingsProviderDraft.providers.target, undefined);
+  apply(c, partial);
+  assert.deepEqual(names(c, payload), ['app', 'other'], 'duplicate partial results stay removed');
+}
+{
+  const {c, payload} = fixture();
+  c.confirmProviderDeleteDialog();
+  apply(c, {}, {action: 'deleteProvider', providerId: 'target', requestId: 'req-1',
+    kind: 'warning', providerRemoved: true, message: '供应商已删除；会话清理未能启动。'});
+  assert.equal(c.providerDeleteUiState.get('target').pending, false);
+  assert.deepEqual(names(c, payload), ['app', 'other']);
+  assert(!c.settingsProviderDraft.providers.target);
+  assert.equal(c.pricingWorkflowState.providerDeleteRequestId, '');
+}
 '''
     result = subprocess.run(
         ["node", "-e", probe], input=json.dumps(source),

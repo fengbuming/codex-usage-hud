@@ -264,7 +264,7 @@ def test_session_cleanup_worker_deletes_provider_history_before_config(monkeypat
         remainingCount=retained_cli,
         retainedCliCount=retained_cli,
     )
-    # 历史成功之后才能删除配置，避免留下无法续跑的历史。
+    # 先尝试历史清理，再删除供应商配置；活动 CLI 作为预期保留。
     context = SimpleNamespace(
         session_cleanup_payload={}, runtime_events=RuntimeEventBus()
     )
@@ -437,21 +437,38 @@ def test_provider_delete_returns_within_one_second_while_cleanup_runs_in_backgro
         assert worker.close()
 
 
-def test_provider_delete_preserves_config_when_history_remains(monkeypatch) -> None:
+@pytest.mark.parametrize("history_result", ["failed", "exception", "stale-exception", "snapshot-error", "invalid"])
+def test_provider_delete_completes_when_history_cleanup_is_incomplete(monkeypatch, history_result) -> None:
     from codex_usage_hud.core.runtime_errors import RuntimeErrorRegistry
 
     manager = MagicMock()
-    manager.mark_operation.side_effect = lambda **values: _operation(
-        str(values["request_id"]), str(values["action"]), str(values["state"])
-    )
-    manager.delete_provider_history.return_value = _operation(
+    def mark_operation(**values):
+        request_id = str(values.pop("request_id"))
+        action = str(values.pop("action"))
+        state = str(values.pop("state"))
+        return _operation(request_id, action, state, **values)
+
+    manager.mark_operation.side_effect = mark_operation
+    history = _operation(
         "failed-delete",
         "providerHistoryDelete",
         "failed",
-        remainingCount=1,
-        error="thread-still-loaded",
+        deletedCount=4, failedCount=2, remainingCount=3, actualBytes=1234,
+        error="forked history still references it",
     )
-    delete_config = MagicMock()
+    manager.delete_provider_history.return_value = history
+    if history_result in {"exception", "stale-exception", "snapshot-error"}:
+        manager.delete_provider_history.side_effect = SessionCleanupError("forked history still references it")
+        if history_result == "stale-exception":
+            history = _operation("previous-request", "providerHistoryDelete", "failed", deletedCount=99)
+        manager.snapshot.return_value = history
+        if history_result == "snapshot-error":
+            manager.snapshot.side_effect = RuntimeError("snapshot unavailable")
+    elif history_result == "invalid":
+        manager.delete_provider_history.return_value = None
+    delete_config = MagicMock(return_value={
+        "providerId": "token-x", "status": "ok", "message": "供应商 token-x 已删除。",
+    })
     monkeypatch.setattr(
         "codex_usage_hud.session_cleanup_runtime.delete_provider_for_context",
         delete_config,
@@ -475,12 +492,112 @@ def test_provider_delete_preserves_config_when_history_remains(monkeypatch) -> N
         deadline = time.monotonic() + 2
         while (
             context.session_cleanup_payload.get("operation", {}).get("state")
-            != "failed"
+            != "partial"
         ):
             assert time.monotonic() < deadline
             time.sleep(0.01)
-        delete_config.assert_not_called()
-        assert context.runtime_errors.to_payload()
+        delete_config.assert_called_once()
+        operation = context.session_cleanup_payload["operation"]
+        assert operation["providerRemoved"] is True
+        assert operation["historyCleanupError"]
+        expected_deleted = 4 if history_result in {"failed", "exception"} else 0
+        assert operation["deletedCount"] == expected_deleted
+        assert operation["actualBytes"] == (1234 if expected_deleted else 0)
+        assert operation["historyFailedCount"] == (2 if expected_deleted else 0)
+        assert operation["remainingCount"] == (3 if expected_deleted else 0)
+        message = operation["providerResult"]["message"]
+        assert "供应商 token-x 已删除" in message
+        assert f"已删除 {expected_deleted} 条会话记录" in message
+        assert "部分会话清理未完成" in message
+        assert "供应商配置已保留" not in message
+        events = context.runtime_errors.to_payload()
+        assert len(events) == 1
+        assert events[0]["severity"] == "warning"
+        assert events[0]["code"] == "provider_history_cleanup_incomplete.token-x"
+        assert "供应商 token-x 已删除" in events[0]["message"]
+    finally:
+        assert worker.close()
+
+
+@pytest.mark.parametrize("history_state", ["completed", "failed"])
+def test_provider_delete_still_fails_when_config_cannot_be_deleted(monkeypatch, history_state):
+    manager = MagicMock()
+    manager.mark_operation.side_effect = lambda **values: _operation(
+        str(values["request_id"]), str(values["action"]), str(values["state"]),
+        provider=values.get("provider"), error=values.get("error"),
+    )
+    manager.delete_provider_history.return_value = _operation(
+        "config-failed", "providerHistoryDelete", history_state,
+        error="history remains" if history_state == "failed" else "",
+    )
+    delete_config = MagicMock(side_effect=OSError("config.toml access denied"))
+    monkeypatch.setattr("codex_usage_hud.session_cleanup_runtime.delete_provider_for_context", delete_config)
+    context = SimpleNamespace(app_provider="custom", session_cleanup_payload={}, runtime_events=RuntimeEventBus())
+    worker = SessionCleanupWorker(context, manager, on_deleted=lambda *_args: None)
+    try:
+        worker.enqueue({"action": "providerDelete", "provider": "token-x",
+                        "requestId": "config-failed", "deleteSessionHistory": True})
+        deadline = time.monotonic() + 2
+        while context.session_cleanup_payload.get("operation", {}).get("state") != "failed":
+            assert time.monotonic() < deadline
+            time.sleep(0.01)
+        delete_config.assert_called_once()
+        operation = context.session_cleanup_payload["operation"]
+        assert "access denied" in operation["error"]
+        assert not operation.get("providerRemoved")
+    finally:
+        assert worker.close()
+
+
+def test_provider_delete_removes_config_on_disk_despite_fork_history_reference(monkeypatch, tmp_path):
+    from codex_usage_hud import codex_provider_config
+    from codex_usage_hud.config import UserConfig, UserConfigStore
+
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        'model_provider = "custom"\n[model_providers.custom]\nname = "OpenAI"\n'
+        '[model_providers.cun]\nname = "CUN"\nbase_url = "https://example.invalid/v1"\n',
+        encoding="utf-8",
+    )
+    profile = tmp_path / "cun.config.toml"
+    profile.write_text('model_provider = "cun"\n', encoding="utf-8")
+    sessions = tmp_path / "sessions"
+    sessions.mkdir()
+    remaining = sessions / "rollout-remaining.jsonl"
+    remaining.write_text('unremovable-history\n', encoding="utf-8")
+    monkeypatch.setattr(codex_provider_config, "default_codex_config_path", lambda: config_path)
+    store = UserConfigStore(tmp_path / "settings.json")
+    store.save(UserConfig.from_dict({"provider_settings": {"cun": {}}, "quick_launch_providers": ["cun"]}))
+    manager = MagicMock()
+    manager.mark_operation.side_effect = lambda **values: _operation(
+        str(values["request_id"]), str(values["action"]), str(values["state"]),
+        providerRemoved=values.get("providerRemoved"), providerResult=values.get("providerResult"),
+    )
+    manager.delete_provider_history.return_value = _operation(
+        "delete-cun", "providerHistoryDelete", "failed", deletedCount=4,
+        remainingCount=2, failedCount=2, error="forked history still references it",
+    )
+    context = SimpleNamespace(
+        app_provider="custom", user_config=store.load(), settings_store=store,
+        sessions_root=sessions, session_cleanup_payload={}, runtime_events=RuntimeEventBus(),
+    )
+    worker = SessionCleanupWorker(context, manager, on_deleted=lambda *_args: None)
+    try:
+        worker.enqueue({"action": "providerDelete", "provider": "cun", "requestId": "delete-cun",
+                        "deleteSessionHistory": True, "deleteModelPrices": True})
+        deadline = time.monotonic() + 2
+        while context.session_cleanup_payload.get("operation", {}).get("state") != "partial":
+            assert time.monotonic() < deadline
+            time.sleep(0.01)
+        operation = context.session_cleanup_payload["operation"]
+        assert operation["providerRemoved"] is True
+        assert "[model_providers.cun]" not in config_path.read_text(encoding="utf-8")
+        assert "[model_providers.custom]" in config_path.read_text(encoding="utf-8")
+        assert not profile.exists()
+        assert "cun" not in store.load().provider_settings
+        assert "cun" not in context.provider_registry.entries
+        assert remaining.read_text(encoding="utf-8") == 'unremovable-history\n'
+        assert "供应商 cun 已删除" in operation["providerResult"]["message"]
     finally:
         assert worker.close()
 

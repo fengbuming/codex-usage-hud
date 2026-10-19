@@ -15498,7 +15498,7 @@ class DaemonLifecycleTests(unittest.TestCase):
             }
         )
 
-    def test_renderer_provider_delete_preserves_config_when_history_enqueue_fails(self) -> None:
+    def test_renderer_provider_delete_removes_config_when_history_enqueue_fails(self) -> None:
         worker = SimpleNamespace(
             enqueue=MagicMock(side_effect=RuntimeError("worker unavailable"))
         )
@@ -15526,9 +15526,11 @@ class DaemonLifecycleTests(unittest.TestCase):
                 MagicMock(),
             )
 
-        self.assertEqual(status["kind"], "error")
+        self.assertEqual(status["kind"], "warning")
         self.assertTrue(status["providerDeleteHistoryEnqueueFailed"])
-        delete_config.assert_not_called()
+        self.assertTrue(status["providerRemoved"])
+        self.assertIn("供应商 muyuan 已删除", status["message"])
+        delete_config.assert_called_once_with(context, command)
 
     def test_session_cleanup_manager_uses_local_store_without_cli_lookup(self) -> None:
         context = SimpleNamespace(
