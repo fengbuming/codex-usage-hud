@@ -33,6 +33,23 @@ TEXT = r"""
     return Math.max(0, Math.ceil(measured + 2));
   }
 
+  function progressRailContentClipped(rail) {
+    const text = rail?.querySelector?.(
+      ":scope > .codex-usage-hud-progress-track-text",
+    );
+    if (!text) return null;
+    const copies = Array.from(text.children || []);
+    if (!copies.length) return null;
+    let measured = false;
+    for (const copy of copies) {
+      const width = copy.clientWidth || copy.getBoundingClientRect?.().width || 0;
+      if (width <= 0) continue;
+      measured = true;
+      if ((copy.scrollWidth || 0) > width + 0.5) return true;
+    }
+    return measured ? false : null;
+  }
+
   function progressBadgeCandidates(rail) {
     const full = String(rail?.dataset?.overflowBadge || "").trim();
     const compact = String(rail?.dataset?.overflowBadgeCompact || "").trim();
@@ -161,10 +178,15 @@ TEXT = r"""
     const remainingAfterSession = Math.max(0, available - widths[0] - (gap * Math.max(0, rails.length - 1)));
     const tailShare = remainingAfterSession / Math.max(1, rails.length - 1);
     const required = widths.reduce((sum, width) => sum + width, 0) + (gap * Math.max(0, rails.length - 1));
+    const renderedClipped = rails.map(progressRailContentClipped);
+    const renderedClippedKnown = renderedClipped.every((value) => value !== null);
+    const clipped = renderedClippedKnown
+      ? renderedClipped.some(Boolean)
+      : required > available + 1;
     return {
       rails, widths, available, required,
-      clipped: required > available + 1,
-      scrolling: rails.length > 1 && required > available + 1 && !(tailShare > collapsedTailPeekWidth),
+      clipped,
+      scrolling: rails.length > 1 && clipped && !(tailShare > collapsedTailPeekWidth),
     };
   }
 

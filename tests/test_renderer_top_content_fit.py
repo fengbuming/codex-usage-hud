@@ -231,6 +231,36 @@ assert.equal(strip.style.gridTemplateColumns, '330px minmax(170px, 1fr) minmax(1
 ''')
 
 
+def test_rendered_complete_labels_do_not_start_marquee_from_conservative_probe() -> None:
+    run_behavior(r'''
+const copy = width => ({
+  clientWidth: width,
+  scrollWidth: width,
+  getBoundingClientRect: () => ({width}),
+});
+railWidths = [260, 280, 280];
+items = railWidths.map(width => ({
+  style: style(),
+  querySelector: selector => selector.includes('size-probe')
+    ? {scrollWidth: width - 2, getBoundingClientRect: () => ({width: width - 2})}
+    : {children: [copy(width - 40), copy(30)]},
+}));
+available = 350;
+const layout = budgetDomain.measureCollapsedProgressStrip(strip);
+assert.equal(layout.required > layout.available, true);
+assert.equal(layout.clipped, false);
+assert.equal(layout.scrolling, false);
+budgetDomain.refreshCollapsedProgressStrip(strip);
+assert.equal(strip.dataset.overflow, undefined);
+items[1].querySelector = selector => selector.includes('size-probe')
+  ? {scrollWidth: 278, getBoundingClientRect: () => ({width: 278})}
+  : {children: [{clientWidth: 80, scrollWidth: 120, getBoundingClientRect: () => ({width: 80})}, copy(30)]};
+const clipped = budgetDomain.measureCollapsedProgressStrip(strip);
+assert.equal(clipped.clipped, true);
+assert.equal(clipped.scrolling, true);
+''')
+
+
 def test_title_exhaustion_keeps_the_native_right_controls_clear() -> None:
     source = ANCHORS[ANCHORS.index("      function topHeaderSlot"):ANCHORS.index("      function topAnchor")]
     script = r'''
