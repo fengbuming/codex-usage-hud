@@ -227,7 +227,19 @@ global.getComputedStyle = () => ({paddingLeft: '10px', paddingRight: '10px', col
 assert.equal(budgetDomain.measureCollapsedProgressStrip(strip).widths[0], 330);
 available = 1000;
 budgetDomain.refreshCollapsedProgressStrip(strip);
-assert.equal(strip.style.gridTemplateColumns, '330px minmax(170px, 1fr) minmax(170px, 1fr)');
+assert.equal(strip.style.gridTemplateColumns, '330px minmax(0, 1fr) minmax(0, 1fr)');
+''')
+
+
+def test_session_rail_stays_intrinsic_and_tail_rails_split_space_evenly() -> None:
+    run_behavior(r'''
+railWidths = [180, 240, 320]; items = rails(); available = 760;
+budgetDomain.refreshCollapsedProgressStrip(strip);
+assert.equal(items[0].style.width, '180px');
+assert.equal(items[1].style.width, undefined);
+assert.equal(items[2].style.width, undefined);
+assert.equal(strip.style.gridTemplateColumns, '180px minmax(0, 1fr) minmax(0, 1fr)');
+assert.equal(budgetDomain.measureCollapsedProgressStrip(strip).scrolling, false);
 ''')
 
 

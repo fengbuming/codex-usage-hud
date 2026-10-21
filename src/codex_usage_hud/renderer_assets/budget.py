@@ -207,9 +207,9 @@ TEXT = r"""
       delete node.dataset.layoutSignature;
       if (rails.length > 1) {
         rails[0].style.width = `${widths[0]}px`;
-        // Unequal labels need unequal minima, even when the total fits.
+        // Keep the session total fixed and split all remaining space evenly.
         node.style.gridTemplateColumns = widths.map((width, index) => (
-          index === 0 ? `${width}px` : `minmax(${width}px, 1fr)`
+          index === 0 ? `${width}px` : "minmax(0, 1fr)"
         )).join(" ");
       }
       return;
