@@ -251,7 +251,7 @@ def production_runtime_services() -> RuntimeServices:
     )
 
 
-def run_renderer_hud_session(args: argparse.Namespace, *, lock_already_held: bool = False, daemon_manager: CodexDaemonManager | None = None, launched_codex: bool = False, observed_codex_launch: bool = False, loading_feedback: object | None = None, overlay_handoff: dict[str, object] | None = None, seamless_recovery: bool = False, restart_codex: object | None = None, shutdown_coordinator: object | None = None, services: RuntimeServices | None = None, ports: RendererSessionPorts) -> int:
+def run_renderer_hud_session(args: argparse.Namespace, *, lock_already_held: bool = False, daemon_manager: CodexDaemonManager | None = None, launched_codex: bool = False, observed_codex_launch: bool = False, update_restarted: bool = False, loading_feedback: object | None = None, overlay_handoff: dict[str, object] | None = None, seamless_recovery: bool = False, restart_codex: object | None = None, shutdown_coordinator: object | None = None, services: RuntimeServices | None = None, ports: RendererSessionPorts) -> int:
     """Run the in-renderer HUD over CDP, or report that it is unavailable."""
     if services is None:
         services = ports._production_runtime_services()
@@ -267,13 +267,20 @@ def run_renderer_hud_session(args: argparse.Namespace, *, lock_already_held: boo
         with lock_context:
             local_loading = loading_feedback
             try:
-                startup_plan = ports._renderer_startup_plan(launched_codex=launched_codex, observed_codex_launch=observed_codex_launch)
+                startup_plan = ports._renderer_startup_plan(
+                    launched_codex=launched_codex,
+                    observed_codex_launch=observed_codex_launch,
+                    **({"update_restarted": True} if update_restarted else {}),
+                )
             except (OSError, RuntimeError) as exc:
                 if local_loading is not None:
                     local_loading.close()
                 ports._append_renderer_diagnostic('renderer_cdp_launch_failed', reason=str(exc), source='startup-classification')
                 return ports.RENDERER_HUD_UNAVAILABLE
-            if startup_plan.scenario == ports.RENDERER_STARTUP_RELAUNCH_OBSERVED:
+            if startup_plan.scenario == ports.RENDERER_STARTUP_RELAUNCH_OBSERVED or (
+                startup_plan.scenario == ports.RENDERER_STARTUP_UPDATE_RESTARTED
+                and startup_plan.port is None
+            ):
                 if local_loading is not None:
                     local_loading.close()
                 ports._append_renderer_diagnostic('renderer_observed_plain_launch_takeover', reason=startup_plan.reason)
@@ -331,7 +338,7 @@ def run_renderer_hud_session(args: argparse.Namespace, *, lock_already_held: boo
                 finally:
                     release_overlay_for_handoff()
                     resources.close()
-            cold_start_attach = bool(launched_codex or startup_plan.scenario == ports.RENDERER_STARTUP_ATTACH_OBSERVED)
+            cold_start_attach = bool(launched_codex or startup_plan.scenario in {ports.RENDERER_STARTUP_ATTACH_OBSERVED, ports.RENDERER_STARTUP_UPDATE_RESTARTED})
             renderer_cdp_timeout = ports.RENDERER_RESTART_CDP_TIMEOUT_SECONDS if cold_start_attach else ports.DAEMON_RENDERER_CDP_TIMEOUT_SECONDS if daemon_manager is not None and (not codex_was_running) else ports.RENDERER_CDP_TIMEOUT_SECONDS
             assembly = renderer_runtime_assembly.assemble_renderer_session(
                 base,

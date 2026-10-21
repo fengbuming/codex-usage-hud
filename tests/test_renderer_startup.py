@@ -76,10 +76,12 @@ def test_observed_plain_launch_requests_one_bounded_relaunch() -> None:
         state_path=lambda: Path("unused"),
     )
 
-    plan = startup.startup_plan(observed_codex_launch=True, ports=ports)
+    plan = startup.startup_plan(
+        observed_codex_launch=True, update_restarted=True, ports=ports
+    )
 
-    assert plan.scenario == startup.RENDERER_STARTUP_RELAUNCH_OBSERVED
-    assert plan.reason == "observed-codex-has-no-declared-cdp-port"
+    assert plan.scenario == startup.RENDERER_STARTUP_UPDATE_RESTARTED
+    assert plan.reason == "observed-codex-update-restarted"
 
 
 def test_observed_conflicting_declared_ports_fail_closed() -> None:
@@ -98,6 +100,29 @@ def test_observed_conflicting_declared_ports_fail_closed() -> None:
 
     assert plan.scenario == startup.RENDERER_STARTUP_RESTART_REQUIRED
     assert "conflicting" in plan.reason
+
+
+def test_update_restart_with_declared_cdp_port_attaches_directly() -> None:
+    ports = startup.RendererStartupPorts(
+        audited_desktop_processes=lambda: [
+            _process(22, "ChatGPT.exe --remote-debugging-port=60123"),
+        ],
+        desktop_running=lambda: True,
+        diagnostic=lambda *_args, **_kwargs: None,
+    )
+
+    plan = startup.startup_plan(
+        observed_codex_launch=True,
+        update_restarted=True,
+        ports=ports,
+    )
+
+    assert plan == startup.RendererStartupPlan(
+        startup.RENDERER_STARTUP_UPDATE_RESTARTED,
+        port=60123,
+        port_source="observed-desktop-process",
+        reason="observed-codex-update-restarted",
+    )
 
 
 def test_running_desktop_attaches_only_to_verified_candidate() -> None:

@@ -72,6 +72,7 @@ RENDERER_STARTUP_ATTACH = "attach"
 RENDERER_STARTUP_RESTART_REQUIRED = "restart-required"
 RENDERER_STARTUP_ATTACH_OBSERVED = "attach-observed"
 RENDERER_STARTUP_RELAUNCH_OBSERVED = "relaunch-observed"
+RENDERER_STARTUP_UPDATE_RESTARTED = "update-restarted"
 _REMOTE_DEBUGGING_PORT_PATTERN = re.compile(r"(?:^|\s)--remote-debugging-port(?:=|\s+)(\d{1,5})(?=\s|$)")
 
 
@@ -212,6 +213,7 @@ def run_renderer_hud_session(
     daemon_manager: CodexDaemonManager | None = None,
     launched_codex: bool = False,
     observed_codex_launch: bool = False,
+    update_restarted: bool = False,
     loading_feedback: object | None = None,
     overlay_handoff: dict[str, object] | None = None,
     seamless_recovery: bool = False,
@@ -225,6 +227,7 @@ def run_renderer_hud_session(
         daemon_manager=daemon_manager,
         launched_codex=launched_codex,
         observed_codex_launch=observed_codex_launch,
+        update_restarted=update_restarted,
         loading_feedback=loading_feedback,
         overlay_handoff=overlay_handoff,
         seamless_recovery=seamless_recovery,
@@ -303,9 +306,10 @@ def _startup_ports() -> object:
     )
 
 
-def _renderer_startup_plan(*, launched_codex: bool = False, observed_codex_launch: bool = False) -> object:
+def _renderer_startup_plan(*, launched_codex: bool = False, observed_codex_launch: bool = False, update_restarted: bool = False) -> object:
     return _renderer_startup_owner.startup_plan(
         launched_codex=launched_codex, observed_codex_launch=observed_codex_launch,
+        update_restarted=update_restarted,
         ports=_startup_ports(), select_initial=_select_initial_renderer_cdp_port,
         select_launch=_select_launch_renderer_cdp_port,
         find_existing=_find_existing_renderer_cdp_candidate,

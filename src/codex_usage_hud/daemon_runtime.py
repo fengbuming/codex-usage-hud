@@ -205,6 +205,7 @@ def run_hud_session(
     loading_feedback_instance: object | None = None,
     launched_codex: bool = False,
     observed_codex_launch: bool = False,
+    update_restarted: bool = False,
     seamless_recovery: bool = False,
     overlay_handoff: dict[str, object] | None = None,
     run_renderer: Callable[..., int] | None = None,
@@ -228,6 +229,7 @@ def run_hud_session(
         daemon_manager=daemon_manager,
         launched_codex=launched_codex,
         observed_codex_launch=observed_codex_launch,
+        **({"update_restarted": True} if update_restarted else {}),
         seamless_recovery=seamless_recovery,
         overlay_handoff=overlay_handoff,
         loading_feedback=loading_feedback_instance,
@@ -488,6 +490,7 @@ def run_daemon(
             startup_loading: Any | None = None
             launched_codex_for_renderer = False
             observed_codex_launch = False
+            update_restarted = False
             renderer_recovery_failures = 0
             seamless_recovery = False
             pending_codex_replacement_pid: int | None = None
@@ -570,6 +573,7 @@ def run_daemon(
                         loading_feedback=startup_loading,
                         launched_codex=launched_codex_for_renderer,
                         observed_codex_launch=observed_codex_launch,
+                        **({"update_restarted": True} if update_restarted else {}),
                         overlay_handoff=overlay_handoff,
                         seamless_recovery=seamless_recovery,
                         shutdown_coordinator=shutdown,
@@ -582,6 +586,7 @@ def run_daemon(
                         daemon_manager=manager,
                         loading_feedback=startup_loading,
                         observed_codex_launch=observed_codex_launch,
+                        **({"update_restarted": True} if update_restarted else {}),
                         overlay_handoff=overlay_handoff,
                         seamless_recovery=seamless_recovery,
                         shutdown_coordinator=shutdown,
@@ -592,10 +597,12 @@ def run_daemon(
                     primary_pid=_manager_primary_pid(manager),
                     launched_codex=launched_codex_for_renderer,
                     observed_codex_launch=observed_codex_launch,
+                    **({"update_restarted": True} if update_restarted else {}),
                 )
                 session_loading = startup_loading
                 startup_loading = None
                 observed_codex_launch = False
+                update_restarted = False
                 if shutdown.is_requested():
                     _close_overlay_handoff(overlay_handoff)
                     return 0
@@ -700,6 +707,7 @@ def run_daemon(
                     # Initial startup of an already-running Codex never emits
                     # this signal and keeps its explicit confirmation flow.
                     observed_codex_launch = True
+                    update_restarted = True
                     continue
                 if force_renderer_retry and exit_code == RENDERER_HUD_UNAVAILABLE:
                     renderer_recovery_failures += 1

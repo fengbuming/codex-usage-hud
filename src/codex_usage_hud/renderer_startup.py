@@ -38,6 +38,7 @@ RENDERER_STARTUP_RESTART_REQUIRED = "restart-required"
 RENDERER_STARTUP_ATTACH_LAUNCHED = "attach-launched"
 RENDERER_STARTUP_ATTACH_OBSERVED = "attach-observed"
 RENDERER_STARTUP_RELAUNCH_OBSERVED = "relaunch-observed"
+RENDERER_STARTUP_UPDATE_RESTARTED = "update-restarted"
 
 _REMOTE_DEBUGGING_PORT_PATTERN = re.compile(
     r"(?:^|\s)--remote-debugging-port(?:=|\s+)(\d{1,5})(?=\s|$)"
@@ -423,6 +424,7 @@ def startup_plan(
     *,
     launched_codex: bool = False,
     observed_codex_launch: bool = False,
+    update_restarted: bool = False,
     ports: RendererStartupPorts = RendererStartupPorts(),
     select_initial: Callable[[], int] = select_initial_cdp_port,
     select_launch: Callable[..., int] = select_launch_cdp_port,
@@ -436,6 +438,16 @@ def startup_plan(
         )
     elif observed_codex_launch:
         plan = observed_startup_plan(ports=ports)
+        if update_restarted and plan.scenario in {
+            RENDERER_STARTUP_ATTACH_OBSERVED,
+            RENDERER_STARTUP_RELAUNCH_OBSERVED,
+        }:
+            plan = RendererStartupPlan(
+                RENDERER_STARTUP_UPDATE_RESTARTED,
+                port=plan.port,
+                port_source=plan.port_source,
+                reason="observed-codex-update-restarted",
+            )
     elif ports.desktop_running():
         existing = (
             find_existing()
@@ -477,6 +489,7 @@ __all__ = [
     "RENDERER_STARTUP_LAUNCH",
     "RENDERER_STARTUP_RELAUNCH_OBSERVED",
     "RENDERER_STARTUP_RESTART_REQUIRED",
+    "RENDERER_STARTUP_UPDATE_RESTARTED",
     "RendererCdpPortCandidate",
     "RendererStartupPlan",
     "RendererStartupPorts",
