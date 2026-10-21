@@ -97,6 +97,26 @@ def parse_openai_models_html(body: str | bytes) -> dict[str, OfficialPrice]:
     parser = _TableParser(); parser.feed(raw)
     records: dict[str, OfficialPrice] = {}
     table_rows = parser.tables[0] if parser.tables else parser.rows
+    header = next(
+        (row for row in table_rows if any(cell.strip().casefold() == "model" for cell in row)),
+        [],
+    )
+    input_column = next(
+        (index for index, cell in enumerate(header) if cell.strip().casefold() == "input"),
+        None,
+    )
+    output_column = next(
+        (index for index, cell in enumerate(header) if cell.strip().casefold() == "output"),
+        None,
+    )
+    cached_column = next(
+        (index for index, cell in enumerate(header) if cell.strip().casefold() in {"cached", "cached input"}),
+        None,
+    )
+    write_column = next(
+        (index for index, cell in enumerate(header) if "write" in cell.strip().casefold()),
+        None,
+    )
     for row in table_rows:
         if len(row) < 3: continue
         joined = " ".join(row)
@@ -108,11 +128,27 @@ def parse_openai_models_html(body: str | bytes) -> dict[str, OfficialPrice]:
         amounts = [_money(cell) for cell in row[1:]]
         amounts = [item for item in amounts if item is not None]
         if len(amounts) < 2: continue
-        output_index = 3 if len(amounts) >= 4 else len(amounts) - 1
-        records[model] = OfficialPrice(model=model, input=amounts[0], output=amounts[output_index],
-                                       cached_input=amounts[1] if len(amounts) >= 3 else amounts[0],
-                                       cache_write=amounts[2] if len(amounts) >= 4 else Decimal("0"),
-                                       reasoning=amounts[output_index])
+        if input_column is not None and output_column is not None:
+            input_price = _money(row[input_column]) if input_column < len(row) else None
+            output_price = _money(row[output_column]) if output_column < len(row) else None
+            cached_price = _money(row[cached_column]) if cached_column is not None and cached_column < len(row) else None
+            write_price = _money(row[write_column]) if write_column is not None and write_column < len(row) else None
+            if input_price is None or output_price is None:
+                continue
+            records[model] = OfficialPrice(
+                model=model,
+                input=input_price,
+                output=output_price,
+                cached_input=cached_price if cached_price is not None else input_price,
+                cache_write=write_price if write_price is not None else Decimal("0"),
+                reasoning=output_price,
+            )
+        else:
+            output_index = 3 if len(amounts) >= 4 else len(amounts) - 1
+            records[model] = OfficialPrice(model=model, input=amounts[0], output=amounts[output_index],
+                                           cached_input=amounts[1] if len(amounts) >= 3 else amounts[0],
+                                           cache_write=amounts[2] if len(amounts) >= 4 else Decimal("0"),
+                                           reasoning=amounts[output_index])
     for index, token in enumerate(parser.text):
         model_match = _MODEL.fullmatch(token)
         if not model_match or model_match.group(0) in records:

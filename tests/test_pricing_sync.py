@@ -226,6 +226,19 @@ def test_pricing_table_uses_short_context_columns_from_first_tier():
     )
 
 
+def test_pricing_table_uses_named_columns_after_official_column_reordering():
+    html = (
+        "<table><tr><th>Model</th><th>Input</th><th>Output</th><th>Cached input</th>"
+        "<th>30m write</th><th>12h write</th></tr>"
+        "<tr><td>gpt-6.1-sol</td><td>$2.00</td><td>$10.00</td><td>$0.10</td>"
+        "<td>$2.50</td><td>$5.00</td></tr></table>"
+    )
+    price = parse_openai_models_html(html)["gpt-6.1-sol"]
+    assert (price.input, price.output, price.cached_input, price.cache_write) == (
+        2, 10, Decimal("0.10"), Decimal("2.50"),
+    )
+
+
 class _PriceLike:
     def __init__(self, values: dict[str, object]) -> None:
         self._values = dict(values)
