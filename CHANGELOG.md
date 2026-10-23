@@ -7,6 +7,29 @@ and this repository follows Semantic Versioning for release tags.
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-10-23
+
+### Added
+
+- Provider-specific Desktop model selection with multiple attached models, a preferred default, and live configuration refresh.
+- Weekly provider-specific notices for models without configured prices.
+
+### Fixed
+
+- Kept provider identity accurate after switching sessions and supported newer Codex session-management bundles.
+- Improved session search indexing and result classification, excluding hidden instructions and reasoning from body matches, and preserved the filtered navigation list after opening a session.
+- Removed confirmed provider configurations even when optional history cleanup is incomplete; retained active CLI sessions and reported cleanup failures.
+- Recognized resumed rollout filenames during provider-history cleanup and verified their session identity.
+- Improved top HUD width allocation, title-bar clearance, resize handling, and marquee activation when labels are actually clipped.
+- Automatically reattached the HUD after Codex replaced its main process during an update.
+- Read official pricing tables by column name so reordered cache-write and output columns do not corrupt prices.
+
+### Notes
+
+- Models without configured prices remain visible in token totals and are skipped in cost calculations.
+- Provider deletion may leave active CLI sessions or history that could not be cleaned up; review warnings and retry cleanup in session management.
+- macOS support remains source/pip with code-level CI coverage; real-device interaction is not certified.
+
 ## [1.4.0] - 2026-10-13
 
 ### Added
