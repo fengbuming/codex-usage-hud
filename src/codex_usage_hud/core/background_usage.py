@@ -812,7 +812,10 @@ class BackgroundUsageStore:
         feature_key = str(feature or "").strip()
         model_name = str(model or "").strip()
         requested_event_id = valid_background_event_id(event_id)
-        clauses = ["e.classification_state='background'", "e.last_seen_at>=?"]
+        clauses = [
+            "e.classification_state IN ('background', 'source_pending')",
+            "e.last_seen_at>=?",
+        ]
         params: list[object] = [range_start]
         if feature_key:
             clauses.append("e.feature_key=?")
@@ -841,6 +844,10 @@ class BackgroundUsageStore:
             aggregate = connection.execute(
                 f"""
                 SELECT COUNT(*) AS event_count,
+                       COALESCE(SUM(CASE WHEN e.classification_state='background'
+                                         THEN 1 ELSE 0 END), 0) AS background_event_count,
+                       COALESCE(SUM(CASE WHEN e.classification_state='source_pending'
+                                         THEN 1 ELSE 0 END), 0) AS source_pending_event_count,
                        COALESCE(SUM(e.request_count), 0) AS request_count,
                        COALESCE(SUM(e.total_tokens), 0) AS total_tokens,
                        COALESCE(SUM(e.estimated_cost_usd), 0) AS estimated_cost,
@@ -855,7 +862,7 @@ class BackgroundUsageStore:
                 """
                 SELECT DISTINCT feature_key, feature_label
                 FROM background_events
-                WHERE classification_state='background'
+                WHERE classification_state IN ('background', 'source_pending')
                 ORDER BY feature_label
                 """
             ).fetchall()
@@ -864,7 +871,8 @@ class BackgroundUsageStore:
                 SELECT DISTINCT r.model
                 FROM background_requests r
                 JOIN background_events e ON e.event_id=r.event_id
-                WHERE e.classification_state='background' AND r.model<>''
+                WHERE e.classification_state IN ('background', 'source_pending')
+                  AND r.model<>''
                 ORDER BY r.model
                 """
             ).fetchall()
@@ -888,7 +896,11 @@ class BackgroundUsageStore:
         if event_count > 0 and unavailable_costs >= event_count:
             estimated_cost = None
         feature_options = {
-            str(row[0]): background_feature_label(row[0], row[1])
+            str(row[0]): (
+                "来源待确认"
+                if str(row[0]) == UNKNOWN_FEATURE_KEY
+                else background_feature_label(row[0], row[1])
+            )
             for row in feature_rows
         }
         return {
@@ -896,6 +908,10 @@ class BackgroundUsageStore:
             "range": str(range_key or "today"),
             "summary": {
                 "eventCount": event_count,
+                "backgroundEventCount": int(aggregate["background_event_count"] or 0),
+                "sourcePendingEventCount": int(
+                    aggregate["source_pending_event_count"] or 0
+                ),
                 "requestCount": int(aggregate["request_count"] or 0),
                 "totalTokens": int(aggregate["total_tokens"] or 0),
                 "estimatedCostUsd": estimated_cost,
@@ -933,7 +949,8 @@ class BackgroundUsageStore:
                           FROM background_requests r
                          WHERE r.event_id=e.event_id AND r.model<>'') AS models
                 FROM background_events e
-                WHERE e.event_id=? AND e.classification_state='background'
+                WHERE e.event_id=?
+                  AND e.classification_state IN ('background', 'source_pending')
                 """,
                 (normalized,),
             ).fetchone()
@@ -986,8 +1003,10 @@ class BackgroundUsageStore:
             "threadId": str(row["thread_id"]),
             "processUuid": str(row["process_uuid"] or ""),
             "featureKey": str(row["feature_key"] or UNKNOWN_FEATURE_KEY),
-            "featureLabel": background_feature_label(
-                row["feature_key"], row["feature_label"]
+            "featureLabel": (
+                "来源待确认"
+                if str(row["classification_state"] or "") == "source_pending"
+                else background_feature_label(row["feature_key"], row["feature_label"])
             ),
             "featureEnLabel": background_feature_en_label(row["feature_key"]),
             "featurePurpose": background_feature_purpose(row["feature_key"]),
@@ -1002,6 +1021,7 @@ class BackgroundUsageStore:
             "unread": confirmed_at is None,
             "status": status,
             "appAttribution": str(row["app_attribution"] or ""),
+            "classificationState": str(row["classification_state"] or ""),
             "requestCount": int(row["request_count"] or 0),
             "totalTokens": int(row["total_tokens"] or 0),
             "estimatedCostUsd": (
@@ -1238,11 +1258,37 @@ class BackgroundUsageScanner:
                         event_id=thread_id,
                         request=request,
                     )
+                unknown_thread_ids = [
+                    str(row[0])
+                    for row in target.execute(
+                        "SELECT thread_id FROM background_events WHERE feature_key=?",
+                        (UNKNOWN_FEATURE_KEY,),
+                    )
+                ]
+                user_turn_threads: set[str] = set()
+                for start in range(0, len(unknown_thread_ids), 400):
+                    batch = unknown_thread_ids[start : start + 400]
+                    if not batch:
+                        continue
+                    placeholders = ",".join("?" for _ in batch)
+                    user_turn_threads.update(
+                        str(row[0])
+                        for row in source.execute(
+                            f"""
+                            SELECT DISTINCT thread_id FROM logs
+                            WHERE thread_id IN ({placeholders})
+                              AND target='codex_core::session::handlers'
+                              AND feedback_log_body LIKE '%operation="turn_input"%'
+                            """,
+                            batch,
+                        )
+                    )
                 content_changed |= self._repair_missing_input_splits_if_needed(target)
                 content_changed |= self._reclassify(
                     target,
                     visible=visible,
                     child_threads=child_threads,
+                    user_turn_threads=user_turn_threads,
                     related_session_candidates=related_session_candidates,
                     now_ts=now_ts,
                 )
@@ -1739,6 +1785,7 @@ class BackgroundUsageScanner:
         child_threads: set[str],
         related_session_candidates: Mapping[str, list[tuple[str, int]]],
         now_ts: int,
+        user_turn_threads: set[str] | None = None,
     ) -> bool:
         changed = False
         rows = connection.execute(
@@ -1781,6 +1828,9 @@ class BackgroundUsageScanner:
             if thread_id in visible or thread_id in child_threads:
                 next_state = "excluded"
                 next_attribution = "visible_session" if thread_id in visible else "subagent"
+            elif feature_key == UNKNOWN_FEATURE_KEY and thread_id in (user_turn_threads or set()):
+                next_state = "excluded"
+                next_attribution = "user_session_turn"
             elif int(row["request_count"] or 0) <= 0:
                 next_state = "pending"
                 next_attribution = current_attribution
@@ -1796,7 +1846,10 @@ class BackgroundUsageScanner:
                     next_attribution = "live_desktop_process"
                 else:
                     next_attribution = ""
-                if not next_attribution:
+                if feature_key == UNKNOWN_FEATURE_KEY:
+                    next_state = "source_pending"
+                    next_attribution = next_attribution or "unknown_feature_source"
+                elif not next_attribution:
                     next_state = "unattributed"
                 elif now_ts - int(row["first_seen_at"] or now_ts) < self.grace_seconds:
                     next_state = "pending"

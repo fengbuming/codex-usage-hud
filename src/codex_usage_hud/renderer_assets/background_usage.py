@@ -236,7 +236,8 @@ TEXT = r"""
           : actionState === "enabled"
           ? "启用此类任务"
           : "禁用此类任务";
-        const policyButton = policy && !disabled && (canDisable || canEnable)
+        const policyButton = detail?.classificationState !== "source_pending"
+          && policy && !disabled && (canDisable || canEnable)
           ? `<button type="button" class="codex-usage-hud-background-policy-switch" role="switch" aria-checked="${displayDisabled ? "false" : "true"}" aria-label="${escapeHtml(label)}" data-action="background-usage-policy" data-feature-key="${escapeHtml(String(detail.featureKey || "unknown"))}" data-event-id="${escapeHtml(eventId)}" title="${escapeHtml(String(policy?.message || ""))}" ${backgroundUsageState.policyPending ? "disabled" : ""}><span class="codex-usage-hud-background-policy-switch-track" aria-hidden="true"><span class="codex-usage-hud-background-policy-switch-thumb"></span></span><span class="codex-usage-hud-background-policy-switch-label">${escapeHtml(label)}</span></button>`
           : "";
         const policyMessage = backgroundUsageState.policyLoading
@@ -251,7 +252,10 @@ TEXT = r"""
         const detailTitle = detailEnLabel
           ? `${detailLabel}（${detailEnLabel}）`
           : detailLabel;
-        const detailSubText = detailPurpose
+        const sourcePending = detail?.classificationState === "source_pending";
+        const detailSubText = sourcePending
+          ? "已记录请求用量；当前日志缺少可确认具体后台功能的来源特征。"
+          : detailPurpose
           ? `由 Codex App 官方 agent 工具在后台发起的请求 · 官方作用：${detailPurpose}`
           : "由 Codex App 官方 agent 工具在后台发起的请求";
         return `
@@ -368,7 +372,7 @@ TEXT = r"""
         const sessionOptions = sessionRankingOptions
           .map(([key, label]) => `<option value="${key}" ${selected === key ? "selected" : ""}>${label}</option>`)
           .join("");
-        return `<option value="">全部后台功能</option><optgroup label="后台任务">${backgroundOptions || '<option value="" disabled>暂无后台任务功能</option>'}</optgroup><optgroup label="用户会话排行">${sessionOptions}</optgroup>`;
+        return `<option value="">全部来源与功能</option><optgroup label="后台分类">${backgroundOptions || '<option value="" disabled>暂无后台分类</option>'}</optgroup><optgroup label="用户会话排行">${sessionOptions}</optgroup>`;
       }
 
       function backgroundUsageSessionRankingPanelHtml(featureOptions, modelOptions) {
@@ -478,7 +482,7 @@ TEXT = r"""
             <div class="codex-usage-hud-background-metrics">
               <div><span>筛选费用</span><strong>${escapeHtml(backgroundUsageFormatCost(summary.estimatedCostUsd))}</strong><small>${escapeHtml(costNote)}</small></div>
               <div><span>Tokens</span><strong>${escapeHtml(humanizeTokens(summary.totalTokens || 0))}</strong><small>本机日志值</small></div>
-              <div><span>后台任务</span><strong>${Number(summary.eventCount || 0).toLocaleString()}</strong><small>${Number(summary.requestCount || 0).toLocaleString()} 次请求</small></div>
+              <div><span>后台与待确认</span><strong>${Number(summary.eventCount || 0).toLocaleString()}</strong><small>${Number(summary.backgroundEventCount || 0).toLocaleString()} 后台 · ${Number(summary.sourcePendingEventCount || 0).toLocaleString()} 待确认</small></div>
               <div title="${escapeHtml(modelSummary)}"><span>使用模型</span><strong>${escapeHtml(modelSummary)}</strong><small>${Array.isArray(summary.models) ? summary.models.length : 0} 个模型</small></div>
             </div>
             <div class="codex-usage-hud-background-toolbar">
@@ -496,7 +500,7 @@ TEXT = r"""
             ${backgroundUsageState.error ? `<div class="codex-usage-hud-background-error">${escapeHtml(backgroundUsageState.error)}</div>` : ""}
             <div class="codex-usage-hud-background-master-detail">
               <section class="codex-usage-hud-background-history">
-                <div class="codex-usage-hud-background-section-title"><span>后台任务历史</span><span>${events.length} 项</span></div>
+                <div class="codex-usage-hud-background-section-title"><span>后台用量记录</span><span>${events.length} 项</span></div>
                 <div class="codex-usage-hud-background-event-list">
                   ${events.map(backgroundUsageEventHtml).join("") || `<div class="codex-usage-hud-background-empty">${backgroundUsageState.loading ? "正在读取用量总览..." : "当前筛选没有后台任务。"}</div>`}
                 </div>

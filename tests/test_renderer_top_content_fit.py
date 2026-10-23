@@ -1,4 +1,4 @@
-"""Top HUD borrows title space only for clipped, non-scrolling content."""
+"""Top HUD geometry stays fixed while clipped content scrolls in place."""
 
 from __future__ import annotations
 
@@ -15,7 +15,8 @@ HARNESS = r'''
 const assert = require('node:assert/strict');
 function style() {
   return {
-    removeProperty(name) { delete this[name.replace(/-([a-z])/g, (_, c) => c.toUpperCase())]; },
+    removals: 0,
+    removeProperty(name) { this.removals++; delete this[name.replace(/-([a-z])/g, (_, c) => c.toUpperCase())]; },
     setProperty(name, value) { this[name] = value; },
   };
 }
@@ -65,13 +66,13 @@ def run_behavior(checks: str, *, sync: bool = False) -> None:
 
 
 @pytest.mark.parametrize(
-    ("available", "scrolling", "borrow"),
-    [(600, False, False), (514, False, False), (513, False, False),
-     (400, False, True), (255, False, True), (254, True, False), (100, True, False)],
+    ("available", "scrolling"),
+    [(600, False), (514, False), (513, False),
+     (400, False), (255, False), (254, True), (100, True)],
     ids=["short-title", "exact-fit", "one-pixel-tolerance", "clipped-middle",
          "above-marquee-boundary", "at-marquee-boundary", "narrow-marquee"],
 )
-def test_top_content_fit_preserves_full_fit_and_marquee(available: int, scrolling: bool, borrow: bool) -> None:
+def test_top_content_overflow_does_not_change_the_auto_rect(available: int, scrolling: bool) -> None:
     run_behavior(f'''
 available = {available};
 slot = {{left: 951 - available - 51, right: 951, width: available + 51}};
@@ -80,53 +81,42 @@ const layout = budgetDomain.measureCollapsedProgressStrip(strip);
 assert.equal(layout.scrolling, {str(scrolling).lower()});
 budgetDomain.refreshCollapsedProgressStrip(strip);
 assert.equal(strip.dataset.overflow === 'true', {str(scrolling).lower()});
-const fitted = fitTopContentRect(panel, anchor);
-assert.equal(fitted !== anchor, {str(borrow).lower()});
-if (fitted !== anchor) {{
-  assert.equal(fitted.left + fitted.width, anchor.area.right);
-  assert.equal(fitted.width, 565);
-  assert.equal(fitted.top, anchor.top);
-}}
+assert.equal(anchor.width, slot.width);
 ''')
 
 
-def test_top_content_fit_restores_on_updates_and_respects_manual_and_expanded() -> None:
+def test_top_content_refresh_updates_scroll_without_scheduling_geometry() -> None:
     run_behavior(r'''
-refreshTopContentFit(); assert.equal(scheduled, 1);
-manual = true; refreshTopContentFit(); assert.equal(scheduled, 1);
+refreshTopContentFit(); assert.equal(scheduled, 0);
+assert.equal(panel.dataset.topContentScroll, 'true');
+manual = true; refreshTopContentFit(); assert.equal(scheduled, 0);
 assert.equal(strip.dataset.overflow, 'true');
 manual = false; panel.dataset.expanded = 'true';
-const anchor = topAnchor(36);
-assert.equal(fitTopContentRect(panel, anchor), anchor);
-refreshTopContentFit(); assert.equal(scheduled, 1);
+refreshTopContentFit(); assert.equal(scheduled, 0);
 panel.dataset.expanded = 'false'; available = 600;
-refreshTopContentFit(); assert.equal(scheduled, 1);
-panel.dataset.topContentFit = 'true';
-refreshTopContentFit(); assert.equal(scheduled, 2);
-available = 200; delete panel.dataset.topContentFit;
-refreshTopContentFit(); assert.equal(scheduled, 2);
+refreshTopContentFit(); assert.equal(scheduled, 0);
+assert.equal(panel.dataset.topContentScroll, undefined);
+available = 200;
+refreshTopContentFit(); assert.equal(scheduled, 0);
+assert.equal(panel.dataset.topContentScroll, 'true');
 strip.isConnected = false;
-assert.equal(fitTopContentRect(panel, anchor), anchor);
+assert.equal(topAnchor(36).width, slot.width);
 ''')
 
 
-def test_top_content_fit_clamps_to_existing_cover_area_and_handles_single_metric() -> None:
+def test_top_content_overflow_handles_long_and_single_metric_strips() -> None:
     run_behavior(r'''
 railWidths = [160, 500, 500]; items = rails(); available = 400;
 const anchor = topAnchor(36);
-const fitted = fitTopContentRect(panel, anchor);
-assert.equal(fitted.left, 180);
-assert.equal(fitted.width, 771);
-assert.equal(fitted.left + fitted.width, anchor.area.right);
+assert.equal(anchor.width, slot.width);
 railWidths = [500]; items = rails(); available = 400;
 assert.equal(budgetDomain.measureCollapsedProgressStrip(strip).scrolling, false);
-assert.notEqual(fitTopContentRect(panel, anchor), anchor);
+assert.equal(topAnchor(36).width, slot.width);
 budgetDomain.refreshCollapsedProgressStrip(strip);
 assert.equal(strip.dataset.overflow, undefined);
 assert.equal(items[0].style.width, undefined);
 strip.querySelectorAll = () => [];
-assert.equal(fitTopContentRect(panel, anchor), anchor);
-assert.equal(fitTopContentRect(panel, {...anchor, source: 'fallback'}).source, 'fallback');
+assert.equal(topAnchor(36).width, slot.width);
 ''')
 
 
@@ -147,19 +137,24 @@ function applyRect(_panel, left, top, width, height) {
 }
 const state = getPanelState('top');
 syncPosition(['top']);
-assert.equal(panel.rect.width, 565);
-assert.equal(panel.rect.left, 386);
-assert.equal(panel.dataset.topContentFit, 'true');
-// Repeated settle passes must not grow or oscillate the fitted rectangle.
+assert.equal(panel.rect.width, 451);
+assert.equal(panel.rect.left, 500);
+assert.equal(panel.dataset.topContentScroll, 'true');
+// Repeated content measurements cannot move or resize the panel.
 syncPosition(['top']);
-assert.equal(panel.rect.width, 565);
-assert.equal(panel.rect.left, 386);
+assert.equal(panel.rect.width, 451);
+assert.equal(panel.rect.left, 500);
+railWidths = [120]; items = rails(); syncPosition(['top']);
+assert.deepEqual(panel.rect, {left: 500, top: 15, width: 451, height: 36});
+railWidths = [280, 420, 380]; items = rails(); syncPosition(['top']);
+assert.deepEqual(panel.rect, {left: 500, top: 15, width: 451, height: 36});
+railWidths = [160, 170, 170]; items = rails(); syncPosition(['top']);
+assert.deepEqual(panel.rect, {left: 500, top: 15, width: 451, height: 36});
 // A wider native slot returns to normal automatic placement.
 slot = {left: 300, right: 951, width: 651};
 syncPosition(['top']);
 assert.equal(panel.rect.width, 651);
 assert.equal(panel.rect.left, 300);
-assert.equal(panel.dataset.topContentFit, undefined);
 // Narrow native slots still enter the original marquee path.
 slot = {left: 720, right: 951, width: 231};
 syncPosition(['top']);
@@ -167,21 +162,20 @@ assert.equal(panel.rect.width, 231);
 assert.equal(panel.rect.left, 720);
 assert.equal(strip.dataset.overflow, 'true');
 assert.deepEqual(state, {manual: false, width: 130});
-// No room after a title: reuse the existing title-cover area.
+// No native title slot width still leaves panel geometry stable and bounded.
 slot = {left: 950, right: 951, width: 1};
 syncPosition(['top']);
-assert.equal(panel.rect.width, 771);
-assert.equal(strip.dataset.overflow, undefined);
-// Borrowing is bounded: very long totals must scroll after reaching the bound.
+assert.equal(panel.rect.width, 1);
+// Very long totals scroll within the title slot.
 railWidths = [160, 500, 500]; items = rails();
 slot = {left: 500, right: 951, width: 451};
 syncPosition(['top']);
-assert.equal(panel.rect.width, 771);
+assert.equal(panel.rect.width, 451);
 assert.equal(panel.dataset.topContentScroll, 'true');
 assert.equal(strip.dataset.overflow, 'true');
 assert.equal(topAnchor(390).width, 451);
 slot = {left: 950, right: 951, width: 1};
-assert.equal(topAnchor(390).width, 771);
+assert.equal(topAnchor(390).width, 1);
 ''', sync=True)
 
 
@@ -208,8 +202,9 @@ for (const scale of [.8, 1, 1.25, 1.5, 2]) {
       syncPosition(['top']);
       const layout = budgetDomain.measureCollapsedProgressStrip(strip);
       assert.ok(!layout.clipped || strip.dataset.overflow === 'true', JSON.stringify({width, railWidths, layout}));
-      assert.ok(panel.rect.width >= 120);
+      assert.equal(panel.rect.width, width);
       assert.ok(panel.rect.left >= 8 && panel.rect.left + panel.rect.width <= 951);
+      assert.equal(panel.dataset.topContentScroll, layout.clipped ? 'true' : undefined);
       const previous = {...panel.rect};
       syncPosition(['top']);
       assert.deepEqual(panel.rect, previous);
@@ -270,6 +265,49 @@ items[1].querySelector = selector => selector.includes('size-probe')
 const clipped = budgetDomain.measureCollapsedProgressStrip(strip);
 assert.equal(clipped.clipped, true);
 assert.equal(clipped.scrolling, true);
+''')
+
+
+def test_overflow_refresh_preserves_marquee_when_live_label_widths_change() -> None:
+    run_behavior(r'''
+available = 220; railWidths = [160, 220, 210]; items = rails();
+budgetDomain.refreshCollapsedProgressStrip(strip);
+assert.equal(strip.dataset.overflow, 'true');
+const removals = strip.style.removals;
+const oldDistance = strip.style['--codex-usage-hud-progress-strip-distance'];
+railWidths = [160, 235, 215]; items = rails();
+budgetDomain.refreshCollapsedProgressStrip(strip);
+assert.equal(strip.dataset.overflow, 'true');
+assert.ok(strip.style.removals === removals);
+assert.notEqual(strip.style['--codex-usage-hud-progress-strip-distance'], oldDistance);
+assert.equal(strip.dataset.layoutSignature, '160,235,215|404');
+''')
+
+
+def test_overflow_mode_does_not_reflow_tail_rails_near_fit_boundary() -> None:
+    run_behavior(r'''
+panel.dataset.topContentScroll = 'true';
+available = 500; railWidths = [160, 200, 200]; items = rails();
+budgetDomain.refreshCollapsedProgressStrip(strip);
+assert.equal(strip.dataset.overflow, 'true');
+const removals = strip.style.removals;
+// A new Today/Week label fits by only six pixels. Keep intrinsic rail widths
+// and marquee mode instead of switching both tail columns to 1fr.
+railWidths = [160, 160, 160]; items = rails();
+budgetDomain.refreshCollapsedProgressStrip(strip);
+assert.equal(strip.dataset.overflow, 'true');
+assert.equal(strip.style.removals, removals);
+assert.equal(items[1].style.width, '160px');
+assert.equal(items[2].style.width, '160px');
+assert.equal(strip.style['--codex-usage-hud-progress-strip-distance'], '0px');
+// Once there is stable room, return to the normal split layout.
+available = 540;
+railWidths = [160, 145, 145]; items = rails();
+budgetDomain.refreshCollapsedProgressStrip(strip);
+assert.equal(strip.dataset.overflow, undefined);
+assert.ok(strip.style.removals > removals);
+assert.equal(items[1].style.width, undefined);
+assert.equal(items[2].style.width, undefined);
 ''')
 
 

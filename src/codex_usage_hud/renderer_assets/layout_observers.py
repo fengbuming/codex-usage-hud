@@ -48,19 +48,8 @@ TEXT = r"""
             }
           }
           applyRect(panel, left, top, width, height);
-          if (name === "top" && (!state.manual || forceAutoFit)) {
-            const fitted = fitTopContentRect(panel, anchor);
-            if (fitted !== anchor) {
-              panel.dataset.topContentFit = "true";
-              applyRect(panel, fitted.left, fitted.top, fitted.width, height);
-            } else {
-              delete panel.dataset.topContentFit;
-            }
-          }
           if (name === "top") {
-            // Borrowing title space is bounded by native controls. If that is
-            // still insufficient (or the user chose a narrow manual width),
-            // scroll the full intrinsic rails instead of clipping their copy.
+            // Keep clipped progress labels readable inside the fixed title slot.
             const layout = budgetDomain.measureCollapsedProgressStrip(
               panel.querySelector('[data-field="topCollapsedProgress"]'),
             );
@@ -80,16 +69,9 @@ TEXT = r"""
         const layout = budgetDomain.measureCollapsedProgressStrip(
           panel.querySelector('[data-field="topCollapsedProgress"]'),
         );
-        const manual = getPanelState("top").manual;
-        if (manual) {
-          if (layout?.clipped) panel.dataset.topContentScroll = "true";
-          else delete panel.dataset.topContentScroll;
-          budgetDomain.refreshCollapsedProgressStrip(panel.querySelector('[data-field="topCollapsedProgress"]'));
-          return;
-        }
-        if (panel.dataset.topContentFit === "true" || (layout?.clipped && !layout.scrolling)) {
-          scheduleForPanels(["top"]);
-        }
+        if (layout?.clipped) panel.dataset.topContentScroll = "true";
+        else delete panel.dataset.topContentScroll;
+        budgetDomain.refreshCollapsedProgressStrip(panel.querySelector('[data-field="topCollapsedProgress"]'));
       }
 
       function applyPanelToggleGeometry(name) {

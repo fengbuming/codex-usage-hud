@@ -149,6 +149,7 @@ TEXT = r"""
   function clearCollapsedProgressStrip(node) {
     if (!node) return;
     delete node.dataset.overflow;
+    delete node.dataset.overflowAvailable;
     node.style.removeProperty("--codex-usage-hud-progress-strip-distance");
     node.style.removeProperty("--codex-usage-hud-progress-strip-duration");
     node.style.removeProperty("grid-template-columns");
@@ -202,7 +203,16 @@ TEXT = r"""
     }
     const { rails, widths, available, required, scrolling, clipped } = layout;
     const forceScroll = node.closest?.('[data-panel="top"]')?.dataset.topContentScroll === "true";
-    if (!scrolling && !(clipped && forceScroll)) {
+    const wasOverflowing = node.dataset.overflow === "true";
+    const previousAvailable = Number(node.dataset.overflowAvailable);
+    const overflowExitSlack = 16;
+    const keepOverflowing = wasOverflowing
+      && (
+        clipped
+        || available <= previousAvailable
+        || required > available - overflowExitSlack
+      );
+    if (!scrolling && !(clipped && forceScroll) && !keepOverflowing) {
       clearCollapsedProgressStrip(node);
       delete node.dataset.layoutSignature;
       if (rails.length > 1) {
@@ -215,11 +225,12 @@ TEXT = r"""
       return;
     }
 
-    const overflow = Math.ceil(required - available);
+    const overflow = Math.max(0, Math.ceil(required - available));
     const signature = collapsedProgressStripSignature(widths, overflow);
     if (node.dataset.layoutSignature === signature) return;
 
-    clearCollapsedProgressStrip(node);
+    if (!wasOverflowing) clearCollapsedProgressStrip(node);
+    if (!wasOverflowing) node.dataset.overflowAvailable = String(available);
     node.dataset.layoutSignature = signature;
     rails.forEach((rail, index) => {
       rail.style.width = `${widths[index]}px`;

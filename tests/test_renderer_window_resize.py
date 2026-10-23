@@ -45,7 +45,6 @@ const noop = () => {};
 const resetNativeTitleReveal = noop, invalidateNativeTitleReveal = noop;
 const positionStartupBubble = noop, positionRestReminderBubble = noop;
 const applyPanelStates = noop, refreshAllMarquees = noop;
-const fitTopContentRect = (_panel, anchor) => anchor;
 const budgetDomain = {measureCollapsedProgressStrip: () => null};
 const refreshLayoutObservers = noop, startBootstrapObserver = noop;
 const desktopChromeMissing = () => false;
@@ -65,7 +64,7 @@ function footerGapSlot() { return {left: 350, right: chromeWidth - 150, rowTop: 
 """
     # Exercise the real geometry, frame coalescing, settle timers and listener.
     geometry = ANCHORS[ANCHORS.index("      function minWidthFor"):ANCHORS.index("      function candidateHeaders")]
-    top_anchor = ANCHORS[ANCHORS.index("      function topAnchor"):ANCHORS.index("      function fitTopContentRect")]
+    top_anchor = ANCHORS[ANCHORS.index("      function topAnchor"):ANCHORS.index("      function footerControlRects")]
     request_anchor = ANCHORS[ANCHORS.index("      function requestAnchor"):]
     sync = OBSERVERS[:OBSERVERS.index("      function applyPanelToggleGeometry")]
     scheduling = OBSERVERS[OBSERVERS.index("      function syncPositionSettled"):OBSERVERS.index("      function scheduleRequestAfterComposerSettles")]

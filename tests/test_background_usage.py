@@ -374,6 +374,83 @@ class BackgroundUsageDecoderTests(unittest.TestCase):
 
 
 class BackgroundUsageScannerTests(unittest.TestCase):
+    def test_unknown_user_turns_are_excluded_and_other_unknown_usage_is_pending(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            logs_path = root / "logs_2.sqlite"
+            state_path = root / "state_5.sqlite"
+            base_ts = 1_900_000_000
+            user_turn_body = (
+                f"session_loop{{thread_id={UNKNOWN_ID}}}: Submission "
+                f'thread_id={UNKNOWN_ID} submission_id="submission" '
+                'operation="turn_input" parent_turn_id=None'
+            )
+            _create_logs(
+                logs_path,
+                [
+                    (
+                        1,
+                        base_ts,
+                        "codex_core::session::handlers",
+                        "codex_core::session::handlers",
+                        user_turn_body,
+                        UNKNOWN_ID,
+                        APP_PROCESS,
+                    ),
+                    (
+                        2,
+                        base_ts + 1,
+                        "codex_core::session::turn",
+                        "codex_core::session::turn",
+                        _turn_body(UNKNOWN_ID, "gpt-test", 120, 90),
+                        UNKNOWN_ID,
+                        APP_PROCESS,
+                    ),
+                    (
+                        3,
+                        base_ts + 2,
+                        "codex_core::session::turn",
+                        "codex_core::session::turn",
+                        _turn_body(BACKGROUND_ID, "gpt-test", 80, 60),
+                        BACKGROUND_ID,
+                        APP_PROCESS,
+                    ),
+                ],
+            )
+            _create_state(state_path)
+            store = BackgroundUsageStore(root / "audit.sqlite3")
+            scanner = BackgroundUsageScanner(
+                logs_path=logs_path,
+                state_path=state_path,
+                store=store,
+                provider="custom",
+                price_table=_prices(),
+                app_process_ids=(1234,),
+                grace_seconds=0,
+                now=lambda: float(base_ts + 30),
+            )
+
+            result = scanner.scan()
+            query = store.query(range_key="all")
+
+            self.assertTrue(result.content_changed)
+            self.assertEqual(
+                [event["eventId"] for event in query["events"]],
+                [BACKGROUND_ID],
+            )
+            self.assertEqual(query["events"][0]["featureLabel"], "来源待确认")
+            self.assertEqual(
+                query["events"][0]["classificationState"], "source_pending"
+            )
+            self.assertEqual(query["summary"]["sourcePendingEventCount"], 1)
+            self.assertEqual(query["summary"]["backgroundEventCount"], 0)
+            self.assertEqual(query["summary"]["totalTokens"], 80)
+            self.assertIsNone(store.detail(UNKNOWN_ID))
+            detail = store.detail(BACKGROUND_ID)
+            self.assertIsNotNone(detail)
+            assert detail is not None
+            self.assertEqual(detail["totalTokens"], 80)
+
     def test_visible_session_source_prompt_unwraps_vscode_request(self) -> None:
         source_prompt = "Build the OpenCV fallback into the scanner."
         self.assertEqual(
