@@ -84,6 +84,7 @@ class _ThreadRecord:
     # looking for a session, while ``title`` is only the opening prompt.
     name: str = ""
     model_provider: str = ""
+    pinned: bool = False
 
 
 @dataclass(frozen=True)
@@ -1661,6 +1662,23 @@ class SessionCleanupManager:
             pass
         return "unknown"
 
+    def _pinned_provider_tree_ids(self) -> set[str]:
+        records, parents, _states, _unsafe, _unresolved = self._load_state()
+        children: dict[str, set[str]] = defaultdict(set)
+        for child, parent_ids in parents.items():
+            for parent in parent_ids:
+                children[parent].add(child)
+                children[child].add(parent)
+        protected: set[str] = set()
+        pending = [session_id for session_id, record in records.items() if record.pinned]
+        while pending:
+            session_id = pending.pop()
+            if session_id in protected:
+                continue
+            protected.add(session_id)
+            pending.extend(children.get(session_id, ()))
+        return protected
+
     def delete_provider_history(
         self,
         provider: str,
@@ -1697,9 +1715,14 @@ class SessionCleanupManager:
                 f"无法删除 Provider {normalized_provider} 的会话历史：{reason}"
             )
         matching: list[SessionCleanupItem] = []
+        pinned_tree_ids = self._pinned_provider_tree_ids()
+        skipped_pinned = 0
         unresolved_unknown = 0
         for item in self._items.values():
             if item.model_provider.casefold() == normalized_provider:
+                if item._session_id in pinned_tree_ids:
+                    skipped_pinned += 1
+                    continue
                 matching.append(item)
             elif item.model_provider.casefold() == "unknown":
                 # Sessions whose rollout has no session_meta (or no provider
@@ -1708,6 +1731,9 @@ class SessionCleanupManager:
                 # legacy/truncated rollout is not silently left behind.
                 deep_provider = self._deep_provider_for_item(item)
                 if deep_provider == normalized_provider:
+                    if item._session_id in pinned_tree_ids:
+                        skipped_pinned += 1
+                        continue
                     matching.append(item)
                 elif deep_provider == "unknown":
                     unresolved_unknown += 1
@@ -1735,6 +1761,7 @@ class SessionCleanupManager:
                 sessionCount=0,
                 deletedCount=0,
                 failedCount=0,
+                skippedPinnedCount=skipped_pinned,
                 unresolvedUnknownCount=unresolved_unknown,
             )
         item_ids = [item.id for item in matching]
@@ -1781,12 +1808,16 @@ class SessionCleanupManager:
             sessionCount=len(matching),
             deletedCount=deleted_count,
             failedCount=0,
+            skippedPinnedCount=skipped_pinned,
             actualBytes=actual_bytes,
             unresolvedUnknownCount=unresolved_unknown,
         )
 
-    def _provider_history_items(self, provider: str) -> list[SessionCleanupItem]:
+    def _provider_history_items(
+        self, provider: str, *, include_pinned: bool = False
+    ) -> list[SessionCleanupItem]:
         records, _parents, _states, _unsafe, _unresolved = self._load_state()
+        pinned_tree_ids = self._pinned_provider_tree_ids()
         allowed = self._allowed_rollout_roots()
         selected: dict[str, tuple[_ThreadRecord, list[Path]]] = {}
         owners: dict[str, str] = {}
@@ -1805,6 +1836,8 @@ class SessionCleanupManager:
                 owner = self._deep_provider_for_path(path)
             owners[record.session_id] = owner
             if owner != provider:
+                continue
+            if not include_pinned and record.session_id in pinned_tree_ids:
                 continue
             if path is not None and not _path_under(path, allowed):
                 raise SessionCleanupError("Provider 会话文件不在允许的会话目录内。")
@@ -1840,6 +1873,8 @@ class SessionCleanupManager:
                     provider,
                 }:
                     raise SessionCleanupError("Provider 历史文件与数据库归属冲突。")
+                if not include_pinned and session_id in pinned_tree_ids:
+                    continue
                 if session_id not in selected:
                     selected[session_id] = (
                         records.get(session_id)
@@ -1890,6 +1925,13 @@ class SessionCleanupManager:
         if not capability.available:
             raise SessionCleanupError(capability.reason)
         items = self._provider_history_items(provider)
+        pinned_tree_ids = self._pinned_provider_tree_ids()
+        skipped_pinned = len(
+            pinned_tree_ids.intersection(
+                item._session_id
+                for item in self._provider_history_items(provider, include_pinned=True)
+            )
+        )
         if desktop_lifecycle is None and any(item.client_kind != "cli" for item in items):
             raise SessionCleanupError("强制删除需要 Codex 会话停止及删除通道。")
         # CLI history does not need a Desktop deletion receipt. Preserve only
@@ -1990,6 +2032,7 @@ class SessionCleanupManager:
             sessionCount=len(items),
             deletedCount=deleted_count,
             failedCount=len(errors),
+            skippedPinnedCount=skipped_pinned,
             remainingCount=len(remaining),
             retainedCliCount=sum(item._session_id in retained_cli for item in remaining),
             results=results,
@@ -3442,6 +3485,10 @@ class SessionCleanupManager:
                         "updated_at",
                         "recency_at_ms",
                         "model_provider",
+                        "is_pinned",
+                        "pinned",
+                        "pinned_at",
+                        "pinned_at_ms",
                     )
                     if name in columns
                 ]
@@ -3482,6 +3529,11 @@ class SessionCleanupManager:
                 updated_at_ms=max(0, updated_at_ms),
                 name=str(values.get("name") or "").strip(),
                 model_provider=str(values.get("model_provider") or "").strip().casefold(),
+                pinned=any(
+                    bool(values.get(name))
+                    for name in ("is_pinned", "pinned", "pinned_at", "pinned_at_ms")
+                    if name in values
+                ),
             )
         parents: dict[str, set[str]] = defaultdict(set)
         edge_states: dict[str, str] = {}

@@ -10,7 +10,7 @@ import pytest
 
 from codex_usage_hud import codex_provider_config as config
 from codex_usage_hud import codex_cli_launcher as cli
-from codex_usage_hud.provider_proxy import ProviderProxyRelay, proxy_metadata
+from codex_usage_hud.provider_proxy import ProviderProxyRelay, _rewrite_model, proxy_metadata
 
 
 @pytest.fixture
@@ -93,6 +93,36 @@ def test_routing_and_streaming_preserve_body_auth_query_and_errors(relay, upstre
     client.close()
 
 
+def test_rewrite_model_changes_unknown_fallback_but_preserves_configured_models():
+    assert _rewrite_model(
+        b'{"model":"gpt-6.1-sol","stream":true}',
+        "deepseek-v4.1-flash-uncensored",
+        ["deepseek-v4.1-flash-uncensored", "deepseek-v4.1-flash"],
+    ) == b'{"model":"deepseek-v4.1-flash-uncensored","stream":true}'
+    assert _rewrite_model(
+        b'{"model":"deepseek-v4.1-flash","stream":true}',
+        "deepseek-v4.1-flash-uncensored",
+        ["deepseek-v4.1-flash-uncensored", "deepseek-v4.1-flash"],
+    ) == b'{"model":"deepseek-v4.1-flash","stream":true}'
+    assert _rewrite_model(b"not-json", "deepseek-v4.1-flash-uncensored") == b"not-json"
+
+
+def test_relay_rewrites_unknown_model_in_responses_request(relay, upstream, tmp_path):
+    server, calls, _, release = upstream
+    release.set()
+    endpoint = urlsplit(relay.route({
+        "base_url": f"http://127.0.0.1:{server.server_port}/v1",
+        "enabled": False,
+        "model": "deepseek-v4.1-flash-uncensored",
+        "models": ["deepseek-v4.1-flash-uncensored", "deepseek-v4.1-flash"],
+    }, tmp_path / "config.toml"))
+    client = http.client.HTTPConnection(endpoint.hostname, endpoint.port, timeout=3)
+    client.request("POST", endpoint.path + "/responses", b'{"model":"gpt-6.1-sol","stream":true}')
+    response = client.getresponse()
+    assert response.status == 200
+    response.read()
+    client.close()
+    assert calls[-1][2] == b'{"model":"deepseek-v4.1-flash-uncensored","stream":true}'
 def test_websocket_handshake_and_bidirectional_frames(relay, upstream, tmp_path):
     server = upstream[0]
     endpoint = urlsplit(relay.route({"base_url": f"http://127.0.0.1:{server.server_port}/v1",
@@ -192,10 +222,14 @@ def test_config_roundtrip_restart_clone_and_cli_share_one_setting(relay, tmp_pat
     ):
         config.save_provider_configs({"provider_id": "other", "base_url": "https://example.test/v2",
                                      "env_key": "OTHER_API_KEY", "use_proxy": True,
-                                     "proxy_port": 7898}, config_path=path)
+                                     "proxy_port": 7898, "desktop_model": "deepseek-flash",
+                                     "desktop_models": ["deepseek-flash", "deepseek-fast"]}, config_path=path)
         definition = config.read_provider_definitions(path)["other"]
         assert definition.base_url == "https://example.test/v2"
         assert definition.use_proxy and definition.proxy_port == 7898
+        route = proxy_metadata(definition.section_text)
+        assert route["model"] == "deepseek-flash"
+        assert route["models"] == ["deepseek-flash", "deepseek-fast"]
         assert 'base_url = "https://example.test/v2"' in definition.section_text
         options = cli.discover_codex_cli_options(provider="other", codex_home=tmp_path)
         assert options["proxy"]["enabled"] is True

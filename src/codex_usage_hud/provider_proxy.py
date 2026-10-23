@@ -23,6 +23,30 @@ _HOP_HEADERS = {"connection", "keep-alive", "proxy-authenticate", "proxy-authori
                 "te", "trailer", "transfer-encoding", "upgrade"}
 
 
+def _rewrite_model(body: bytes | None, target_model: object, allowed_models: object = None) -> bytes | None:
+    """Pin provider requests to the model selected for the proxy route.
+
+    Codex may issue an automatic compaction request with its native fallback
+    model even after a custom provider model was selected.  The proxy route is
+    provider-scoped, so correcting only the JSON model field is sufficient and
+    leaves non-JSON or streaming framing untouched.
+    """
+    model = str(target_model or "").strip()
+    if not body or not model:
+        return body
+    try:
+        payload = json.loads(body)
+    except (TypeError, ValueError):
+        return body
+    if not isinstance(payload, dict) or not isinstance(payload.get("model"), str):
+        return body
+    allowed = {str(item).strip() for item in allowed_models} if isinstance(allowed_models, list) else set()
+    if payload["model"] in allowed or payload["model"] == model:
+        return body
+    payload["model"] = model
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+
+
 def proxy_metadata(section: str) -> dict:
     match = _METADATA.search(section)
     if not match:
@@ -42,7 +66,7 @@ def with_proxy_metadata(body: str, metadata: dict, newline: str) -> str:
 def updated_proxy_metadata(metadata: dict, **changes) -> dict:
     """Retain immutable committed routes used by already-created sessions."""
     updated = {**metadata, **changes}
-    keys = ("base_url", "enabled", "port")
+    keys = ("base_url", "enabled", "port", "model", "models")
     if metadata.get("token") and any(metadata.get(key) != updated.get(key) for key in keys):
         previous = {key: metadata[key] for key in (*keys, "token") if key in metadata}
         updated["previous_routes"] = [*metadata.get("previous_routes", []), previous]
@@ -178,6 +202,8 @@ class ProviderProxyRelay:
                         body = b"".join(chunks)
                     elif self.headers.get("Content-Length"):
                         body = read_exact(int(self.headers["Content-Length"]))
+                    if target.endswith("/responses") or target.split("?", 1)[0].endswith("/responses"):
+                        body = _rewrite_model(body, route.get("model"), route.get("models"))
                     connection.request(self.command, target or "/", body=body, headers=headers)
                     response = connection.getresponse()
                     self.send_response_only(response.status, response.reason)
@@ -239,6 +265,11 @@ class ProviderProxyRelay:
             metadata = proxy_metadata(definition.section_text)
             if not metadata:
                 continue
+            metadata = {
+                **metadata,
+                "model": definition.desktop_model,
+                "models": list(definition.desktop_models),
+            }
             section = config._section_range(candidate, provider)
             if section is None:
                 continue

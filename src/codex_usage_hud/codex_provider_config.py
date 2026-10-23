@@ -869,6 +869,8 @@ def save_provider_configs(
     hot_provider_ids: list[str] = []
 
     for update in normalized_updates:
+        model_for_route = ""
+        models_for_route: list[str] = []
         raw_section_text = str(
             update.get("section_text") or update.get("sectionText") or ""
         )
@@ -878,6 +880,10 @@ def save_provider_configs(
             update.get("provider_id") or update.get("providerId") or ""
         ).strip()
         normalized_requested_id = requested_provider_id.casefold()
+        existing_definition = definitions.get(normalized_requested_id)
+        if existing_definition is not None:
+            model_for_route = existing_definition.desktop_model
+            models_for_route = list(existing_definition.desktop_models)
         raw_default_entry: Mapping[str, Any] = {}
         if isinstance(raw_model_providers, Mapping):
             for raw_id, raw_entry in raw_model_providers.items():
@@ -1027,10 +1033,14 @@ def save_provider_configs(
                 if candidate and candidate not in desktop_models:
                     desktop_models.append(candidate)
             desktop_model = str(value or "").strip()
+            model_for_route = desktop_models[0] if desktop_models else ""
+            models_for_route = list(desktop_models)
             if desktop_model:
                 if desktop_model in desktop_models:
                     desktop_models.remove(desktop_model)
                 desktop_models.insert(0, desktop_model)
+            model_for_route = desktop_models[0] if desktop_models else ""
+            models_for_route = list(desktop_models)
             section = _section_range(candidate_text, provider_id)
             newline = _preferred_newline(candidate_text)
             body = _without_hud_comment(section[2], DESKTOP_MODEL_MARKER)
@@ -1052,6 +1062,8 @@ def save_provider_configs(
                 proxy_metadata(existing.section_text) if existing else {},
                 base_url=base_url, enabled=update["use_proxy"] is True,
                 port=update.get("proxy_port", 7897),
+                model=model_for_route,
+                models=models_for_route,
             )
             relay_url = provider_proxy_relay.route(metadata, path)
             body = _set_quoted_value(section[2], "base_url", relay_url, newline)
@@ -1062,6 +1074,8 @@ def save_provider_configs(
             section = _section_range(candidate_text, provider_id)
             metadata = updated_proxy_metadata(
                 proxy_metadata(existing.section_text), base_url=base_url,
+                model=model_for_route,
+                models=models_for_route,
             )
             newline = _preferred_newline(candidate_text)
             body = _set_quoted_value(section[2], "base_url", provider_proxy_relay.route(metadata, path), newline)

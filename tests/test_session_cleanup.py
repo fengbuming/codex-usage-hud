@@ -845,6 +845,40 @@ class SessionCleanupManagerTests(unittest.TestCase):
         with self.assertRaisesRegex(SessionCleanupError, "受保护会话"):
             manager.delete_provider_history("openai-custom")
 
+    def test_provider_history_delete_skips_pinned_session_tree(self) -> None:
+        temporary, _root, state, _index, rollouts, manager = self._fixture()
+        self.addCleanup(temporary.cleanup)
+        with closing(sqlite3.connect(state)) as connection, connection:
+            connection.execute("ALTER TABLE threads ADD COLUMN is_pinned INTEGER DEFAULT 0")
+            connection.execute("UPDATE threads SET is_pinned=1 WHERE id=?", (CHILD_ID,))
+
+        result = manager.delete_provider_history("openai-custom")["operation"]
+
+        self.assertEqual(result["state"], "completed")
+        self.assertEqual(result["deletedCount"], 0)
+        self.assertEqual(result["skippedPinnedCount"], 1)
+        self.assertTrue(rollouts[ROOT_ID].exists())
+        self.assertTrue(rollouts[CHILD_ID].exists())
+
+    def test_forced_provider_delete_skips_pinned_session_tree(self) -> None:
+        temporary, _root, state, _index, rollouts, manager = self._fixture()
+        self.addCleanup(temporary.cleanup)
+        with closing(sqlite3.connect(state)) as connection, connection:
+            connection.execute("ALTER TABLE threads ADD COLUMN pinned INTEGER DEFAULT 0")
+            connection.execute("UPDATE threads SET pinned=1 WHERE id=?", (CHILD_ID,))
+        lifecycle = MagicMock(return_value={"verified": True})
+
+        result = manager.delete_provider_history(
+            "openai-custom", force=True, desktop_lifecycle=lifecycle
+        )["operation"]
+
+        self.assertEqual(result["state"], "completed")
+        self.assertEqual(result["deletedCount"], 0)
+        self.assertEqual(result["skippedPinnedCount"], 2)
+        lifecycle.assert_not_called()
+        self.assertTrue(rollouts[ROOT_ID].exists())
+        self.assertTrue(rollouts[CHILD_ID].exists())
+
     def test_forced_provider_delete_covers_current_running_and_orphan_records(
         self,
     ) -> None:
