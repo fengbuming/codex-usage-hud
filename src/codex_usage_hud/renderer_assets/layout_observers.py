@@ -3,6 +3,7 @@
 TEXT = r"""
       function syncPosition(names = Object.keys(PANEL), { forceAutoFit = false } = {}) {
         if (!runtimeIsCurrent() || !ctx.lifecycle.active()) return;
+        if (layoutGeometryFrozen()) return;
         const root = document.getElementById(rootId);
         if (!root) return;
         positionStartupBubble(root);
@@ -41,6 +42,7 @@ TEXT = r"""
               : null;
             if (relativeRequest || relativeTop) {
               ({ left, top, width } = relativeRequest || relativeTop);
+              if (name === "top" && relativeTop) left = alignFittingManualTopRight(panel, anchor, left, width, expanded);
             } else {
               width = desiredWidth(name, state, expanded, anchor.width, anchor.maxWidth);
               left = clamp(Number(state.x ?? anchor.left), 8, Math.max(8, innerWidth - width - 8));
@@ -76,6 +78,7 @@ TEXT = r"""
 
       function applyPanelToggleGeometry(name) {
         if (!runtimeIsCurrent() || !ctx.lifecycle.active()) return;
+        if (layoutGeometryFrozen()) return;
         const root = document.getElementById(rootId);
         if (!root || !PANEL[name]) return;
         const panel = root.querySelector(`[data-panel="${name}"]`);
@@ -99,6 +102,7 @@ TEXT = r"""
 
       function syncPositionSettled(names = Object.keys(PANEL), options = {}) {
         if (!runtimeIsCurrent() || !ctx.lifecycle.active()) return;
+        if (layoutGeometryFrozen()) return;
         for (const timer of (window[settleTimerName] || [])) ctx.lifecycle.clearTimeout(timer);
         window[settleTimerName] = [
           ctx.lifecycle.timeout("layout_settle", () => {
@@ -115,6 +119,7 @@ TEXT = r"""
 
       function scheduleForPanels(names = Object.keys(PANEL), { invalidateTop = false, forceAutoFit = false } = {}) {
         if (!runtimeIsCurrent() || !ctx.lifecycle.active()) return;
+        if (layoutGeometryFrozen()) return;
         const panelNames = Array.isArray(names) ? names.filter((name) => PANEL[name]) : Object.keys(PANEL);
         if (invalidateTop || panelNames.includes("top")) topSlotCache = null;
         pendingForceAutoFit = pendingForceAutoFit || forceAutoFit;
@@ -291,7 +296,211 @@ TEXT = r"""
         }
       }
 
+      function horizontalLayoutSignature(headerNode, composerNode) {
+        return [headerNode, composerNode].map((node) => {
+          if (!visible(node)) return "";
+          const rect = node.getBoundingClientRect();
+          return `${Math.round(rect.left)}:${Math.round(rect.right)}`;
+        }).join("|");
+      }
+
+      function alignFittingManualTopRight(panel, anchor, left, width, expanded) {
+        if (expanded || !anchor?.area || anchor.overlayTitle) return left;
+        const progress = budgetDomain.measureCollapsedProgressStrip(
+          panel.querySelector('[data-field="topCollapsedProgress"]'),
+        );
+        if (!progress || progress.clipped) return left;
+        const right = Number(anchor.area.right ?? (anchor.area.left + anchor.area.width));
+        return Math.max(anchor.area.left, right - width);
+      }
+
+      let columnResizePointerId = null;
+      let columnResizeWatchersInstalled = false;
+      let previewGeometryFrozen = false;
+      let previewCloseTimer = 0;
+      let previewObserver = null;
+      let previewListenersInstalled = false;
+      let previewCloseUntil = 0;
+
+      function layoutGeometryFrozen() {
+        return previewGeometryFrozen || Date.now() < previewCloseUntil;
+      }
+
+      const imagePreviewSurfaceSelector = [
+        '[role="dialog"]',
+        '[aria-modal="true"]',
+        '[data-testid*="image-viewer" i]',
+        '[data-testid*="media-viewer" i]',
+        '[data-testid*="image-preview" i]',
+        '[aria-label*="image preview" i]',
+        '[aria-label*="图片预览"]',
+      ].join(", ");
+
+      function hasLargePreviewImage(node) {
+        if (!node?.querySelectorAll) return false;
+        return Array.from(node.querySelectorAll("img, [role='img']")).some((image) => {
+          const rect = image.getBoundingClientRect();
+          return rect.width >= innerWidth * 0.24 && rect.height >= innerHeight * 0.24;
+        });
+      }
+
+      function hasCodexImagePreview() {
+        const dialogs = Array.from(document.querySelectorAll(imagePreviewSurfaceSelector))
+          .filter((node) => node.isConnected && !node.closest?.(`#${rootId}`));
+        if (dialogs.some((dialog) => {
+          const rect = dialog.getBoundingClientRect();
+          if (rect.width < innerWidth * 0.72 || rect.height < innerHeight * 0.72) return false;
+          const style = getComputedStyle(dialog);
+          if (style.display === "none" || style.visibility === "hidden" || Number(style.opacity || 1) === 0) return false;
+          return hasLargePreviewImage(dialog);
+        })) return true;
+        return Array.from(document.querySelectorAll("img"))
+          .filter((image) => image.isConnected && !image.closest?.(`#${rootId}`))
+          .some((image) => {
+            if (!hasLargePreviewImage(image.parentElement || image)) return false;
+            for (let node = image.parentElement, depth = 0; node && depth < 10; node = node.parentElement, depth += 1) {
+              const rect = node.getBoundingClientRect();
+              const style = getComputedStyle(node);
+              const zIndex = Number.parseInt(style.zIndex, 10);
+              if (style.position === "fixed" && zIndex >= 10
+                && rect.width >= innerWidth * 0.72 && rect.height >= innerHeight * 0.72) return true;
+            }
+            return false;
+          });
+      }
+
+      function isImagePreviewTrigger(event) {
+        const path = event.composedPath?.() || [event.target];
+        return path.some((node) => {
+          if (!(node instanceof Element) || node.closest?.(`#${rootId}`)) return false;
+          const label = normalize([
+            node.getAttribute?.("aria-label"),
+            node.getAttribute?.("title"),
+            node.getAttribute?.("data-testid"),
+          ].filter(Boolean).join(" "));
+          if (/^(?:open|view|preview)\s+(?:image|attachment)|(?:图片预览|查看图片|预览图片)/i.test(label)) return true;
+          if (node.tagName !== "IMG") return false;
+          const rect = node.getBoundingClientRect();
+          return rect.width >= 96 && rect.height >= 72;
+        });
+      }
+
+      function cancelScheduledLayoutGeometry() {
+        ctx.frames.cancel("layout");
+        pendingSyncPanels = null;
+        pendingForceAutoFit = false;
+        ctx.lifecycle.clearTimeout(window[composerSettleTimerName] || 0);
+        window[composerSettleTimerName] = 0;
+        for (const timer of (window[settleTimerName] || [])) ctx.lifecycle.clearTimeout(timer);
+        window[settleTimerName] = [];
+      }
+
+      function refreshPreviewGeometryGate() {
+        if (!runtimeIsCurrent() || !ctx.lifecycle.active()) return;
+        const wasFrozen = previewGeometryFrozen;
+        previewGeometryFrozen = hasCodexImagePreview();
+        if (previewGeometryFrozen) {
+          ctx.lifecycle.clearTimeout(previewCloseTimer);
+          previewCloseTimer = 0;
+          previewCloseUntil = 0;
+          cancelScheduledLayoutGeometry();
+          return;
+        }
+        if (wasFrozen) {
+          previewCloseUntil = Date.now() + 700;
+          ctx.lifecycle.clearTimeout(previewCloseTimer);
+          previewCloseTimer = ctx.lifecycle.timeout("layout_preview", () => {
+            previewCloseTimer = 0;
+            previewCloseUntil = 0;
+          }, 700);
+        }
+      }
+
+      function installPreviewGeometryGate() {
+        if (previewListenersInstalled || !document) return;
+        previewListenersInstalled = true;
+        const scheduleCheck = () => ctx.frames.schedule("layout_preview", refreshPreviewGeometryGate);
+        ctx.lifecycle.listen("layout_preview", document, "pointerdown", (event) => {
+          if (!isImagePreviewTrigger(event)) return;
+          previewGeometryFrozen = true;
+          previewCloseUntil = 0;
+          ctx.lifecycle.clearTimeout(previewCloseTimer);
+          previewCloseTimer = 0;
+          cancelScheduledLayoutGeometry();
+          scheduleCheck();
+        }, true);
+        ctx.lifecycle.listen("layout_preview", document, "click", scheduleCheck, true);
+        ctx.lifecycle.listen("layout_preview", document, "keydown", scheduleCheck, true);
+        if (typeof MutationObserver === "function" && document.documentElement) {
+          previewObserver = ctx.observers.set("layout_preview", new MutationObserver((mutations) => {
+            const relevant = mutations.some((mutation) => {
+              const target = mutation.target?.nodeType === Node.ELEMENT_NODE
+                ? mutation.target
+                : mutation.target?.parentElement;
+              if (target?.closest?.(`#${rootId}`)) return false;
+              if (target?.closest?.(imagePreviewSurfaceSelector)
+                || target?.matches?.(imagePreviewSurfaceSelector)) return true;
+              return [...(mutation.addedNodes || []), ...(mutation.removedNodes || [])]
+                .some((node) => node.nodeType === Node.ELEMENT_NODE
+                  && (node.matches?.(imagePreviewSurfaceSelector)
+                    || node.querySelector?.(imagePreviewSurfaceSelector)));
+            });
+            if (relevant) scheduleCheck();
+          }));
+          previewObserver.observe(document.documentElement, {childList: true, subtree: true, attributes: true, attributeFilter: ["aria-label", "aria-hidden", "aria-modal", "class", "data-testid", "role", "style"]});
+        }
+        refreshPreviewGeometryGate();
+      }
+
+      function isColumnResizeHandle(event) {
+        const path = event.composedPath?.() || [event.target];
+        return path.some((node) => {
+          if (!(node instanceof Element) || node.closest?.(`#${rootId}`)) return false;
+          if (node.getAttribute?.("role") === "separator"
+            && node.getAttribute?.("aria-orientation") === "vertical") return true;
+          const cursor = getComputedStyle(node).cursor;
+          return cursor === "col-resize" || cursor === "ew-resize";
+        });
+      }
+
+      function scheduleColumnResizeFrame() {
+        invalidateHeaderAnchor();
+        invalidateComposerAnchor();
+        scheduleForPanels(Object.keys(PANEL), { invalidateTop: true });
+      }
+
+      function handleColumnResizePointerDown(event) {
+        if (event.button !== 0 || !isColumnResizeHandle(event)) return;
+        columnResizePointerId = event.pointerId;
+        scheduleColumnResizeFrame();
+      }
+
+      function handleColumnResizePointerMove(event) {
+        if (columnResizePointerId == null || event.pointerId !== columnResizePointerId) return;
+        scheduleColumnResizeFrame();
+      }
+
+      function finishColumnResizePointer(event) {
+        if (columnResizePointerId == null
+          || (event?.pointerId != null && event.pointerId !== columnResizePointerId)) return;
+        columnResizePointerId = null;
+        scheduleColumnResizeFrame();
+        syncPositionSettled();
+      }
+
+      function installColumnResizeWatchers() {
+        if (columnResizeWatchersInstalled || !document) return;
+        columnResizeWatchersInstalled = true;
+        ctx.lifecycle.listen("layout", document, "pointerdown", handleColumnResizePointerDown, true);
+        ctx.lifecycle.listen("layout", document, "pointermove", handleColumnResizePointerMove, true);
+        ctx.lifecycle.listen("layout", document, "pointerup", finishColumnResizePointer, true);
+        ctx.lifecycle.listen("layout", document, "pointercancel", finishColumnResizePointer, true);
+        ctx.lifecycle.listen("layout", window, "blur", finishColumnResizePointer);
+      }
+
       function refreshLayoutObservers() {
+        installPreviewGeometryGate();
+        installColumnResizeWatchers();
         const headerNode = conversationHeaderElement();
         const composerNode = composerElement();
         if (
@@ -314,12 +523,26 @@ TEXT = r"""
         };
         if (headerNode) window[mutationObserverName].observe(headerNode, mutationOptions);
         if (composerNode && composerNode !== headerNode) window[mutationObserverName].observe(composerNode, mutationOptions);
-        // Session switch, async title completion, and Plan/Goal selection
-        // are handled by the targeted observers above. A generic resize
-        // observer also fires while typing, which violates the per-session
-        // no-relayout contract.
-        // Legacy contract marker: ctx.observers.set("layout_resize", new ResizeObserver(() => {}));
-        window[resizeObserverName] = { disconnect() {} };
+        // Side views and tabs can resize the conversation column without a
+        // window resize. Observe anchor widths only so composer height changes
+        // while typing do not trigger panel reflow.
+        if (typeof ResizeObserver === "function") {
+          let signature = horizontalLayoutSignature(headerNode, composerNode);
+          window[resizeObserverName] = ctx.observers.set("layout_resize", new ResizeObserver(() => {
+            if (!runtimeIsCurrent() || !ctx.lifecycle.active()) return;
+            const next = horizontalLayoutSignature(headerNode, composerNode);
+            if (next === signature) return;
+            signature = next;
+            invalidateHeaderAnchor();
+            invalidateComposerAnchor();
+            scheduleForPanels(Object.keys(PANEL), { invalidateTop: true });
+            syncPositionSettled();
+          }));
+          if (headerNode) window[resizeObserverName].observe(headerNode);
+          if (composerNode && composerNode !== headerNode) window[resizeObserverName].observe(composerNode);
+        } else {
+          window[resizeObserverName] = { disconnect() {} };
+        }
         ensureComposerInputWatchers();
       }
 
@@ -439,6 +662,8 @@ TEXT = r"""
       }
 
     function install() {
+      installPreviewGeometryGate();
+      installColumnResizeWatchers();
       installNativeTitleReveal();
       return true;
     }
@@ -449,6 +674,9 @@ TEXT = r"""
 
     function dispose() {
       resetNativeTitleReveal();
+      ctx.lifecycle.clearTimeout(previewCloseTimer);
+      ctx.lifecycle.disposeScope("layout_preview");
+      ctx.observers.clear("layout_preview");
       ctx.lifecycle.disposeScope("native_title_reveal");
       ctx.observers.clear("native_title_reveal");
       return true;
@@ -515,6 +743,7 @@ TEXT = r"""
       layoutMutationTarget,
       handleLayoutMutations,
       refreshLayoutObservers,
+      alignFittingManualTopRight,
       stopBootstrapObserver,
       startBootstrapObserver,
       headerScopeSelector,

@@ -360,6 +360,7 @@ DOM_PROBE_SCRIPT = r"""
       .map((node, index) => ({ node, index, rect: node.getBoundingClientRect(), label: normalize([
         node.getAttribute("aria-label"),
         node.getAttribute("title"),
+        node.getAttribute("data-testid"),
         node.textContent,
       ].filter(Boolean).join(" ")) }))
       .filter((item) => (
@@ -417,11 +418,19 @@ DOM_PROBE_SCRIPT = r"""
     if (!rightControls.length) return header.right;
     return Math.min(...rightControls.map((rect) => rect.left));
   };
+  const headerOverflowMenuControlStart = (headerNode, header, controls) => {
+    const threshold = header.right - Math.min(320, Math.max(160, header.width * .30));
+    const candidates = controls.filter((item) => item.rect.right > threshold);
+    const named = candidates.filter((item) => /\b(?:more|overflow)\b|(?:chat|conversation|thread)[\s_-]+(?:actions|options|menu)\b|更多|\.\.\.|…/i.test(item.label));
+    const icons = candidates.filter((item) => item.node?.querySelectorAll?.("svg circle")?.length === 3);
+    const matches = named.length ? named : icons;
+    return matches.length ? Math.min(...matches.map((item) => item.rect.left)) : headerRightControlStart(headerNode, header, controls);
+  };
   const topTitlebarSlot = (headerNode, header, matchedTitleRect) => {
     if (!headerNode || !header) return null;
     const controls = headerControlButtons(headerNode, header);
-    const chatActions = controls.find((item) => /chat actions/i.test(item.label));
-    const openIn = controls.find((item) => /^open in\b/i.test(item.label));
+    const chatActions = controls.find((item) => /chat actions/i.test(item.label)
+      && item.rect.right <= header.left + header.width * .5);
     const titleEdge = headerTitleTextEdge(headerNode, header, matchedTitleRect);
     const leftControlEdge = headerLeftControlEdge(headerNode, header, controls);
     const fallbackLeft = Math.max(160, Math.min(header.width * .14, 240));
@@ -430,9 +439,8 @@ DOM_PROBE_SCRIPT = r"""
       header.left + 8,
       header.right - 8
     );
-    const rightMargin = Math.max(12, header.width * .04);
     const right = clamp(
-      (openIn ? openIn.rect.left - 10 : Math.min(header.right - rightMargin, headerRightControlStart(headerNode, header, controls) - 10)),
+      headerOverflowMenuControlStart(headerNode, header, controls) - 10,
       left,
       header.right - 8
     );

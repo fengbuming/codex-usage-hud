@@ -181,8 +181,8 @@ TEXT = r"""
         return Math.max(...leftControls.map((rect) => rect.right - header.left)) + 14;
       }
 
-      function headerTitleTextEdge(headerNode, header) {
-        if (!headerNode) return 0;
+      function headerTitleTextBounds(headerNode, header) {
+        if (!headerNode) return null;
         const maxTextWidth = Math.min(520, header.width * .55);
         const textRects = Array.from(headerNode.querySelectorAll("span, h1, h2, [data-thread-title]"))
           .filter((node) => visible(node) && !node.closest(`#${rootId}`))
@@ -198,8 +198,34 @@ TEXT = r"""
             && rect.width <= maxTextWidth
             && rect.left < header.left + (header.width * .68)
           ));
-        if (!textRects.length) return 0;
-        return Math.max(...textRects.map((rect) => rect.right - header.left)) + 14;
+        if (!textRects.length) return null;
+        return {
+          left: Math.min(...textRects.map((rect) => rect.left)),
+          right: Math.max(...textRects.map((rect) => rect.right)),
+        };
+      }
+
+      function headerTitleTextEdge(headerNode, header) {
+        const bounds = headerTitleTextBounds(headerNode, header);
+        return bounds ? bounds.right - header.left + 14 : 0;
+      }
+
+      function topTitlebarLeft(headerNode, header, controls, titleBounds) {
+        const chatActions = controls.find((item) => (
+          /chat actions/i.test(item.label) && item.rect.right <= header.left + header.width * .5
+        ));
+        if (!titleBounds) {
+          const titleEdge = headerTitleTextEdge(headerNode, header);
+          const leftControlEdge = headerLeftControlEdge(headerNode, header, controls);
+          const fallbackLeft = Math.max(160, Math.min(header.width * .14, 240));
+          return chatActions
+            ? chatActions.rect.right + 10
+            : header.left + Math.max(fallbackLeft, titleEdge, leftControlEdge);
+        }
+        const titleWidth = Math.max(0, titleBounds.right - titleBounds.left);
+        const exposedTitleWidth = Math.min(96, Math.max(48, titleWidth * .35));
+        const titleOverlayLeft = titleBounds.left + exposedTitleWidth;
+        return Math.max(titleOverlayLeft, chatActions ? chatActions.rect.right + 10 : header.left + 8);
       }
 
       function headerRightControlStart(headerNode, header, controls = headerControlButtons(headerNode, header)) {
@@ -210,6 +236,21 @@ TEXT = r"""
         return Math.min(...rightControls.map((rect) => rect.left));
       }
 
+      function headerOverflowMenuControlStart(headerNode, header, controls = headerControlButtons(headerNode, header)) {
+        const rightThreshold = header.right - Math.min(320, Math.max(160, header.width * .30));
+        const explicit = controls.filter((item) => (
+          item.rect.right > rightThreshold
+          && /\b(?:more|overflow)\b|(?:chat|conversation|thread)[\s_-]+(?:actions|options|menu)\b|更多|\.\.\.|…/i.test(item.label)
+        ));
+        const iconMatches = controls.filter((item) => {
+          if (item.rect.right <= rightThreshold) return false;
+          return Number(item.node.querySelectorAll?.("svg circle")?.length || 0) === 3;
+        });
+        const target = explicit.length ? explicit : iconMatches;
+        if (target.length) return Math.min(...target.map((item) => item.rect.left));
+        return headerRightControlStart(headerNode, header, controls);
+      }
+
       function headerControlButtons(headerNode, header) {
         if (!headerNode || !header) return [];
         return Array.from(headerNode.querySelectorAll("button, [role='button'], a"))
@@ -217,6 +258,7 @@ TEXT = r"""
           .map((node, index) => ({ node, index, rect: node.getBoundingClientRect(), label: normalize([
             node.getAttribute("aria-label"),
             node.getAttribute("title"),
+            node.getAttribute("data-testid"),
             node.textContent,
           ].filter(Boolean).join(" ")) }))
           .filter((item) => (
@@ -256,28 +298,23 @@ TEXT = r"""
       function topTitlebarSlot(headerNode, header) {
         if (!headerNode || !header) return null;
         const controls = headerControlButtons(headerNode, header);
+        const composerNode = composerElement();
+        const composer = visible(composerNode) ? composerNode.getBoundingClientRect() : null;
         const cacheKey = [
           Math.round(innerWidth),
           Math.round(header.left),
           Math.round(header.right),
           Math.round(header.top),
           Math.round(header.bottom),
+          Math.round(composer?.left ?? -1),
+          Math.round(composer?.right ?? -1),
           headerLayoutSignature(headerNode, header, controls),
         ].join(":");
         if (topSlotCache?.key === cacheKey) return topSlotCache.slot;
-        const chatActions = controls.find((item) => /chat actions/i.test(item.label));
-        const openIn = controls.find((item) => /^open in\b/i.test(item.label));
-        const titleEdge = headerTitleTextEdge(headerNode, header);
-        const leftControlEdge = headerLeftControlEdge(headerNode, header, controls);
-        const fallbackLeft = Math.max(160, Math.min(header.width * .14, 240));
-        const left = clamp(
-          (chatActions ? chatActions.rect.right + 10 : header.left + Math.max(fallbackLeft, titleEdge, leftControlEdge)),
-          header.left + 8,
-          header.right - 8
-        );
-        const rightMargin = Math.max(12, header.width * .04);
+        const titleBounds = headerTitleTextBounds(headerNode, header);
+        const left = clamp(topTitlebarLeft(headerNode, header, controls, titleBounds), header.left + 8, header.right - 8);
         const right = clamp(
-          (openIn ? openIn.rect.left - 10 : Math.min(header.right - rightMargin, headerRightControlStart(headerNode, header, controls) - 10)),
+          headerOverflowMenuControlStart(headerNode, header, controls) - 10,
           left,
           header.right - 8
         );
@@ -291,21 +328,43 @@ TEXT = r"""
         const titlebarSlot = topTitlebarSlot(headerNode, header);
         if (titlebarSlot) return titlebarSlot;
         const controls = headerControlButtons(headerNode, header);
-        const titleEdge = headerTitleTextEdge(headerNode, header);
-        const leftControlEdge = headerLeftControlEdge(headerNode, header, controls);
-        const fallbackLeft = Math.max(160, Math.min(header.width * .14, 240));
-        const rightMargin = Math.max(12, header.width * .04);
+        const titleBounds = headerTitleTextBounds(headerNode, header);
         const right = clamp(
-          Math.min(header.right - rightMargin, headerRightControlStart(headerNode, header, controls) - 10),
+          headerOverflowMenuControlStart(headerNode, header, controls) - 10,
           header.left + 8,
           header.right - 8
         );
-        const left = clamp(
-          header.left + Math.max(fallbackLeft, titleEdge, leftControlEdge),
-          header.left + 8,
-          right
-        );
+        const left = clamp(topTitlebarLeft(headerNode, header, controls, titleBounds), header.left + 8, right);
         return { left, right, width: Math.max(1, right - left) };
+      }
+
+      function compactChatTitlebarSlot(header, slot, minWidth) {
+        if (!header || !slot) return slot;
+        const composerNode = composerElement();
+        const composer = visible(composerNode) ? composerNode.getBoundingClientRect() : null;
+        if (!composer) return slot;
+        // A centered max-width composer leaves space on both sides even in
+        // two-column mode. Only a shortened header or an asymmetric right
+        // reserve indicates an actual side pane.
+        const sidePaneReserve = Math.max(96, innerWidth * 0.08);
+        const headerHasSidePane = header.right < innerWidth - sidePaneReserve;
+        const leftInset = Math.max(0, composer.left - header.left);
+        const rightInset = Math.max(0, header.right - composer.right);
+        if (!headerHasSidePane && rightInset - leftInset <= sidePaneReserve) return slot;
+        const columnLeft = Math.max(header.left, composer.left);
+        const columnRight = Math.min(header.right, composer.right);
+        const columnWidth = columnRight - columnLeft;
+        if (columnWidth < minWidth) return slot;
+        const desiredLeftReserve = Math.min(80, Math.max(48, columnWidth * 0.22));
+        const desiredRightReserve = Math.min(72, Math.max(48, columnWidth * 0.20));
+        const reserveScale = Math.min(
+          1,
+          (columnWidth - minWidth) / (desiredLeftReserve + desiredRightReserve),
+        );
+        const left = columnLeft + (desiredLeftReserve * reserveScale);
+        const right = columnRight - (desiredRightReserve * reserveScale);
+        if (right - left < minWidth) return slot;
+        return { left, right, width: right - left, overlayTitle: true };
       }
 
       function topAnchor(height, widthOverride) {
@@ -317,6 +376,7 @@ TEXT = r"""
           return { left: innerWidth - width - 12, top: 12, width, height };
         }
         let slot = topHeaderSlot(headerNode, header);
+        slot = compactChatTitlebarSlot(header, slot, minWidth);
         const fitMinWidth = Math.min(minWidth, Math.max(1, slot.width));
         // Automatic top HUD geometry owns the whole title-bar slot. The
         // fallback width is only for the no-header path; keeping it here would
@@ -334,6 +394,7 @@ TEXT = r"""
           width,
           height,
           source: "header-slot",
+          overlayTitle: slot.overlayTitle === true,
           maxWidth: slot.width,
           area: { left: slot.left, top, width: slot.width, height, right: slot.right },
         };

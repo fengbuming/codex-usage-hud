@@ -2,6 +2,7 @@
 
 TEXT = r"""
       function beginGesture(event, name, action, edge = "", toggleOnTap = false) {
+        if (layoutGeometryFrozen()) return;
         const panel = document.querySelector(`#${rootId} [data-panel="${name}"]`);
         if (!panel) return;
         const rect = panel.getBoundingClientRect();

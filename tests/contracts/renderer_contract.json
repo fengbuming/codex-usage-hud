@@ -6,8 +6,8 @@
   },
   "currentBundle": {
     "phase": "P6.7",
-    "sha256": "9bbb0cfb614051c9bf9cebbf41306e6157fe8088575e2a0693ceecfb71e5b40d",
-    "byteLength": 1442329
+    "sha256": "0327204303e4d97fb79809ae2e67b69f9667ba0d06d3c5890379c10f4922ec27",
+    "byteLength": 1456600
   },
   "sha256": "f83d65265c55143fa775f509f09ce109c2aa75a03946b42cf462cb6cbd4ea637",
   "byteLength": 548705,
@@ -41,10 +41,10 @@
     "backgroundUsage", "diagnostics", "usageInsights", "sessionCleanup"
   ],
   "lifecycleCounts": {
-    "mutationObservers": 10,
+    "mutationObservers": 11,
     "resizeObservers": 3,
     "setIntervals": 6,
-    "setTimeouts": 44,
+    "setTimeouts": 45,
     "kernelSetIntervals": 1,
     "kernelSetTimeouts": 10
   },
@@ -144,11 +144,11 @@
     "background_usage_policy", "background_usage_request", "background_usage_fetch",
     "codex_cli_launch_timeout", "codex_cli_launch_min_visible", "session_index_status_watchdog",
     "settings_restart", "native_title_restore", "native_title_reveal", "layout_settle",
-    "layout_settle", "layout_settle", "composer_layout", "layout_bootstrap", "layout_bootstrap",
-    "composer_attachments", "layout_report", "active_session", "active_session", "active_session",
-    "active_session", "active_session_bootstrap", "session_cleanup_search",
-    "session_transfer_selection", "session_transfer_select_all", "session_transfer_selection",
-    "stale_guard"
+    "layout_settle", "layout_settle", "composer_layout", "layout_preview", "layout_bootstrap",
+    "layout_bootstrap", "composer_attachments", "layout_report", "active_session",
+    "active_session", "active_session", "active_session", "active_session_bootstrap",
+    "session_cleanup_search", "session_transfer_selection", "session_transfer_select_all",
+    "session_transfer_selection", "stale_guard"
   ],
   "timeoutInventory": [
     {"owner": "model_picker", "creation": "ctx.lifecycle.timeout(\"model_picker\", patchCodexModelPicker, delay)", "cleanup": "ctx.lifecycle.clearTimeout(timer)"},

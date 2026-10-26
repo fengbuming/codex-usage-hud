@@ -41,6 +41,9 @@ let header = {left: 20, top: 8, width: 960, height: 50};
 let slot = {left: 500, right: 951, width: 451};
 const conversationHeaderElement = () => ({getBoundingClientRect: () => header});
 const topHeaderSlot = () => slot;
+const compactChatTitlebarSlot = (_header, slot) => slot;
+const layoutGeometryFrozen = () => false;
+const alignFittingManualTopRight = (_panel, _anchor, left) => left;
 const visible = () => true;
 let manual = false, scheduled = 0;
 const getPanelState = () => ({manual, width: 130});
@@ -321,6 +324,9 @@ const headerControlButtons = () => [];
 const headerTitleTextEdge = () => 950;
 const headerLeftControlEdge = () => 0;
 const headerRightControlStart = () => 850;
+const headerOverflowMenuControlStart = () => 850;
+const headerTitleTextBounds = () => null;
+const topTitlebarLeft = () => 970;
 ''' + source + r'''
 const slot = topHeaderSlot({}, {left: 20, right: 980, width: 960});
 assert.equal(slot.right, 840);
@@ -339,6 +345,7 @@ def test_collapse_refreshes_content_after_expanded_data_changes() -> None:
     script = r'''
 const assert = require('node:assert/strict');
 const runtimeIsCurrent = () => true;
+const layoutGeometryFrozen = () => false;
 const ctx = {lifecycle: {active: () => true}};
 const rootId = 'hud', PANEL = {top: {}};
 const panel = {dataset: {expanded: 'true'}, getBoundingClientRect: () => ({left:300,top:20,width:400})};
