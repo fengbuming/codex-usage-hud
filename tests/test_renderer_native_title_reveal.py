@@ -62,7 +62,11 @@ const title = {
 const textNode = {nodeValue: title.textContent, parentElement: title};
 const panel = {
   isConnected: true, shown: true, dataset: {panel: 'top'},
+  style: {left: '120px', width: '310px', right: 'auto'},
   getBoundingClientRect: () => rect(120, 8, 430, 42),
+  querySelector: selector => selector === '.codex-usage-hud-settings-button' ? {
+    getBoundingClientRect: () => rect(0, 0, 18, 18),
+  } : null,
   removeAttribute: name => { if (name === 'data-native-title-reveal') delete panel.dataset.nativeTitleReveal; },
 };
 const header = {isConnected: true, shown: true, querySelectorAll: () => [title]};
@@ -83,6 +87,8 @@ function move(x, y = 20, extra = {}) {
   document.dispatch('pointermove', {clientX: x, clientY: y, pointerType: 'mouse', buttons: 0, ...extra});
 }
 const revealed = () => panel.dataset.nativeTitleReveal === 'true';
+const revealWidth = () => Number.parseFloat(panel.style.width);
+const revealLeft = () => Number.parseFloat(panel.style.left);
 """
 
 
@@ -104,10 +110,12 @@ const revealed = () => panel.dataset.nativeTitleReveal === 'true';
         """
         move(40); advance(149); assert.equal(revealed(), false);
         move(45); advance(1); assert.equal(revealed(), true);
+        assert.ok(revealWidth() < 310); assert.ok(revealLeft() > 120);
         move(250); advance(500); assert.equal(revealed(), true);
         move(600); advance(100); move(250); advance(100);
         assert.equal(revealed(), true);
         move(600); advance(150); assert.equal(revealed(), false);
+        assert.equal(panel.style.width, '310px'); assert.equal(panel.style.left, '120px');
         move(250); advance(200); assert.equal(revealed(), false);
         """,
         """

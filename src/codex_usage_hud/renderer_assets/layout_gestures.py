@@ -159,10 +159,23 @@ TEXT = r"""
       let nativeTitleRevealTimer = 0;
       let nativeTitleRevealObserver = null;
       let nativeTitleRevealObserved = [];
+      let nativeTitleRevealPanelStyle = null;
+      const nativeTitleRevealGap = 8;
+
+      function restoreNativeTitleRevealPanelStyle() {
+        const panel = nativeTitleRevealPanel;
+        const style = nativeTitleRevealPanelStyle;
+        if (!panel || !style || !panel.style) return;
+        panel.style.width = style.width;
+        panel.style.left = style.left;
+        panel.style.right = style.right;
+        nativeTitleRevealPanelStyle = null;
+      }
 
       function clearNativeTitleReveal() {
         ctx.lifecycle.clearTimeout(nativeTitleRevealTimer);
         nativeTitleRevealTimer = 0;
+        restoreNativeTitleRevealPanelStyle();
         nativeTitleRevealPanel?.removeAttribute("data-native-title-reveal");
         nativeTitleRevealPanel = null;
       }
@@ -218,7 +231,10 @@ TEXT = r"""
         const observed = [header, title, panel];
         if (observed.some((node, index) => node !== nativeTitleRevealObserved[index])) {
           nativeTitleRevealObserver?.disconnect();
-          observed.forEach((node) => nativeTitleRevealObserver?.observe(node));
+          // The panel is resized by the reveal animation itself. Observing it
+          // would immediately invalidate the animation on every frame.
+          observed.filter((node) => node !== panel)
+            .forEach((node) => nativeTitleRevealObserver?.observe(node));
           nativeTitleRevealObserved = observed;
         }
         let clip = nativeTitleRectIntersection(title.getBoundingClientRect(), {
@@ -252,7 +268,47 @@ TEXT = r"""
         }
         const cover = panel.getBoundingClientRect();
         if (!textRects.some((rect) => nativeTitleRectIntersection(rect, cover))) return null;
-        return { title, panel, textRects, cover };
+        const settings = panel.querySelector?.(".codex-usage-hud-settings-button");
+        const collapsed = panel.querySelector?.(".codex-usage-hud-collapsed");
+        const collapsedStyle = collapsed ? getComputedStyle(collapsed) : null;
+        const settingsWidth = settings?.getBoundingClientRect?.().width || 18;
+        const padding = (parseFloat(collapsedStyle?.paddingLeft) || 0)
+          + (parseFloat(collapsedStyle?.paddingRight) || 0);
+        const gap = parseFloat(collapsedStyle?.columnGap || collapsedStyle?.gap) || 0;
+        const minWidth = Math.ceil(settingsWidth + padding + (gap * 2) + 2);
+        return { title, panel, textRects, cover, minWidth };
+      }
+
+      function nativeTitleRevealTarget(geometry) {
+        const textRight = Math.max(...geometry.textRects.map((rect) => rect.right));
+        const minimumLeft = geometry.cover.right - geometry.minWidth;
+        const left = Math.min(
+          minimumLeft,
+          Math.max(geometry.cover.left, textRight + nativeTitleRevealGap),
+        );
+        return {
+          left,
+          width: Math.max(geometry.minWidth, geometry.cover.right - left),
+        };
+      }
+
+      function applyNativeTitleReveal(geometry) {
+        const panel = geometry.panel;
+        if (!panel?.style) return;
+        const target = nativeTitleRevealTarget(geometry);
+        nativeTitleRevealPanelStyle = {
+          width: panel.style.width,
+          left: panel.style.left,
+          right: panel.style.right,
+        };
+        nativeTitleRevealPanel = panel;
+        nativeTitleRevealPanel.dataset.nativeTitleReveal = "true";
+        // Force the pre-transition geometry to be committed before changing
+        // width/left so the browser animates the shrink from the right edge.
+        panel.getBoundingClientRect();
+        panel.style.left = px(target.left);
+        panel.style.right = "auto";
+        panel.style.width = px(target.width);
       }
 
       function updateNativeTitleReveal() {
@@ -293,8 +349,7 @@ TEXT = r"""
           nativeTitleRevealTimer = ctx.lifecycle.timeout("native_title_reveal", () => {
             nativeTitleRevealTimer = 0;
             if (!geometry.title.isConnected || !geometry.panel.isConnected) return;
-            nativeTitleRevealPanel = geometry.panel;
-            nativeTitleRevealPanel.dataset.nativeTitleReveal = "true";
+            applyNativeTitleReveal(geometry);
           }, 150);
         }
       }

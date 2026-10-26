@@ -184,14 +184,7 @@ TEXT = r"""
           }
           #${rootId} .${topClass} {
             background: rgba(16, 22, 29, .94);
-            transition: opacity .12s ease;
-          }
-          #${rootId} .${topClass}[data-native-title-reveal="true"] {
-            opacity: 0;
-          }
-          #${rootId} .${topClass}[data-native-title-reveal="true"],
-          #${rootId} .${topClass}[data-native-title-reveal="true"] * {
-            pointer-events: none !important;
+            transition: opacity .12s ease, width .22s ease, left .22s ease;
           }
           @media (prefers-reduced-motion: reduce) {
             #${rootId} .${topClass} { transition: none; }
