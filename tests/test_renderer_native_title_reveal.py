@@ -60,18 +60,28 @@ const title = {
   closest: () => null, contains: () => false,
 };
 const textNode = {nodeValue: title.textContent, parentElement: title};
+let panelRect = rect(120, 8, 430, 42);
 const panel = {
   isConnected: true, shown: true, dataset: {panel: 'top'},
   style: {left: '120px', width: '310px', right: 'auto'},
-  getBoundingClientRect: () => rect(120, 8, 430, 42),
-  querySelector: selector => selector === '.codex-usage-hud-settings-button' ? {
-    getBoundingClientRect: () => rect(0, 0, 18, 18),
-  } : null,
+  getBoundingClientRect: () => panelRect,
+  querySelector: selector => {
+    if (selector === '.codex-usage-hud-settings-button') {
+      return {getBoundingClientRect: () => rect(0, 0, 18, 18)};
+    }
+    if (selector === '.codex-usage-hud-collapsed') return {};
+    if (selector === ".codex-usage-hud-left-controls") {
+      return {getBoundingClientRect: () => rect(0, 0, 0, 18)};
+    }
+    if (selector === "[data-field='topCollapsedProgress']") return {scrollWidth: 560};
+    return null;
+  },
   removeAttribute: name => { if (name === 'data-native-title-reveal') delete panel.dataset.nativeTitleReveal; },
 };
 const header = {isConnected: true, shown: true, querySelectorAll: () => [title]};
 const conversationHeaderElement = () => header;
 global.getComputedStyle = () => ({display: 'block', visibility: 'visible', opacity: '1', overflowX: 'hidden', overflowY: 'hidden'});
+global.budgetDomain = {measureCollapsedProgressStrip: () => ({required: 560})};
 global.NodeFilter = {SHOW_TEXT: 4};
 document.querySelector = () => panel;
 document.createTreeWalker = () => {
@@ -119,6 +129,15 @@ const revealLeft = () => Number.parseFloat(panel.style.left);
         move(250); advance(200); assert.equal(revealed(), false);
         """,
         """
+        panelRect = rect(120, 8, 941, 42);
+        panel.style.width = '821px';
+        textRects = [rect(25, 14, 200, 31)];
+        move(40); advance(150); assert.equal(revealed(), true);
+        assert.equal(panel.style.left, '363px');
+        assert.equal(panel.style.width, '578px');
+        assert.equal(363 + 578, 941);
+        """,
+        """
         move(40); advance(100); move(600); advance(100);
         assert.equal(revealed(), false); assert.equal(timers.size, 0);
         move(40, 20, {buttons: 1}); advance(200); assert.equal(revealed(), false);
@@ -151,7 +170,7 @@ const revealLeft = () => Number.parseFloat(panel.style.left);
         assert.equal(nativeTitleRevealObserver.nodes.length, 0);
         """,
     ],
-    ids=["short-title", "native-clipping", "hover-and-restore", "cancel-and-drag", "overlays-and-focus", "invalidation-and-teardown"],
+    ids=["short-title", "native-clipping", "hover-and-restore", "cancel-and-drag", "overlays-and-focus", "invalidation-and-teardown", "content-fit-right-anchor"],
 )
 def test_native_title_reveal_behavior(scenario: str) -> None:
     controller = GESTURES[GESTURES.index("      let nativeTitleRevealGeometry;"):]

@@ -29,9 +29,13 @@ TEXT = r"""
           const widthOverride = forceAutoFit || name === "request" || !state.manual
             ? null
             : state.width;
-          const anchor = name === "top"
+          let anchor = name === "top"
             ? topAnchor(height, widthOverride)
             : requestAnchor(height, widthOverride);
+          if (name === "top" && !expanded && (!state.manual || forceAutoFit)
+            && typeof fitTopContentRect === "function") {
+            anchor = fitTopContentRect(panel, anchor);
+          }
           let { left, top, width } = anchor;
           if (state.manual && !forceAutoFit) {
             const relativeRequest = name === "request"
@@ -60,12 +64,13 @@ TEXT = r"""
           }
         }
         refreshAllMarquees(root);
+        if (panelNames.includes("top")) refreshTopContentFit({ refreshProgress: false });
         applyRuntimeErrorsPanelState();
         refreshLayoutObservers();
         startBootstrapObserver();
       }
 
-      function refreshTopContentFit() {
+      function refreshTopContentFit({ refreshProgress = true } = {}) {
         const panel = document.querySelector(`#${rootId} [data-panel="top"]`);
         if (!panel || panel.dataset.expanded === "true") return;
         const layout = budgetDomain.measureCollapsedProgressStrip(
@@ -73,7 +78,28 @@ TEXT = r"""
         );
         if (layout?.clipped) panel.dataset.topContentScroll = "true";
         else delete panel.dataset.topContentScroll;
-        budgetDomain.refreshCollapsedProgressStrip(panel.querySelector('[data-field="topCollapsedProgress"]'));
+        if (refreshProgress) {
+          budgetDomain.refreshCollapsedProgressStrip(panel.querySelector('[data-field="topCollapsedProgress"]'));
+        }
+        const state = typeof getPanelState === "function" ? getPanelState("top") : null;
+        if (
+          !state?.manual
+          && typeof fitTopContentRect === "function"
+          && typeof topAnchor === "function"
+          && typeof applyRect === "function"
+        ) {
+          const rect = panel.getBoundingClientRect?.();
+          const anchor = fitTopContentRect(
+            panel,
+            topAnchor(rect?.height || PANEL.top.collapsedHeight),
+          );
+          if (rect && anchor && (
+            Math.abs((rect.left || 0) - anchor.left) > 1
+            || Math.abs((rect.width || 0) - anchor.width) > 1
+          )) {
+            applyRect(panel, anchor.left, rect.top, anchor.width, rect.height);
+          }
+        }
       }
 
       function applyPanelToggleGeometry(name) {
@@ -719,6 +745,8 @@ TEXT = r"""
       headerLayoutSignature,
       topTitlebarSlot,
       topHeaderSlot,
+      collapsedTopContentWidth,
+      fitTopContentRect,
       topAnchor,
       footerControlRects,
       footerGapSlot,
@@ -795,6 +823,8 @@ TEXT = r"""
     headerLayoutSignature,
     topTitlebarSlot,
     topHeaderSlot,
+    collapsedTopContentWidth,
+    fitTopContentRect,
     topAnchor,
     footerControlRects,
     footerGapSlot,

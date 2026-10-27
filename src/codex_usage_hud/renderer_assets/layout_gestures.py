@@ -282,9 +282,32 @@ TEXT = r"""
       function nativeTitleRevealTarget(geometry) {
         const textRight = Math.max(...geometry.textRects.map((rect) => rect.right));
         const minimumLeft = geometry.cover.right - geometry.minWidth;
+        const collapsed = geometry.panel.querySelector?.(".codex-usage-hud-collapsed");
+        const collapsedStyle = collapsed ? getComputedStyle(collapsed) : null;
+        const settings = geometry.panel.querySelector?.(".codex-usage-hud-settings-button");
+        const leftControls = geometry.panel.querySelector?.(".codex-usage-hud-left-controls");
+        const progress = geometry.panel.querySelector?.("[data-field='topCollapsedProgress']");
+        const layout = progress && typeof budgetDomain !== "undefined"
+          ? budgetDomain.measureCollapsedProgressStrip(progress)
+          : null;
+        const measuredProgressWidth = Number(layout?.required || 0);
+        const intrinsicMainWidth = measuredProgressWidth > 0
+          ? measuredProgressWidth
+          : Math.max(Number(progress?.scrollWidth || 0), 1);
+        const padding = (parseFloat(collapsedStyle?.paddingLeft) || 0)
+          + (parseFloat(collapsedStyle?.paddingRight) || 0);
+        const gap = parseFloat(collapsedStyle?.columnGap || collapsedStyle?.gap) || 0;
+        const contentWidth = Math.ceil(
+          padding
+          + (leftControls?.getBoundingClientRect?.().width || 0)
+          + intrinsicMainWidth
+          + (settings?.getBoundingClientRect?.().width || geometry.minWidth)
+          + (gap * 2),
+        );
+        const contentFitLeft = geometry.cover.right - Math.max(geometry.minWidth, contentWidth);
         const left = Math.min(
           minimumLeft,
-          Math.max(geometry.cover.left, textRight + nativeTitleRevealGap),
+          Math.max(geometry.cover.left, textRight + nativeTitleRevealGap, contentFitLeft),
         );
         return {
           left,
@@ -306,9 +329,9 @@ TEXT = r"""
         // Force the pre-transition geometry to be committed before changing
         // width/left so the browser animates the shrink from the right edge.
         panel.getBoundingClientRect();
-        panel.style.left = px(target.left);
+        panel.style.left = `${target.left}px`;
         panel.style.right = "auto";
-        panel.style.width = px(target.width);
+        panel.style.width = `${target.width}px`;
       }
 
       function updateNativeTitleReveal() {

@@ -367,6 +367,59 @@ TEXT = r"""
         return { left, right, width: right - left, overlayTitle: true };
       }
 
+      function collapsedTopContentWidth(panel, layout = null) {
+        if (!panel) return 0;
+        const collapsed = panel.querySelector?.(".codex-usage-hud-collapsed");
+        const collapsedStyle = collapsed ? getComputedStyle(collapsed) : null;
+        const padding = (parseFloat(collapsedStyle?.paddingLeft) || 0)
+          + (parseFloat(collapsedStyle?.paddingRight) || 0);
+        const gap = parseFloat(collapsedStyle?.columnGap || collapsedStyle?.gap) || 0;
+        const leftControls = panel.querySelector?.(".codex-usage-hud-left-controls");
+        const settings = panel.querySelector?.(".codex-usage-hud-settings-button");
+        const strip = panel.querySelector?.('[data-field="topCollapsedProgress"]');
+        const main = panel.querySelector?.(".codex-usage-hud-main");
+        const line = main?.querySelector?.(
+          ".codex-usage-hud-line-inner, .codex-usage-hud-line",
+        );
+        const measuredProgressWidth = Number(layout?.required || 0);
+        const intrinsicMainWidth = measuredProgressWidth > 0
+          ? measuredProgressWidth
+          : Math.max(
+            Number(line?.scrollWidth || 0),
+            Number(strip?.scrollWidth || 0),
+            0,
+          );
+        if (intrinsicMainWidth <= 0) return 0;
+        const leftControlsWidth = leftControls?.getBoundingClientRect?.().width || 0;
+        const settingsWidth = settings?.getBoundingClientRect?.().width || 22;
+        // The panel border contributes two pixels to its border-box width.
+        return Math.ceil(
+          padding
+          + leftControlsWidth
+          + intrinsicMainWidth
+          + settingsWidth
+          + (gap * 2)
+          + 2,
+        );
+      }
+
+      function fitTopContentRect(panel, anchor) {
+        if (!panel || panel.dataset.expanded === "true") return anchor;
+        if (anchor?.source !== "header-slot" || !anchor?.area) return anchor;
+        const strip = panel.querySelector?.('[data-field="topCollapsedProgress"]');
+        const layout = typeof budgetDomain !== "undefined"
+          ? budgetDomain.measureCollapsedProgressStrip(strip)
+          : null;
+        const contentWidth = collapsedTopContentWidth(panel, layout);
+        if (contentWidth <= 0) return anchor;
+        const minWidth = Math.min(minWidthFor("top", false), anchor.width);
+        const width = clamp(contentWidth, minWidth, anchor.width);
+        if (width >= anchor.width - 1) return anchor;
+        const right = Number(anchor.area.right ?? (anchor.area.left + anchor.area.width));
+        const left = Math.max(anchor.area.left, right - width);
+        return { ...anchor, left, width };
+      }
+
       function topAnchor(height, widthOverride) {
         const headerNode = conversationHeaderElement();
         const header = visible(headerNode) ? headerNode.getBoundingClientRect() : null;
@@ -378,9 +431,9 @@ TEXT = r"""
         let slot = topHeaderSlot(headerNode, header);
         slot = compactChatTitlebarSlot(header, slot, minWidth);
         const fitMinWidth = Math.min(minWidth, Math.max(1, slot.width));
-        // Automatic top HUD geometry owns the whole title-bar slot. The
-        // fallback width is only for the no-header path; keeping it here would
-        // leave a large unused gap when the title bar is wider than 520px.
+        // The fallback width is only for the no-header path. Collapsed content
+        // is fitted after the panel DOM has been rendered so its intrinsic
+        // progress-label width can be measured without stretching the rails.
         const width = clamp(
           widthOverride == null ? slot.width : widthOverride,
           fitMinWidth,

@@ -1,4 +1,4 @@
-"""Top HUD geometry stays fixed while clipped content scrolls in place."""
+"""Top HUD geometry fits collapsed content and keeps the right edge anchored."""
 
 from __future__ import annotations
 
@@ -31,7 +31,13 @@ const strip = {
   classList: {contains: () => true}, isConnected: true, parentElement: viewport,
   dataset: {}, style: style(), querySelectorAll: () => items,
 };
-global.getComputedStyle = () => ({columnGap: '7px'});
+const collapsed = {};
+const settings = {getBoundingClientRect: () => ({width: 22})};
+const leftControls = {getBoundingClientRect: () => ({width: 0})};
+const main = {querySelector: () => null};
+global.getComputedStyle = node => node === collapsed
+  ? {paddingLeft: '8px', paddingRight: '7px', columnGap: '6px'}
+  : {columnGap: '7px'};
 global.innerWidth = 1000;
 global.innerHeight = 600;
 const PANEL = {top: {collapsedHeight: 36}};
@@ -48,7 +54,18 @@ const visible = () => true;
 let manual = false, scheduled = 0;
 const getPanelState = () => ({manual, width: 130});
 const scheduleForPanels = names => {assert.deepEqual(names, ['top']); scheduled++};
-const panel = {dataset: {expanded: 'false'}, querySelector: () => strip};
+const panel = {
+  dataset: {expanded: 'false'},
+  getBoundingClientRect: () => panel.rect || ({left: slot.left, top: 15, right: slot.right, width: slot.width, height: 36}),
+  querySelector: selector => {
+    if (selector === '[data-field="topCollapsedProgress"]') return strip;
+    if (selector === '.codex-usage-hud-collapsed') return collapsed;
+    if (selector === '.codex-usage-hud-settings-button') return settings;
+    if (selector === '.codex-usage-hud-left-controls') return leftControls;
+    if (selector === '.codex-usage-hud-main') return main;
+    return null;
+  },
+};
 strip.closest = () => panel;
 const rootId = 'hud';
 global.document = {querySelector: () => panel};
@@ -57,7 +74,8 @@ global.document = {querySelector: () => panel};
 
 def run_behavior(checks: str, *, sync: bool = False) -> None:
     budget = BUDGET.split("  const budgetDomain = ctx.domains.register(", 1)[0]
-    anchors = ANCHORS[ANCHORS.index("      function topAnchor"):ANCHORS.index("      function footerControlRects")]
+    helpers = ANCHORS[ANCHORS.index("      function collapsedTopContentWidth"):ANCHORS.index("      function topAnchor")]
+    anchors = helpers + ANCHORS[ANCHORS.index("      function topAnchor"):ANCHORS.index("      function footerControlRects")]
     refresh = OBSERVERS[OBSERVERS.index("      function refreshTopContentFit"):OBSERVERS.index("      function applyPanelToggleGeometry")]
     controller = OBSERVERS[:OBSERVERS.index("      function applyPanelToggleGeometry")] if sync else refresh
     script = HARNESS + budget + "const budgetDomain = createBudgetDomain({}, {});\n" + anchors + controller + checks
@@ -75,7 +93,7 @@ def run_behavior(checks: str, *, sync: bool = False) -> None:
     ids=["short-title", "exact-fit", "one-pixel-tolerance", "clipped-middle",
          "above-marquee-boundary", "at-marquee-boundary", "narrow-marquee"],
 )
-def test_top_content_overflow_does_not_change_the_auto_rect(available: int, scrolling: bool) -> None:
+def test_top_content_overflow_fits_to_the_right_edge(available: int, scrolling: bool) -> None:
     run_behavior(f'''
 available = {available};
 slot = {{left: 951 - available - 51, right: 951, width: available + 51}};
@@ -143,12 +161,12 @@ syncPosition(['top']);
 assert.equal(panel.rect.width, 451);
 assert.equal(panel.rect.left, 500);
 assert.equal(panel.dataset.topContentScroll, 'true');
-// Repeated content measurements cannot move or resize the panel.
+// Repeated content measurements keep the fitted right edge stable.
 syncPosition(['top']);
 assert.equal(panel.rect.width, 451);
 assert.equal(panel.rect.left, 500);
 railWidths = [120]; items = rails(); syncPosition(['top']);
-assert.deepEqual(panel.rect, {left: 500, top: 15, width: 451, height: 36});
+assert.deepEqual(panel.rect, {left: 780, top: 15, width: 171, height: 36});
 railWidths = [280, 420, 380]; items = rails(); syncPosition(['top']);
 assert.deepEqual(panel.rect, {left: 500, top: 15, width: 451, height: 36});
 railWidths = [160, 170, 170]; items = rails(); syncPosition(['top']);
@@ -156,8 +174,8 @@ assert.deepEqual(panel.rect, {left: 500, top: 15, width: 451, height: 36});
 // A wider native slot returns to normal automatic placement.
 slot = {left: 300, right: 951, width: 651};
 syncPosition(['top']);
-assert.equal(panel.rect.width, 651);
-assert.equal(panel.rect.left, 300);
+assert.equal(panel.rect.width, 565);
+assert.equal(panel.rect.left, 386);
 // Narrow native slots still enter the original marquee path.
 slot = {left: 720, right: 951, width: 231};
 syncPosition(['top']);
@@ -205,7 +223,10 @@ for (const scale of [.8, 1, 1.25, 1.5, 2]) {
       syncPosition(['top']);
       const layout = budgetDomain.measureCollapsedProgressStrip(strip);
       assert.ok(!layout.clipped || strip.dataset.overflow === 'true', JSON.stringify({width, railWidths, layout}));
-      assert.equal(panel.rect.width, width);
+      const requiredPanelWidth = Math.ceil(layout.required + 51);
+      const expectedWidth = Math.min(width, requiredPanelWidth);
+      assert.ok(Math.abs(panel.rect.width - expectedWidth) <= 1, JSON.stringify({width, railWidths, layout, fit: collapsedTopContentWidth(panel, layout), expectedWidth, rect: panel.rect}));
+      assert.equal(panel.rect.left + panel.rect.width, 951, JSON.stringify({width, railWidths, layout, expectedWidth, rect: panel.rect}));
       assert.ok(panel.rect.left >= 8 && panel.rect.left + panel.rect.width <= 951);
       assert.equal(panel.dataset.topContentScroll, layout.clipped ? 'true' : undefined);
       const previous = {...panel.rect};
