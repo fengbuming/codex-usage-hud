@@ -61,6 +61,12 @@ const title = {
 };
 const textNode = {nodeValue: title.textContent, parentElement: title};
 let panelRect = rect(120, 8, 430, 42);
+const progress = {
+  scrollWidth: 560,
+  dataset: {},
+  style: {removeProperty(name) { delete this[name]; }},
+  querySelectorAll: () => [],
+};
 const panel = {
   isConnected: true, shown: true, dataset: {panel: 'top'},
   style: {left: '120px', width: '310px', right: 'auto'},
@@ -73,7 +79,7 @@ const panel = {
     if (selector === ".codex-usage-hud-left-controls") {
       return {getBoundingClientRect: () => rect(0, 0, 0, 18)};
     }
-    if (selector === "[data-field='topCollapsedProgress']") return {scrollWidth: 560};
+    if (selector === "[data-field='topCollapsedProgress']") return progress;
     return null;
   },
   removeAttribute: name => { if (name === 'data-native-title-reveal') delete panel.dataset.nativeTitleReveal; },
@@ -81,7 +87,13 @@ const panel = {
 const header = {isConnected: true, shown: true, querySelectorAll: () => [title]};
 const conversationHeaderElement = () => header;
 global.getComputedStyle = () => ({display: 'block', visibility: 'visible', opacity: '1', overflowX: 'hidden', overflowY: 'hidden'});
-global.budgetDomain = {measureCollapsedProgressStrip: () => ({required: 560})};
+let collapsedMeasureCount = 0;
+global.budgetDomain = {measureCollapsedProgressStrip: () => {
+  if (panel.dataset.expanded !== 'true') collapsedMeasureCount++;
+  return {required: 560};
+}};
+const contentFitRefreshes = [];
+function refreshTopContentFit(options) { contentFitRefreshes.push(options); }
 global.NodeFilter = {SHOW_TEXT: 4};
 document.querySelector = () => panel;
 document.createTreeWalker = () => {
@@ -138,11 +150,45 @@ const revealLeft = () => Number.parseFloat(panel.style.left);
         assert.equal(363 + 578, 941);
         """,
         """
+        panel.dataset.expanded = 'true';
+        panelRect = rect(120, 8, 941, 42);
+        panel.style.width = '821px';
+        progress.dataset.overflow = 'true';
+        progress.dataset.overflowAvailable = '180';
+        progress.dataset.layoutSignature = '560,560,560|1000';
+        textRects = [rect(25, 14, 200, 31)];
+        move(40); advance(150); assert.equal(revealed(), true);
+        assert.equal(panel.style.left, '363px');
+        assert.equal(panel.style.width, '578px');
+        assert.equal(panel.dataset.expanded, 'true');
+        assert.ok(collapsedMeasureCount > 0);
+        move(600); advance(150);
+        assert.equal(revealed(), false);
+        assert.equal(panel.style.left, '120px');
+        assert.equal(panel.style.width, '821px');
+        assert.equal(panel.dataset.expanded, 'true');
+        assert.equal(progress.dataset.overflow, undefined);
+        assert.equal(progress.dataset.overflowAvailable, undefined);
+        assert.equal(progress.dataset.layoutSignature, undefined);
+        assert.equal(contentFitRefreshes.length, 0, JSON.stringify(contentFitRefreshes));
+        advance(259); assert.equal(contentFitRefreshes.length, 0, JSON.stringify(contentFitRefreshes));
+        advance(1);
+        assert.equal(contentFitRefreshes.at(-1).forceCollapsed, true);
+        """,
+        """
         move(40); advance(100); move(600); advance(100);
         assert.equal(revealed(), false); assert.equal(timers.size, 0);
         move(40, 20, {buttons: 1}); advance(200); assert.equal(revealed(), false);
         move(40, 20, {pointerType: 'touch'}); advance(200); assert.equal(revealed(), false);
         move(40); title.isConnected = false; advance(150); assert.equal(revealed(), false);
+        """,
+        """
+        move(40); advance(150); assert.equal(revealed(), true);
+        textRects = [rect(25, 14, 90, 31)]; invalidateNativeTitleReveal(); flushFrames();
+        advance(100); assert.equal(contentFitRefreshes.length, 0);
+        textRects = [rect(25, 14, 700, 31)]; invalidateNativeTitleReveal(); flushFrames();
+        advance(160); assert.equal(contentFitRefreshes.length, 0);
+        assert.equal(revealed(), true);
         """,
         """
         move(40); advance(150); assert.equal(revealed(), true);
@@ -163,14 +209,14 @@ const revealLeft = () => Number.parseFloat(panel.style.left);
         textRects = [rect(25, 14, 700, 31)]; invalidateNativeTitleReveal(); flushFrames();
         advance(150); assert.equal(revealed(), true);
         resetNativeTitleReveal(); advance(200); assert.equal(revealed(), false);
-        move(40); assert.equal(timers.size, 1);
+        move(40); assert.equal(timers.size, 2);
         ctx.teardown.run(); advance(200); assert.equal(revealed(), false);
         assert.equal(timers.size, 0); assert.equal(frames.size, 0);
         assert.equal(document.listeners.get('pointermove').length, 0);
         assert.equal(nativeTitleRevealObserver.nodes.length, 0);
         """,
     ],
-    ids=["short-title", "native-clipping", "hover-and-restore", "cancel-and-drag", "overlays-and-focus", "invalidation-and-teardown", "content-fit-right-anchor"],
+    ids=["short-title", "native-clipping", "hover-and-restore", "cancel-and-drag", "overlays-and-focus", "restore-remeasure-cancel", "invalidation-and-teardown", "content-fit-right-anchor", "expanded-content-fit-right-anchor"],
 )
 def test_native_title_reveal_behavior(scenario: str) -> None:
     controller = GESTURES[GESTURES.index("      let nativeTitleRevealGeometry;"):]

@@ -238,6 +238,57 @@ for (const scale of [.8, 1, 1.25, 1.5, 2]) {
 ''', sync=True)
 
 
+def test_session_switch_remeasures_stale_marquee_after_slot_grows() -> None:
+    run_behavior(r'''
+const ctx = {lifecycle: {active: () => true}};
+const runtimeIsCurrent = () => true;
+const noop = () => {};
+const positionStartupBubble = noop, positionRestReminderBubble = noop;
+const applyPanelStates = noop, applyRuntimeErrorsPanelState = noop;
+const refreshLayoutObservers = noop, startBootstrapObserver = noop;
+const desktopChromeMissing = () => false;
+const desiredHeight = () => 36;
+const refreshAllMarquees = () => budgetDomain.refreshCollapsedProgressStrip(strip);
+document.getElementById = () => ({querySelector: () => panel});
+function applyRect(_panel, left, top, width, height) {
+  panel.rect = {left, top, width, height}; available = Math.max(1, width - 51);
+}
+
+railWidths = [160, 170, 170]; items = rails();
+slot = {left: 720, right: 951, width: 231};
+syncPosition(['top']);
+assert.equal(panel.rect.width, 231);
+assert.equal(strip.dataset.overflow, 'true');
+
+// A session switch can reveal a wider native title slot while the old short
+// marquee state is still attached to the same progress strip.
+slot = {left: 300, right: 951, width: 651};
+syncPosition(['top']);
+assert.equal(panel.rect.width, 565);
+assert.equal(panel.rect.left, 386);
+assert.equal(strip.dataset.overflow, undefined, JSON.stringify(strip.dataset));
+assert.equal(strip.dataset.overflowAvailable, undefined, JSON.stringify(strip.dataset));
+assert.equal(strip.dataset.layoutSignature, undefined, JSON.stringify(strip.dataset));
+assert.equal(panel.dataset.topContentScroll, undefined, JSON.stringify(panel.dataset));
+''', sync=True)
+
+
+def test_expanded_panel_remeasures_collapsed_strip_after_native_title_restore() -> None:
+    run_behavior(r'''
+panel.dataset.expanded = 'true';
+strip.dataset.overflow = 'true';
+strip.dataset.overflowAvailable = '180';
+strip.dataset.layoutSignature = '160,170,170|334';
+available = 600; railWidths = [160, 170, 170]; items = rails();
+refreshTopContentFit({forceCollapsed: true});
+assert.equal(panel.dataset.expanded, 'true');
+assert.equal(strip.dataset.overflow, undefined, JSON.stringify(strip.dataset));
+assert.equal(strip.dataset.overflowAvailable, undefined, JSON.stringify(strip.dataset));
+assert.equal(strip.dataset.layoutSignature, undefined, JSON.stringify(strip.dataset));
+assert.equal(panel.dataset.topContentScroll, undefined);
+''')
+
+
 def test_intrinsic_measurement_does_not_inherit_stretched_rail_width() -> None:
     run_behavior(r'''
 const copy = width => ({scrollWidth: width, getBoundingClientRect: () => ({width})});

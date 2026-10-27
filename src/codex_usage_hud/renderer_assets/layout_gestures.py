@@ -157,6 +157,7 @@ TEXT = r"""
       let nativeTitleRevealPanel = null;
       let nativeTitleRevealPointer = null;
       let nativeTitleRevealTimer = 0;
+      let nativeTitleContentFitTimer = 0;
       let nativeTitleRevealObserver = null;
       let nativeTitleRevealObserved = [];
       let nativeTitleRevealPanelStyle = null;
@@ -165,18 +166,57 @@ TEXT = r"""
       function restoreNativeTitleRevealPanelStyle() {
         const panel = nativeTitleRevealPanel;
         const style = nativeTitleRevealPanelStyle;
-        if (!panel || !style || !panel.style) return;
+        if (!panel || !style || !panel.style) return false;
         panel.style.width = style.width;
         panel.style.left = style.left;
         panel.style.right = style.right;
         nativeTitleRevealPanelStyle = null;
+        return true;
+      }
+
+      function clearNativeTitleProgressMarquee(panel) {
+        const strip = panel?.querySelector?.("[data-field='topCollapsedProgress']");
+        if (!strip) return;
+        delete strip.dataset.overflow;
+        delete strip.dataset.overflowAvailable;
+        delete strip.dataset.layoutSignature;
+        strip.style?.removeProperty?.("--codex-usage-hud-progress-strip-distance");
+        strip.style?.removeProperty?.("--codex-usage-hud-progress-strip-duration");
+        strip.style?.removeProperty?.("grid-template-columns");
+        strip.style?.removeProperty?.("width");
+        strip.style?.removeProperty?.("min-width");
+        strip.querySelectorAll?.(".codex-usage-hud-progress-rail").forEach((rail) => {
+          rail.style?.removeProperty?.("width");
+        });
+        delete panel.dataset.topContentScroll;
       }
 
       function clearNativeTitleReveal() {
         ctx.lifecycle.clearTimeout(nativeTitleRevealTimer);
         nativeTitleRevealTimer = 0;
-        restoreNativeTitleRevealPanelStyle();
-        nativeTitleRevealPanel?.removeAttribute("data-native-title-reveal");
+        ctx.lifecycle.clearTimeout(nativeTitleContentFitTimer);
+        nativeTitleContentFitTimer = 0;
+        const panel = nativeTitleRevealPanel;
+        const restored = restoreNativeTitleRevealPanelStyle();
+        panel?.removeAttribute("data-native-title-reveal");
+        if (restored && panel?.dataset.panel === "top") {
+          clearNativeTitleProgressMarquee(panel);
+        }
+        if (restored && panel?.dataset.panel === "top"
+          && typeof refreshTopContentFit === "function") {
+          // Wait for the width/left transition to settle before measuring the
+          // collapsed strip; an intermediate width can create a short marquee.
+          nativeTitleContentFitTimer = ctx.lifecycle.timeout(
+            "native_title_restore",
+            () => {
+              nativeTitleContentFitTimer = 0;
+              if (panel.isConnected && typeof refreshTopContentFit === "function") {
+                refreshTopContentFit({ forceCollapsed: true });
+              }
+            },
+            260,
+          );
+        }
         nativeTitleRevealPanel = null;
       }
 
@@ -279,31 +319,42 @@ TEXT = r"""
         return { title, panel, textRects, cover, minWidth };
       }
 
+      function nativeTitleCollapsedContentWidth(geometry) {
+        const panel = geometry.panel;
+        const wasExpanded = panel?.dataset?.expanded === "true";
+        if (wasExpanded) panel.dataset.expanded = "false";
+        try {
+          const collapsed = panel.querySelector?.(".codex-usage-hud-collapsed");
+          const collapsedStyle = collapsed ? getComputedStyle(collapsed) : null;
+          const settings = panel.querySelector?.(".codex-usage-hud-settings-button");
+          const leftControls = panel.querySelector?.(".codex-usage-hud-left-controls");
+          const progress = panel.querySelector?.("[data-field='topCollapsedProgress']");
+          const layout = progress && typeof budgetDomain !== "undefined"
+            ? budgetDomain.measureCollapsedProgressStrip(progress)
+            : null;
+          const measuredProgressWidth = Number(layout?.required || 0);
+          const intrinsicMainWidth = measuredProgressWidth > 0
+            ? measuredProgressWidth
+            : Math.max(Number(progress?.scrollWidth || 0), 1);
+          const padding = (parseFloat(collapsedStyle?.paddingLeft) || 0)
+            + (parseFloat(collapsedStyle?.paddingRight) || 0);
+          const gap = parseFloat(collapsedStyle?.columnGap || collapsedStyle?.gap) || 0;
+          return Math.ceil(
+            padding
+            + (leftControls?.getBoundingClientRect?.().width || 0)
+            + intrinsicMainWidth
+            + (settings?.getBoundingClientRect?.().width || geometry.minWidth)
+            + (gap * 2),
+          );
+        } finally {
+          if (wasExpanded) panel.dataset.expanded = "true";
+        }
+      }
+
       function nativeTitleRevealTarget(geometry) {
         const textRight = Math.max(...geometry.textRects.map((rect) => rect.right));
         const minimumLeft = geometry.cover.right - geometry.minWidth;
-        const collapsed = geometry.panel.querySelector?.(".codex-usage-hud-collapsed");
-        const collapsedStyle = collapsed ? getComputedStyle(collapsed) : null;
-        const settings = geometry.panel.querySelector?.(".codex-usage-hud-settings-button");
-        const leftControls = geometry.panel.querySelector?.(".codex-usage-hud-left-controls");
-        const progress = geometry.panel.querySelector?.("[data-field='topCollapsedProgress']");
-        const layout = progress && typeof budgetDomain !== "undefined"
-          ? budgetDomain.measureCollapsedProgressStrip(progress)
-          : null;
-        const measuredProgressWidth = Number(layout?.required || 0);
-        const intrinsicMainWidth = measuredProgressWidth > 0
-          ? measuredProgressWidth
-          : Math.max(Number(progress?.scrollWidth || 0), 1);
-        const padding = (parseFloat(collapsedStyle?.paddingLeft) || 0)
-          + (parseFloat(collapsedStyle?.paddingRight) || 0);
-        const gap = parseFloat(collapsedStyle?.columnGap || collapsedStyle?.gap) || 0;
-        const contentWidth = Math.ceil(
-          padding
-          + (leftControls?.getBoundingClientRect?.().width || 0)
-          + intrinsicMainWidth
-          + (settings?.getBoundingClientRect?.().width || geometry.minWidth)
-          + (gap * 2),
-        );
+        const contentWidth = nativeTitleCollapsedContentWidth(geometry);
         const contentFitLeft = geometry.cover.right - Math.max(geometry.minWidth, contentWidth);
         const left = Math.min(
           minimumLeft,
@@ -318,6 +369,8 @@ TEXT = r"""
       function applyNativeTitleReveal(geometry) {
         const panel = geometry.panel;
         if (!panel?.style) return;
+        ctx.lifecycle.clearTimeout(nativeTitleContentFitTimer);
+        nativeTitleContentFitTimer = 0;
         const target = nativeTitleRevealTarget(geometry);
         nativeTitleRevealPanelStyle = {
           width: panel.style.width,

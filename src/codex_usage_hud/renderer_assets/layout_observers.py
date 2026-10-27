@@ -70,35 +70,60 @@ TEXT = r"""
         startBootstrapObserver();
       }
 
-      function refreshTopContentFit({ refreshProgress = true } = {}) {
+      function refreshTopContentFit({ refreshProgress = true, forceCollapsed = false } = {}) {
         const panel = document.querySelector(`#${rootId} [data-panel="top"]`);
-        if (!panel || panel.dataset.expanded === "true") return;
-        const layout = budgetDomain.measureCollapsedProgressStrip(
-          panel.querySelector('[data-field="topCollapsedProgress"]'),
-        );
-        if (layout?.clipped) panel.dataset.topContentScroll = "true";
-        else delete panel.dataset.topContentScroll;
-        if (refreshProgress) {
-          budgetDomain.refreshCollapsedProgressStrip(panel.querySelector('[data-field="topCollapsedProgress"]'));
-        }
-        const state = typeof getPanelState === "function" ? getPanelState("top") : null;
-        if (
-          !state?.manual
-          && typeof fitTopContentRect === "function"
-          && typeof topAnchor === "function"
-          && typeof applyRect === "function"
-        ) {
-          const rect = panel.getBoundingClientRect?.();
-          const anchor = fitTopContentRect(
-            panel,
-            topAnchor(rect?.height || PANEL.top.collapsedHeight),
-          );
-          if (rect && anchor && (
-            Math.abs((rect.left || 0) - anchor.left) > 1
-            || Math.abs((rect.width || 0) - anchor.width) > 1
-          )) {
-            applyRect(panel, anchor.left, rect.top, anchor.width, rect.height);
+        if (!panel) return;
+        const wasExpanded = panel.dataset.expanded === "true";
+        if (wasExpanded && !forceCollapsed) return;
+        if (wasExpanded) panel.dataset.expanded = "false";
+        try {
+          const strip = panel.querySelector('[data-field="topCollapsedProgress"]');
+          const layout = budgetDomain.measureCollapsedProgressStrip(strip);
+          if (layout?.clipped) panel.dataset.topContentScroll = "true";
+          else delete panel.dataset.topContentScroll;
+          if (refreshProgress) budgetDomain.refreshCollapsedProgressStrip(strip);
+          const resetOverflowSnapshot = () => {
+            if (!strip) return null;
+            delete strip.dataset.overflow;
+            delete strip.dataset.overflowAvailable;
+            delete strip.dataset.layoutSignature;
+            budgetDomain.refreshCollapsedProgressStrip(strip);
+            return budgetDomain.measureCollapsedProgressStrip(strip);
+          };
+          if (strip && layout && !layout.clipped && strip.dataset.overflow === "true") {
+            const settledLayout = resetOverflowSnapshot();
+            if (settledLayout?.clipped) panel.dataset.topContentScroll = "true";
+            else delete panel.dataset.topContentScroll;
           }
+          if (wasExpanded) return;
+          const state = typeof getPanelState === "function" ? getPanelState("top") : null;
+          if (
+            !state?.manual
+            && typeof fitTopContentRect === "function"
+            && typeof topAnchor === "function"
+            && typeof applyRect === "function"
+          ) {
+            const rect = panel.getBoundingClientRect?.();
+            const anchor = fitTopContentRect(
+              panel,
+              topAnchor(rect?.height || PANEL.top.collapsedHeight),
+            );
+            if (rect && anchor && (
+              Math.abs((rect.left || 0) - anchor.left) > 1
+              || Math.abs((rect.width || 0) - anchor.width) > 1
+            )) {
+              applyRect(panel, anchor.left, rect.top, anchor.width, rect.height);
+              // The previous viewport can leave a short marquee snapshot after
+              // automatic geometry changes; remeasure from the settled width.
+              if (strip) {
+                const settledLayout = resetOverflowSnapshot();
+                if (settledLayout?.clipped) panel.dataset.topContentScroll = "true";
+                else delete panel.dataset.topContentScroll;
+              }
+            }
+          }
+        } finally {
+          if (wasExpanded) panel.dataset.expanded = "true";
         }
       }
 
