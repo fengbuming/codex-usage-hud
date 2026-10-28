@@ -222,7 +222,7 @@ for (const scale of [.8, 1, 1.25, 1.5, 2]) {
       syncPosition(['top']);
       const layout = budgetDomain.measureCollapsedProgressStrip(strip);
       assert.ok(!layout.clipped || strip.dataset.overflow === 'true', JSON.stringify({width, railWidths, layout}));
-      const requiredPanelWidth = Math.ceil(layout.required + 51);
+      const requiredPanelWidth = Math.ceil(layout.fitRequired + 51);
       const expectedWidth = Math.min(width, requiredPanelWidth);
       assert.ok(Math.abs(panel.rect.width - expectedWidth) <= 1, JSON.stringify({width, railWidths, layout, fit: collapsedTopContentWidth(panel, layout), expectedWidth, rect: panel.rect}));
       assert.equal(panel.rect.left + panel.rect.width, 951, JSON.stringify({width, railWidths, layout, expectedWidth, rect: panel.rect}));
@@ -310,6 +310,61 @@ assert.equal(items[2].style.width, undefined);
 assert.equal(strip.style.gridTemplateColumns, '180px minmax(0, 1fr) minmax(0, 1fr)');
 assert.equal(budgetDomain.measureCollapsedProgressStrip(strip).scrolling, false);
 ''')
+
+
+@pytest.mark.parametrize(
+    ("widths", "expected_panel_width"),
+    [([160, 120, 300], 825), ([160, 300, 120], 825), ([160, 150, 190], 605)],
+    ids=["long-week", "long-day", "small-tail-difference"],
+)
+def test_auto_width_fits_unequal_labels_in_equal_tail_columns(
+    widths: list[int], expected_panel_width: int,
+) -> None:
+    run_behavior(
+        "railWidths = " + str(widths) + ";\n" + r'''
+slot = {left: 100, right: 951, width: 851};
+const allocatedWidth = index => index === 0 ? railWidths[0]
+  : Math.max(0, (available - railWidths[0] - 14) / 2);
+items = railWidths.map((width, index) => ({
+  style: style(),
+  querySelector: selector => selector.includes('size-probe')
+    ? {scrollWidth: width - 2, getBoundingClientRect: () => ({width: width - 2})}
+    : {children: [{
+      scrollWidth: width - 22,
+      get clientWidth() {return Math.max(1, allocatedWidth(index) - 22)},
+      getBoundingClientRect: () => ({width: Math.max(1, allocatedWidth(index) - 22)}),
+    }]},
+}));
+// Summing the intrinsic widths leaves the longer equal-width tail clipped.
+available = budgetDomain.measureCollapsedProgressStrip(strip).required;
+const originalWidth = available + 51;
+panel.rect = {left: 951 - originalWidth, top: 15, width: originalWidth, height: 36};
+assert.equal(budgetDomain.measureCollapsedProgressStrip(strip).clipped, true);
+function applyRect(_panel, left, top, width, height) {
+  panel.rect = {left, top, width, height}; available = Math.max(1, width - 51);
+}
+refreshTopContentFit();
+assert.equal(panel.rect.width, EXPECTED_PANEL_WIDTH);
+assert.ok(panel.rect.width > originalWidth);
+assert.equal(panel.rect.left + panel.rect.width, 951);
+assert.equal(budgetDomain.measureCollapsedProgressStrip(strip).clipped, false);
+assert.equal(panel.dataset.topContentScroll, undefined);
+assert.equal(strip.dataset.overflow, undefined);
+assert.equal(items[0].style.width, `${railWidths[0]}px`);
+assert.equal(strip.style.gridTemplateColumns, `${railWidths[0]}px minmax(0, 1fr) minmax(0, 1fr)`);
+assert.equal(allocatedWidth(1), allocatedWidth(2));
+const settled = {...panel.rect};
+refreshTopContentFit();
+assert.deepEqual(panel.rect, settled);
+// A genuinely narrow native slot keeps the existing bounded overflow path.
+slot = {left: 720, right: 951, width: 231};
+refreshTopContentFit();
+assert.equal(panel.rect.width, 231);
+assert.equal(panel.rect.left, 720);
+assert.equal(panel.dataset.topContentScroll, 'true');
+assert.equal(strip.dataset.overflow, 'true');
+'''.replace("EXPECTED_PANEL_WIDTH", str(expected_panel_width)),
+    )
 
 
 def test_rendered_complete_labels_do_not_start_marquee_from_conservative_probe() -> None:

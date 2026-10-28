@@ -179,13 +179,19 @@ TEXT = r"""
     const remainingAfterSession = Math.max(0, available - widths[0] - (gap * Math.max(0, rails.length - 1)));
     const tailShare = remainingAfterSession / Math.max(1, rails.length - 1);
     const required = widths.reduce((sum, width) => sum + width, 0) + (gap * Math.max(0, rails.length - 1));
+    // Normal layout fixes the session rail and gives every tail rail the same
+    // share. A sum of unequal tail widths still clips the longest label. Keep
+    // the intrinsic sum for marquee distance, and size auto-fit for that grid.
+    const fitRequired = widths[0]
+      + (Math.max(0, ...widths.slice(1)) * (rails.length - 1))
+      + (gap * Math.max(0, rails.length - 1));
     const renderedClipped = rails.map(progressRailContentClipped);
     const renderedClippedKnown = renderedClipped.every((value) => value !== null);
     const clipped = renderedClippedKnown
       ? renderedClipped.some(Boolean)
       : required > available + 1;
     return {
-      rails, widths, available, required,
+      rails, widths, available, required, fitRequired,
       clipped,
       scrolling: rails.length > 1 && clipped && !(tailShare > collapsedTailPeekWidth),
     };

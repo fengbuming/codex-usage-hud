@@ -359,7 +359,7 @@ TEXT = r"""
         const line = main?.querySelector?.(
           ".codex-usage-hud-line-inner, .codex-usage-hud-line",
         );
-        const measuredProgressWidth = Number(layout?.required || 0);
+        const measuredProgressWidth = Number(layout?.fitRequired || layout?.required || 0);
         const intrinsicMainWidth = measuredProgressWidth > 0
           ? measuredProgressWidth
           : Math.max(
