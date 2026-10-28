@@ -889,6 +889,16 @@ class SessionIndexWarmJob:
                 self._trim_index_to_range(range_key)
         covered_fn = self._capability("indexed_session_ids")
         covered_ids = frozenset(covered_fn()) if callable(covered_fn) else frozenset()
+        stale_fn = self._capability("stale_session_ids")
+        if callable(stale_fn):
+            try:
+                # A changed rollout path (for example .jsonl -> .jsonl.zst)
+                # must be rebuilt even when its session id is already present.
+                covered_ids -= frozenset(stale_fn(candidates))
+            except Exception:
+                # Staleness is an optimisation; sync_batches still performs
+                # its own fingerprint check for the entries it receives.
+                pass
         pass_range = range_key
         target_bucket = range_candidates(
             list(candidates),

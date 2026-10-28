@@ -2521,6 +2521,31 @@ class BudgetHelperTests(unittest.TestCase):
         self.assertTrue(_active_session_switch_pending(context, snapshot))
 
 
+    def test_work_activity_freshness_ignores_later_session_metadata_event(self) -> None:
+        activity_at = datetime(2026, 8, 28, 10, 48, tzinfo=timezone.utc)
+        metadata_at = datetime(2026, 10, 27, 5, 34, tzinfo=timezone.utc)
+        snapshot = ParsedSession(
+            request=RequestTokens(updated_at=activity_at),
+            activity=Activity(timestamp=activity_at),
+            last_event_time=metadata_at,
+        )
+
+        self.assertEqual(
+            active_work._latest_work_activity_at(
+                snapshot,
+                now=datetime(2026, 10, 27, 6, 0, tzinfo=timezone.utc),
+            ),
+            activity_at,
+        )
+        self.assertIsNone(
+            active_work._work_item_from_snapshot(
+                snapshot,
+                current=True,
+                now=datetime(2026, 10, 27, 6, 0, tzinfo=timezone.utc),
+            )
+        )
+
+
     def test_active_work_items_filter_completed_subagent_sessions(self) -> None:
         """Parent user session stays running; completed subagents must not bubble."""
         parser = JsonlSessionParser()

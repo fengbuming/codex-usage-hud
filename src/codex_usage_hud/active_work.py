@@ -682,17 +682,19 @@ def _clear_terminal_item_task_for_new_segment(
 
 
 def _latest_work_activity_at(snapshot: ParsedSession, *, now: datetime) -> datetime:
-    # token 记账可能落后于继续输入；超时和气泡新鲜度必须使用最新活动时间。
+    # token 记账可能落后于继续输入；文件尾部也可能有设置等非工作事件。
+    # Prefer request/user-visible activity and use the raw event time only as a
+    # fallback, so metadata updates cannot revive a completed session bubble.
     candidates = (
         snapshot.request.updated_at,
         snapshot.activity.timestamp,
-        snapshot.last_event_time,
     )
-    return min(
+    activity_at = min(
         (value for value in candidates if value is not None),
         key=lambda value: _datetime_age_seconds(value, now),
-        default=snapshot.refreshed_at,
+        default=None,
     )
+    return activity_at or snapshot.last_event_time or snapshot.refreshed_at
 
 
 def _user_steer_is_current_runtime(

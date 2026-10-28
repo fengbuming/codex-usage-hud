@@ -47,7 +47,6 @@ let header = {left: 20, top: 8, width: 960, height: 50};
 let slot = {left: 500, right: 951, width: 451};
 const conversationHeaderElement = () => ({getBoundingClientRect: () => header});
 const topHeaderSlot = () => slot;
-const compactChatTitlebarSlot = (_header, slot) => slot;
 const layoutGeometryFrozen = () => false;
 const alignFittingManualTopRight = (_panel, _anchor, left) => left;
 const visible = () => true;

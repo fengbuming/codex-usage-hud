@@ -12,7 +12,9 @@ license = { text = "MIT" }
 authors = [
   { name = "codex-usage-hud contributors" },
 ]
-dependencies = []
+dependencies = [
+  "zstandard>=0.23",
+]
 keywords = [
   "Codex App token usage",
   "Codex usage tracker",

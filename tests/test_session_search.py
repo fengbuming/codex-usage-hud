@@ -10,6 +10,95 @@ from codex_usage_hud.core.session_search import SessionSearchIndex, parse_rollou
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 
 
+def _compress_zstd(payload: bytes) -> bytes:
+    try:
+        from compression import zstd
+    except ImportError:
+        import zstandard
+
+        return zstandard.ZstdCompressor().compress(payload)
+    return zstd.compress(payload)
+
+
+def test_compressed_rollout_is_searchable(tmp_path: Path) -> None:
+    rollout = tmp_path / "archived.jsonl.zst"
+    records = [
+        {
+            "type": "event_msg",
+            "payload": {
+                "type": "user_message",
+                "message": "compressed-user-marker",
+            },
+        },
+        {
+            "type": "response_item",
+            "payload": {
+                "type": "function_call_output",
+                "output": "compressed-tool-marker",
+            },
+        },
+    ]
+    rollout.write_bytes(
+        _compress_zstd(
+            ("\n".join(json.dumps(record) for record in records) + "\n").encode()
+        )
+    )
+
+    user, _assistant, tool, _paths = parse_rollout((rollout,))
+    assert "compressed-user-marker" in user
+    assert "compressed-tool-marker" in tool
+
+    index = SessionSearchIndex(tmp_path / "compressed.sqlite")
+    index.upsert("session", (rollout,))
+    assert index.search("compressed-user-marker")["matches"]
+    assert index.search("compressed-tool-marker")["matches"]
+
+    replacement = tmp_path / "archived-replacement.jsonl.zst"
+    replacement.write_bytes(rollout.read_bytes())
+    assert index.stale_session_ids(
+        (("session", (replacement,), "", "", "", ""),)
+    ) == frozenset({"session"})
+
+
+def test_compressed_rollout_repairs_pre_zstd_index_rows(tmp_path: Path) -> None:
+    import sqlite3
+
+    rollout = tmp_path / "legacy-archived.jsonl.zst"
+    rollout.write_bytes(
+        _compress_zstd(
+            (
+                json.dumps(
+                    {
+                        "type": "event_msg",
+                        "payload": {
+                            "type": "user_message",
+                            "message": "repaired-compressed-marker",
+                        },
+                    }
+                )
+                + "\n"
+            ).encode()
+        )
+    )
+    index = SessionSearchIndex(tmp_path / "legacy-compressed.sqlite")
+    index.upsert("session", (rollout,))
+    connection = sqlite3.connect(index.path)
+    fingerprints = session_search_module.rollout_fingerprints((rollout,))
+    connection.execute(
+        "UPDATE session_search_documents SET fingerprints=?, user_text=?",
+        (
+            json.dumps({"version": 2, "files": list(fingerprints)}),
+            "",
+        ),
+    )
+    connection.commit()
+    connection.close()
+
+    fresh = SessionSearchIndex(index.path)
+    assert fresh.load()["indexed"] == 1
+    assert fresh.search("repaired-compressed-marker")["matches"]
+
+
 def test_body_fields_exclude_hidden_instructions_and_reasoning(tmp_path: Path) -> None:
     rollout = tmp_path / "message-sources.jsonl"
     records = [

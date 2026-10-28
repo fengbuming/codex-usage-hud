@@ -132,6 +132,20 @@ class ProviderProxyRelay:
             def log_message(self, *_args):
                 pass
 
+            def _send_relay_failure(self, error):
+                detail = ("Codex HUD provider relay did not receive an upstream HTTP response.\n"
+                          f"{type(error).__name__}: {error}\n").encode("utf-8", errors="replace")
+                try:
+                    self.send_response_only(502, "Bad Gateway")
+                    self.send_header("Content-Type", "text/plain; charset=utf-8")
+                    self.send_header("Content-Length", str(len(detail)))
+                    self.send_header("Connection", "close")
+                    self.end_headers()
+                    self.wfile.write(detail)
+                    self.wfile.flush()
+                except OSError:
+                    pass
+
             def _forward(self):
                 path = urlsplit(self.path)
                 token, _, suffix = path.path.lstrip("/").partition("/")
@@ -146,7 +160,7 @@ class ProviderProxyRelay:
                 if query:
                     target += "?" + query
                 connection = None
-                started = False
+                upstream_response_received = False
                 try:
                     if route.get("enabled"):
                         cls = http.client.HTTPSConnection if upstream.scheme == "https" else http.client.HTTPConnection
@@ -206,11 +220,11 @@ class ProviderProxyRelay:
                         body = _rewrite_model(body, route.get("model"), route.get("models"))
                     connection.request(self.command, target or "/", body=body, headers=headers)
                     response = connection.getresponse()
+                    upstream_response_received = True
                     self.send_response_only(response.status, response.reason)
                     for key, value in response.getheaders():
                         if key.lower() not in _HOP_HEADERS | {"content-length"}:
                             self.send_header(key, value)
-                    started = True
                     if upgrade and response.status == 101:
                         self.send_header("Connection", "Upgrade")
                         self.send_header("Upgrade", "websocket")
@@ -239,9 +253,9 @@ class ProviderProxyRelay:
                             while data := response.read1(65536):
                                 self.wfile.write(data)
                                 self.wfile.flush()
-                except (OSError, ValueError, http.client.HTTPException):
-                    if not started:
-                        self.send_error(502, "Provider connection failed")
+                except (OSError, ValueError, http.client.HTTPException) as exc:
+                    if not upstream_response_received:
+                        self._send_relay_failure(exc)
                 finally:
                     self.close_connection = True
                     if connection is not None:

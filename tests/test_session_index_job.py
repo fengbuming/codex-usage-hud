@@ -85,6 +85,7 @@ class _FakeSearchIndex:
         self.ensure_scan_index_calls = 0
         self.load_calls = 0
         self.clear_calls = 0
+        self.stale_ids: set[str] = set()
         self._load_side_effect = load_side_effect
 
     def search_index_entries(self):
@@ -92,6 +93,10 @@ class _FakeSearchIndex:
 
     def indexed_session_ids(self) -> frozenset[str]:
         return frozenset(self._committed)
+
+    def stale_session_ids(self, entries) -> frozenset[str]:
+        del entries
+        return frozenset(self.stale_ids)
 
     def remove_missing(self, session_ids) -> None:
         # Mirror the real index: ``session_ids`` is the keep set, everything
@@ -249,6 +254,22 @@ def test_warm_job_builds_default_range_and_finishes(tmp_path: Path) -> None:
         assert status["builtCount"] == 3
         assert status["canExtend"] is True
         assert sorted(index.indexed_session_ids()) == ["a", "b", "c"]
+    finally:
+        job.close()
+
+
+def test_warm_job_rebuilds_indexed_sessions_with_changed_rollouts(
+    tmp_path: Path,
+) -> None:
+    entries = _make_entries(tmp_path, {"a": 5, "b": 10})
+    index = _FakeSearchIndex(entries)
+    index._committed = ["a"]
+    index.stale_ids = {"a"}
+    job = SessionIndexWarmJob(index, state_path=tmp_path / "warm.json")
+    try:
+        assert job.start("1m") is True
+        assert _wait_until(lambda: job.status()["jobState"] == "idle")
+        assert index.sync_calls == [["a", "b"]]
     finally:
         job.close()
 

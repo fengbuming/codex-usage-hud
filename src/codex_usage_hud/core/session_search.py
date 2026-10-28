@@ -10,9 +10,11 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from collections import defaultdict
+from contextlib import contextmanager
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 import hashlib
+import io
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -22,7 +24,7 @@ import sqlite3
 import sys
 from threading import RLock
 import time
-from typing import Callable
+from typing import Callable, TextIO
 
 
 # Rollouts can be several megabytes (especially after long tool outputs). Keep
@@ -163,7 +165,10 @@ _CJK_RUN_RE = re.compile(r"[\u4e00-\u9fff]")
 # value observed at write time; on load, documents whose stamp no longer
 # matches SQLite are rebuilt from their rows.
 _SNAPSHOT_VERSION = 5
-_EXTRACTION_VERSION = 2
+# Increment when the parser's interpretation changes. Existing rows are
+# re-extracted on the next background index open; this repairs indexes built
+# before compressed ``.jsonl.zst`` rollouts were readable.
+_EXTRACTION_VERSION = 3
 _SNAPSHOT_SUFFIX = ".memory"
 _SNAPSHOT_MIN_INTERVAL = 300.0
 # Entries below this count are parsed inline; larger batches (full builds)
@@ -628,8 +633,56 @@ def _path_variants(value: object) -> tuple[str, ...]:
     return tuple(dict.fromkeys(item for item in variants if item))
 
 
+@contextmanager
+def _open_rollout_text(path: Path) -> Iterator[TextIO]:
+    """Open plain or Codex-compressed rollout data as a text stream.
+
+    Codex moves older rollouts to ``.jsonl.zst`` files. Keep decompression
+    streaming so a large history does not require a second full-size buffer in
+    memory. Python 3.14 provides the stdlib implementation; the backport is
+    used on the older Python versions supported by the project.
+    """
+
+    if path.suffix.casefold() != ".zst":
+        with path.open("r", encoding="utf-8", errors="replace") as handle:
+            yield handle
+        return
+
+    try:
+        from compression import zstd as stdlib_zstd
+    except ImportError:
+        stdlib_zstd = None
+
+    if stdlib_zstd is not None:
+        with stdlib_zstd.open(
+            path,
+            "rt",
+            encoding="utf-8",
+            errors="replace",
+        ) as handle:
+            yield handle
+        return
+
+    try:
+        import zstandard
+    except ImportError as exc:
+        raise OSError(
+            "zstandard support is required to read Codex .jsonl.zst rollouts"
+        ) from exc
+
+    with path.open("rb") as compressed:
+        decompressed = zstandard.ZstdDecompressor().stream_reader(compressed)
+        with decompressed:
+            with io.TextIOWrapper(
+                decompressed,
+                encoding="utf-8",
+                errors="replace",
+            ) as handle:
+                yield handle
+
+
 def parse_rollout(paths: Sequence[Path]) -> tuple[str, str, str, tuple[str, ...]]:
-    """Read rollout JSONL files and extract bounded searchable fields."""
+    """Read plain or compressed rollout files and extract searchable fields."""
 
     user = _TextBucket()
     assistant = _TextBucket()
@@ -643,7 +696,7 @@ def parse_rollout(paths: Sequence[Path]) -> tuple[str, str, str, tuple[str, ...]
     budget = _PER_SESSION_BUDGET
     for path in paths:
         try:
-            with path.open("r", encoding="utf-8", errors="replace") as handle:
+            with _open_rollout_text(path) as handle:
                 for raw_line in handle:
                     if total >= MAX_DOCUMENT_CHARS or budget <= 0:
                         break
@@ -2194,6 +2247,28 @@ class SessionSearchIndex:
                 f"SELECT session_id FROM {_DOC_TABLE}"
             ).fetchall()
             return frozenset(str(row[0]) for row in rows)
+        finally:
+            connection.close()
+
+    def stale_session_ids(
+        self,
+        entries: Iterable[tuple[str, Sequence[Path], str, str, str, str]],
+    ) -> frozenset[str]:
+        """Return indexed sessions whose rollout fingerprints have changed.
+
+        Codex can move one session from ``.jsonl`` to ``.jsonl.zst`` without
+        changing its id. An id-only coverage check would then skip the session
+        forever, leaving the old document searchable while newer content is
+        absent. Reuse the same fingerprint comparison as incremental sync.
+        """
+
+        values = list(entries)
+        if not values:
+            return frozenset()
+        connection = self._connect()
+        try:
+            stale, _fresh = self._partition_stale(connection, values)
+            return frozenset(str(session_id) for session_id, _paths in stale)
         finally:
             connection.close()
 

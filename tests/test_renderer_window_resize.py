@@ -66,7 +66,7 @@ function footerGapSlot() { return {left: 350, right: chromeWidth - 150, rowTop: 
     # Exercise the real geometry, frame coalescing, settle timers and listener.
     geometry = ANCHORS[ANCHORS.index("      function minWidthFor"):ANCHORS.index("      function candidateHeaders")]
     top_anchor = ANCHORS[
-        ANCHORS.index("      function compactChatTitlebarSlot"):
+        ANCHORS.index("      function collapsedTopContentWidth"):
         ANCHORS.index("      function footerControlRects")
     ]
     request_anchor = ANCHORS[ANCHORS.index("      function requestAnchor"):]
@@ -292,7 +292,46 @@ assert.equal(scheduled.length, 1);
     assert result.returncode == 0, result.stderr
 
 
-def test_top_anchor_uses_chat_column_overlay_when_title_slot_is_too_narrow() -> None:
+def test_conversation_header_prefers_main_slot_and_keeps_legacy_fallback() -> None:
+    harness = r"""
+const assert = require('node:assert/strict');
+let cachedHeaderNode = null;
+const main = {isConnected: true}, shell = {isConnected: true};
+let mainSlot = main, surface = {
+  querySelector: () => mainSlot,
+  closest: () => shell,
+};
+const fallback = {isConnected: true};
+const anchorUsable = node => Boolean(node?.isConnected);
+const candidateHeaders = () => [fallback];
+const scoreHeader = () => 1;
+global.document = {querySelector: () => surface};
+"""
+    selection = ANCHORS[
+        ANCHORS.index("      function conversationHeaderElement"):
+        ANCHORS.index("      function conversationHeaderRect")
+    ]
+    checks = r"""
+assert.equal(conversationHeaderElement(), main);
+// A pane transition can replace the main slot without replacing the shell.
+main.isConnected = false;
+mainSlot = {isConnected: true};
+assert.equal(conversationHeaderElement(), mainSlot);
+// Older Desktop builds still use the surrounding native header.
+cachedHeaderNode = null; mainSlot = null;
+assert.equal(conversationHeaderElement(), shell);
+cachedHeaderNode = null; surface = null;
+assert.equal(conversationHeaderElement(), fallback);
+"""
+    result = subprocess.run(
+        ["node", "--input-type=commonjs", "-"],
+        input=harness + selection + checks, text=True, encoding="utf-8",
+        capture_output=True, timeout=10,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_three_column_top_anchor_keeps_the_native_menu_slot() -> None:
     harness = r"""
 const assert = require('node:assert/strict');
 global.innerWidth = 1280; global.innerHeight = 820;
@@ -309,10 +348,6 @@ const composerElement = () => composer;
 let naturalSlot = {left: 620, right: 654, width: 34};
 const topHeaderSlot = () => naturalSlot;
 """
-    compact_slot = ANCHORS[
-        ANCHORS.index("      function compactChatTitlebarSlot"):
-        ANCHORS.index("      function topAnchor")
-    ]
     top_anchor = ANCHORS[
         ANCHORS.index("      function topAnchor"):
         ANCHORS.index("      function footerControlRects")
@@ -320,28 +355,29 @@ const topHeaderSlot = () => naturalSlot;
     checks = r"""
 const anchor = topAnchor(36, null);
 assert.equal(anchor.source, 'header-slot');
-assert.equal(Math.round(anchor.left), 385);
-assert.equal(Math.round(anchor.width), 206);
-assert.equal(Math.round(anchor.area.right), 591);
+assert.equal(anchor.left, 620);
+assert.equal(anchor.width, 34);
+assert.equal(anchor.area.right, 654);
+assert.equal(anchor.overlayTitle, false);
 
-// Wider three-column layouts keep the same native-title and button reserves,
-// even when the ordinary title slot would otherwise fit the HUD.
+// Wider three-column layouts still use the titlebar menu, independently of
+// the composer width and its centered margins.
 composerRect.right = 940; composerRect.width = 633;
 headerRect.right = 957; headerRect.width = 666;
 naturalSlot = {left: 450, right: 930, width: 480};
 const wideThreeColumn = topAnchor(36, null);
-assert.equal(Math.round(wideThreeColumn.left), 387);
-assert.equal(Math.round(wideThreeColumn.width), 481);
-assert.equal(Math.round(wideThreeColumn.area.right), 868);
+assert.equal(wideThreeColumn.left, 450);
+assert.equal(wideThreeColumn.width, 480);
+assert.equal(wideThreeColumn.area.right, 930);
 
 // Divider drag updates both edges instead of reusing the previous width.
 composerRect.right = 902; composerRect.width = 595;
 headerRect.right = 919; headerRect.width = 628;
 naturalSlot = {left: 450, right: 900, width: 450};
 const resizedThreeColumn = topAnchor(36, null);
-assert.equal(Math.round(resizedThreeColumn.left), 387);
-assert.equal(Math.round(resizedThreeColumn.width), 443);
-assert.equal(Math.round(resizedThreeColumn.area.right), 830);
+assert.equal(resizedThreeColumn.left, 450);
+assert.equal(resizedThreeColumn.width, 450);
+assert.equal(resizedThreeColumn.area.right, 900);
 
 // Returning to a two-column viewport restores the normal title slot.
 composerRect.right = 1260; composerRect.width = 953;
@@ -360,10 +396,127 @@ assert.equal(centeredComposer.area.right, 1200);
 assert.equal(centeredComposer.width, 750);
 assert.equal(centeredComposer.overlayTitle, false);
 """
-    script = harness + compact_slot + top_anchor + checks
+    script = harness + top_anchor + checks
     result = subprocess.run(
         ["node", "--input-type=commonjs", "-"],
         input=script, text=True, encoding="utf-8", capture_output=True, timeout=15,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize("viewport_width", [900, 1366, 1920])
+@pytest.mark.parametrize("sidebar_width", [0, 251])
+@pytest.mark.parametrize("right_pane_width", [0, 300], ids=["two-column", "three-column"])
+def test_summary_and_side_pane_keep_top_hud_docked_to_main_header_menu(
+    viewport_width: int,
+    sidebar_width: int,
+    right_pane_width: int,
+) -> None:
+    harness = r"""
+const assert = require('node:assert/strict');
+global.innerWidth = VIEWPORT_WIDTH; global.innerHeight = 820;
+const rootId = 'hud';
+const normalize = value => String(value || '').replace(/\s+/g, ' ').trim();
+const clamp = (value, low, high) => Math.max(low, Math.min(high, value));
+const visible = node => Boolean(node);
+const PANEL = {top: {collapsedHeight: 36, fallbackWidth: 520}};
+const minWidthFor = (_name, expanded) => expanded ? 220 : 120;
+let topSlotCache = null;
+let cachedHeaderNode = null;
+const headerRect = {
+  left: SIDEBAR_WIDTH, right: innerWidth - 8 - RIGHT_PANE_WIDTH, top: 36, bottom: 88,
+  width: innerWidth - 8 - SIDEBAR_WIDTH - RIGHT_PANE_WIDTH, height: 52,
+};
+const composerRect = {left: headerRect.left + 36, right: headerRect.right - 36};
+const composerElement = () => ({getBoundingClientRect: () => composerRect});
+const title = {
+  getBoundingClientRect: () => ({
+    left: headerRect.left + 52, right: headerRect.left + 312,
+    top: 50, bottom: 72, width: 260, height: 22,
+  }),
+  closest: () => null, textContent: 'Conversation title',
+};
+const button = (label, rightOffset) => ({
+  getBoundingClientRect: () => ({
+    left: headerRect.right - rightOffset, right: headerRect.right - rightOffset + 28,
+    top: 46, bottom: 74, width: 28, height: 28,
+  }),
+  getAttribute: name => name === 'aria-label' ? label : null,
+  closest: () => null, querySelectorAll: () => [], textContent: '',
+});
+const moreButton = button('Chat actions', 96);
+const summaryButton = button('Toggle pinned summary', 62);
+const sidePanelButton = button('Open side panel', 28);
+const header = {
+  isConnected: true,
+  getBoundingClientRect: () => headerRect,
+  querySelectorAll: selector => selector.startsWith('button')
+    ? [moreButton, summaryButton, sidePanelButton] : [title],
+};
+// Desktop's shell spans every pane. Only its main slot owns this menu.
+const shell = {
+  getBoundingClientRect: () => ({...headerRect, right: innerWidth - 8}),
+};
+const surface = {
+  querySelector: selector => selector === '[data-app-shell-titlebar-slot="main"]' ? header : null,
+  closest: () => shell,
+};
+global.document = {querySelector: () => surface};
+const anchorUsable = node => Boolean(node?.isConnected);
+const collapsed = {}, strip = {};
+let requiredWidth = 514;
+const budgetDomain = {measureCollapsedProgressStrip: () => ({required: requiredWidth})};
+global.getComputedStyle = () => ({paddingLeft: '8px', paddingRight: '7px', columnGap: '6px'});
+const panel = {
+  dataset: {expanded: 'false'},
+  querySelector: selector => {
+    if (selector === '.codex-usage-hud-collapsed') return collapsed;
+    if (selector === '[data-field="topCollapsedProgress"]') return strip;
+    if (selector === '.codex-usage-hud-settings-button') {
+      return {getBoundingClientRect: () => ({width: 22})};
+    }
+    return null;
+  },
+};
+""".replace("VIEWPORT_WIDTH", str(viewport_width)).replace("SIDEBAR_WIDTH", str(sidebar_width)).replace("RIGHT_PANE_WIDTH", str(right_pane_width))
+    geometry = ANCHORS[
+        ANCHORS.index("      function conversationHeaderElement"):
+        ANCHORS.index("      function conversationHeaderRect")
+    ] + ANCHORS[
+        ANCHORS.index("      function headerLeftControlEdge"):
+        ANCHORS.index("      function footerControlRects")
+    ]
+    checks = r"""
+const menuRight = moreButton.getBoundingClientRect().left - 10;
+assert.equal(conversationHeaderElement(), header);
+const initialSlot = topTitlebarSlot(header, headerRect);
+// Opening, resizing, and closing the summary changes only the composer.
+for (const summaryWidth of [0, 300, 340, 220, 0, 300]) {
+  composerRect.right = headerRect.right - 36 - summaryWidth;
+  const slot = topTitlebarSlot(header, headerRect);
+  assert.equal(slot.left, initialSlot.left);
+  assert.equal(slot.right, menuRight);
+  for (const required of [120, 514, 1400]) {
+    requiredWidth = required;
+    const anchor = topAnchor(36);
+    assert.equal(anchor.area.right, menuRight);
+    assert.equal(anchor.overlayTitle, false);
+    const fitted = fitTopContentRect(panel, anchor);
+    assert.equal(fitted.left + fitted.width, menuRight);
+    assert.equal(fitted.width, Math.min(required + 51, slot.width));
+    assert.ok(fitted.left >= slot.left);
+  }
+  // Expansion and saved manual widths use the same native slot boundary.
+  assert.equal(topAnchor(390).area.right, menuRight);
+  const manual = topAnchor(36, 260);
+  assert.equal(manual.area.right, menuRight);
+  assert.equal(manual.width, Math.min(260, slot.width));
+}
+"""
+    result = subprocess.run(
+        ["node", "--input-type=commonjs", "-"],
+        input=harness + geometry + checks, text=True, encoding="utf-8",
+        capture_output=True, timeout=10,
     )
     assert result.returncode == 0, result.stderr
 

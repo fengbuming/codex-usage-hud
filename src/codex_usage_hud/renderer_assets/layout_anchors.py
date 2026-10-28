@@ -121,6 +121,13 @@ TEXT = r"""
         if (anchorUsable(cachedHeaderNode)) return cachedHeaderNode;
         cachedHeaderNode = null;
         const surface = document.querySelector('[data-testid="app-shell-header-context-menu-surface"]');
+        // The shell header can span the right-hand pane. Its main titlebar
+        // slot owns the conversation title and overflow menu in every layout.
+        const mainTitlebar = surface?.querySelector?.('[data-app-shell-titlebar-slot="main"]');
+        if (anchorUsable(mainTitlebar)) {
+          cachedHeaderNode = mainTitlebar;
+          return cachedHeaderNode;
+        }
         const surfaceHeader = surface?.closest?.("header.app-header-tint, header, .app-header-tint");
         if (anchorUsable(surfaceHeader)) {
           cachedHeaderNode = surfaceHeader;
@@ -338,35 +345,6 @@ TEXT = r"""
         return { left, right, width: Math.max(1, right - left) };
       }
 
-      function compactChatTitlebarSlot(header, slot, minWidth) {
-        if (!header || !slot) return slot;
-        const composerNode = composerElement();
-        const composer = visible(composerNode) ? composerNode.getBoundingClientRect() : null;
-        if (!composer) return slot;
-        // A centered max-width composer leaves space on both sides even in
-        // two-column mode. Only a shortened header or an asymmetric right
-        // reserve indicates an actual side pane.
-        const sidePaneReserve = Math.max(96, innerWidth * 0.08);
-        const headerHasSidePane = header.right < innerWidth - sidePaneReserve;
-        const leftInset = Math.max(0, composer.left - header.left);
-        const rightInset = Math.max(0, header.right - composer.right);
-        if (!headerHasSidePane && rightInset - leftInset <= sidePaneReserve) return slot;
-        const columnLeft = Math.max(header.left, composer.left);
-        const columnRight = Math.min(header.right, composer.right);
-        const columnWidth = columnRight - columnLeft;
-        if (columnWidth < minWidth) return slot;
-        const desiredLeftReserve = Math.min(80, Math.max(48, columnWidth * 0.22));
-        const desiredRightReserve = Math.min(72, Math.max(48, columnWidth * 0.20));
-        const reserveScale = Math.min(
-          1,
-          (columnWidth - minWidth) / (desiredLeftReserve + desiredRightReserve),
-        );
-        const left = columnLeft + (desiredLeftReserve * reserveScale);
-        const right = columnRight - (desiredRightReserve * reserveScale);
-        if (right - left < minWidth) return slot;
-        return { left, right, width: right - left, overlayTitle: true };
-      }
-
       function collapsedTopContentWidth(panel, layout = null) {
         if (!panel) return 0;
         const collapsed = panel.querySelector?.(".codex-usage-hud-collapsed");
@@ -428,8 +406,7 @@ TEXT = r"""
           const width = clamp(widthOverride || PANEL.top.fallbackWidth, minWidth, Math.max(minWidth, innerWidth - 16));
           return { left: innerWidth - width - 12, top: 12, width, height };
         }
-        let slot = topHeaderSlot(headerNode, header);
-        slot = compactChatTitlebarSlot(header, slot, minWidth);
+        const slot = topHeaderSlot(headerNode, header);
         const fitMinWidth = Math.min(minWidth, Math.max(1, slot.width));
         // The fallback width is only for the no-header path. Collapsed content
         // is fitted after the panel DOM has been rendered so its intrinsic

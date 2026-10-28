@@ -35,6 +35,15 @@ def upstream():
         def do_POST(self):
             body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
             calls.append((self.path, self.headers.get("Authorization"), body))
+            if self.path.endswith("upstream-502"):
+                error_body = b'{"error":{"message":"upstream overloaded","type":"server_error"}}'
+                self.send_response(502, "Upstream Busy")
+                self.send_header("Content-Type", "application/json")
+                self.send_header("x-request-id", "req-upstream-123")
+                self.send_header("Content-Length", str(len(error_body)))
+                self.end_headers()
+                self.wfile.write(error_body)
+                return
             self.send_response(429 if self.path.endswith("error") else 200)
             self.send_header("Content-Type", "text/event-stream")
             self.send_header("Transfer-Encoding", "chunked")
@@ -91,6 +100,32 @@ def test_routing_and_streaming_preserve_body_auth_query_and_errors(relay, upstre
     client.request("POST", endpoint.path + "/error", b"")
     assert client.getresponse().status == 429
     client.close()
+    client = http.client.HTTPConnection(endpoint.hostname, endpoint.port, timeout=3)
+    client.request("POST", endpoint.path + "/upstream-502", b"")
+    response = client.getresponse()
+    assert response.status == 502
+    assert response.reason == "Upstream Busy"
+    assert response.getheader("Content-Type") == "application/json"
+    assert response.getheader("x-request-id") == "req-upstream-123"
+    assert response.read() == b'{"error":{"message":"upstream overloaded","type":"server_error"}}'
+    client.close()
+
+
+def test_connection_failure_identifies_local_relay_and_preserves_exception(relay, tmp_path):
+    endpoint = urlsplit(relay.route({
+        "base_url": "http://127.0.0.1:1/v1",
+        "enabled": False,
+    }, tmp_path / "config.toml"))
+    client = http.client.HTTPConnection(endpoint.hostname, endpoint.port, timeout=3)
+    client.request("POST", endpoint.path + "/responses", b"{}")
+    response = client.getresponse()
+    body = response.read().decode("utf-8")
+    client.close()
+
+    assert response.status == 502
+    assert response.getheader("Content-Type") == "text/plain; charset=utf-8"
+    assert "Codex HUD provider relay did not receive an upstream HTTP response." in body
+    assert "ConnectionRefusedError" in body
 
 
 def test_rewrite_model_changes_unknown_fallback_but_preserves_configured_models():
