@@ -1,5 +1,6 @@
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import http.client
+import json
 import socket
 import ssl
 from threading import Event, Thread
@@ -126,6 +127,71 @@ def test_connection_failure_identifies_local_relay_and_preserves_exception(relay
     assert response.getheader("Content-Type") == "text/plain; charset=utf-8"
     assert "Codex HUD provider relay did not receive an upstream HTTP response." in body
     assert "ConnectionRefusedError" in body
+
+
+def test_relay_reports_known_source_signature_by_codex_thread_metadata(relay, tmp_path):
+    received = []
+    source_evidence = []
+
+    class Handler(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def log_message(self, *_args):
+            pass
+
+        def do_POST(self):
+            body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
+            received.append((self.headers.get("x-codex-turn-metadata"), body))
+            self.send_response(200)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    thread_id = "30000000-0000-4000-8000-000000000001"
+    listener = relay.add_source_evidence_listener(
+        lambda observed_thread, feature: source_evidence.append(
+            (observed_thread, feature)
+        )
+    )
+    try:
+        endpoint = urlsplit(
+            relay.route(
+                {"base_url": f"http://127.0.0.1:{server.server_port}/v1"},
+                tmp_path / "config.toml",
+            )
+        )
+        body = json.dumps(
+            {
+                "instructions": "Memory Writing Agent: Phase 2 (Consolidation)",
+                "input": [{"role": "user", "content": "Private task text"}],
+            }
+        ).encode("utf-8")
+        client = http.client.HTTPConnection(endpoint.hostname, endpoint.port, timeout=3)
+        client.request(
+            "POST",
+            endpoint.path + "/responses",
+            body,
+            {"x-codex-turn-metadata": json.dumps({"thread_id": thread_id})},
+        )
+        response = client.getresponse()
+        assert response.status == 200
+        response.read()
+        client.close()
+
+        assert source_evidence == [(thread_id, "memory_consolidation")]
+        assert received == [
+            (
+                json.dumps({"thread_id": thread_id}),
+                body,
+            )
+        ]
+    finally:
+        relay.remove_source_evidence_listener(listener)
+        server.shutdown()
+        server.server_close()
+        thread.join(2)
 
 
 def test_rewrite_model_changes_unknown_fallback_but_preserves_configured_models():

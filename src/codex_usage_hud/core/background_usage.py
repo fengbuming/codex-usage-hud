@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from contextlib import closing
 import json
+import os
 import re
 import sqlite3
 from pathlib import Path
@@ -21,7 +22,8 @@ DEFAULT_IMPORT_DAYS = 30
 DEFAULT_GRACE_SECONDS = 8.0
 UNKNOWN_FEATURE_KEY = "unknown"
 UNKNOWN_FEATURE_LABEL = "未知后台任务"
-BACKGROUND_USAGE_SCHEMA_VERSION = 3
+BACKGROUND_USAGE_SCHEMA_VERSION = 4
+PROVIDER_PROMPT_EVIDENCE_SOURCE = "provider_prompt_signature"
 REQUEST_SPLIT_REPAIR_METADATA_KEY = "request_split_repair_v1"
 TITLE_DESCRIPTION_FEATURE_KEY = "title_description"
 TASK_CATCH_UP_FEATURE_KEY = "task_catch_up"
@@ -200,6 +202,48 @@ def classify_background_feature(prompt: str) -> BackgroundFeature:
     return BackgroundFeature(UNKNOWN_FEATURE_KEY, UNKNOWN_FEATURE_LABEL, "")
 
 
+def classify_background_request_body(body: object) -> BackgroundFeature:
+    """Recognize known task signatures in memory without retaining request text."""
+    try:
+        payload = json.loads(body or b"")
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return BackgroundFeature(UNKNOWN_FEATURE_KEY, UNKNOWN_FEATURE_LABEL, "")
+
+    text_values: list[str] = []
+
+    def collect(value: object) -> None:
+        if isinstance(value, str):
+            text_values.append(value)
+        elif isinstance(value, list):
+            for item in value:
+                collect(item)
+        elif isinstance(value, dict):
+            for key in ("instructions", "input", "messages", "content", "text", "prompt"):
+                if key in value:
+                    collect(value[key])
+
+    if isinstance(payload, dict):
+        collect(payload.get("instructions"))
+        request_input = payload.get("input", payload.get("messages"))
+        if isinstance(request_input, list):
+            for item in request_input[-3:]:
+                collect(item)
+        else:
+            collect(request_input)
+        if not text_values:
+            collect(payload.get("prompt"))
+    else:
+        collect(payload)
+    matches = {
+        feature.key: feature
+        for text in text_values
+        if (feature := classify_background_feature(text)).key != UNKNOWN_FEATURE_KEY
+    }
+    return next(iter(matches.values())) if len(matches) == 1 else BackgroundFeature(
+        UNKNOWN_FEATURE_KEY, UNKNOWN_FEATURE_LABEL, ""
+    )
+
+
 def decode_submission_prompt(body: object) -> str:
     """Decode the first Rust-debug Text value using JSON string semantics."""
     text = str(body or "")
@@ -351,6 +395,43 @@ def _workdir_available(value: object) -> bool:
         return False
 
 
+def _background_source_hint(cwd: object, *, codex_home: Path | None = None) -> str:
+    """Return a non-authoritative source hint for known Codex-owned workdirs."""
+    raw_cwd = str(cwd or "").strip()
+    configured_home = os.environ.get("CODEX_HOME", "").strip()
+    root = codex_home or (
+        Path(configured_home).expanduser()
+        if configured_home
+        else Path.home() / ".codex"
+    )
+
+    def normalized(value: object) -> str:
+        raw = str(value or "").strip()
+        if not raw:
+            return ""
+        expanded = os.path.expanduser(raw)
+        if not os.path.isabs(expanded):
+            return ""
+        try:
+            result = os.path.normcase(
+                os.path.normpath(os.path.abspath(expanded))
+            )
+        except (OSError, ValueError):
+            return ""
+        if os.name == "nt" and result.startswith("\\\\?\\"):
+            result = result[4:]
+        return result
+
+    cwd_key = normalized(raw_cwd)
+    if not cwd_key:
+        return ""
+    memory_roots = {
+        normalized(root / "memories"),
+        normalized(root / "memories_v2"),
+    }
+    return "codex_memory_workdir" if cwd_key in memory_roots else ""
+
+
 def _today_start_timestamp(now: datetime | None = None) -> int:
     current = (now or datetime.now().astimezone()).astimezone()
     return int(current.replace(hour=0, minute=0, second=0, microsecond=0).timestamp())
@@ -460,6 +541,12 @@ class BackgroundUsageStore:
                     app_evidence TEXT NOT NULL,
                     last_seen_at INTEGER NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS background_source_evidence (
+                    thread_id TEXT PRIMARY KEY,
+                    feature_key TEXT NOT NULL,
+                    evidence_source TEXT NOT NULL,
+                    observed_at INTEGER NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS background_events (
                     event_id TEXT PRIMARY KEY,
                     thread_id TEXT NOT NULL UNIQUE,
@@ -542,9 +629,11 @@ class BackgroundUsageStore:
                     ON background_requests(event_id, source_log_id);
                 CREATE INDEX IF NOT EXISTS idx_background_requests_model
                     ON background_requests(model, occurred_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_background_source_evidence_feature
+                    ON background_source_evidence(feature_key, observed_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_background_recalculations_time
                     ON background_recalculations(recalculated_at DESC);
-                INSERT OR IGNORE INTO metadata(key, value) VALUES('schema_version', '3');
+                INSERT OR IGNORE INTO metadata(key, value) VALUES('schema_version', '4');
                 INSERT OR IGNORE INTO metadata(key, value) VALUES('revision', '0');
                 """
             )
@@ -648,6 +737,56 @@ class BackgroundUsageStore:
             """
         )
 
+    def record_source_evidence(
+        self,
+        thread_id: object,
+        feature_key: object,
+        *,
+        observed_at: int | None = None,
+    ) -> bool:
+        normalized_thread = valid_background_event_id(thread_id).lower()
+        normalized_feature = str(feature_key or "").strip()
+        if (
+            not normalized_thread
+            or normalized_feature not in BACKGROUND_FEATURE_LABELS
+            or normalized_feature == UNKNOWN_FEATURE_KEY
+        ):
+            return False
+        timestamp = max(0, int(observed_at if observed_at is not None else time.time()))
+        with closing(self._connect()) as connection, connection:
+            existing = connection.execute(
+                "SELECT feature_key, evidence_source FROM background_source_evidence WHERE thread_id=?",
+                (normalized_thread,),
+            ).fetchone()
+            if existing is not None:
+                if str(existing["evidence_source"] or "") == "conflict":
+                    return False
+                if (
+                    str(existing["feature_key"] or "") == normalized_feature
+                    and str(existing["evidence_source"] or "")
+                    == PROVIDER_PROMPT_EVIDENCE_SOURCE
+                ):
+                    return False
+                connection.execute(
+                    "UPDATE background_source_evidence SET feature_key='', evidence_source='conflict', observed_at=? WHERE thread_id=?",
+                    (timestamp, normalized_thread),
+                )
+                return True
+            connection.execute(
+                """
+                INSERT INTO background_source_evidence(
+                    thread_id, feature_key, evidence_source, observed_at
+                ) VALUES(?, ?, ?, ?)
+                """,
+                (
+                    normalized_thread,
+                    normalized_feature,
+                    PROVIDER_PROMPT_EVIDENCE_SOURCE,
+                    timestamp,
+                ),
+            )
+        return True
+
     def confirm(
         self,
         event_id: object,
@@ -669,7 +808,7 @@ class BackgroundUsageStore:
                     """
                     UPDATE background_events SET confirmed_at=?
                     WHERE related_session_id=?
-                      AND classification_state='background'
+                      AND classification_state IN ('background', 'source_pending')
                       AND confirmed_at IS NULL
                     """,
                     (confirmed_at, related_session_id),
@@ -678,7 +817,8 @@ class BackgroundUsageStore:
                 cursor = connection.execute(
                     """
                     UPDATE background_events SET confirmed_at=?
-                    WHERE event_id=? AND classification_state='background'
+                    WHERE event_id=?
+                      AND classification_state IN ('background', 'source_pending')
                       AND confirmed_at IS NULL
                     """,
                     (confirmed_at, normalized),
@@ -1011,6 +1151,11 @@ class BackgroundUsageStore:
             "featureEnLabel": background_feature_en_label(row["feature_key"]),
             "featurePurpose": background_feature_purpose(row["feature_key"]),
             "cwd": cwd,
+            "sourceHint": (
+                _background_source_hint(cwd)
+                if str(row["classification_state"] or "") == "source_pending"
+                else ""
+            ),
             "workdirAvailable": _workdir_available(cwd),
             "workdirAssociation": workdir_association,
             "endpoint": str(row["endpoint"] or ""),
@@ -1802,16 +1947,60 @@ class BackgroundUsageScanner:
                 "SELECT process_uuid, app_evidence FROM process_evidence"
             )
         }
+        source_features: dict[str, str] = {}
+        source_conflicts: set[str] = set()
+        for source_row in connection.execute(
+            "SELECT thread_id, feature_key, evidence_source FROM background_source_evidence"
+        ):
+            source_thread = str(source_row["thread_id"] or "")
+            source_kind = str(source_row["evidence_source"] or "")
+            if source_kind == "conflict":
+                source_conflicts.add(source_thread)
+            elif source_kind == PROVIDER_PROMPT_EVIDENCE_SOURCE:
+                source_features[source_thread] = str(source_row["feature_key"] or "")
         for row in rows:
             thread_id = str(row["thread_id"])
             current_state = str(row["classification_state"] or "pending")
             current_attribution = str(row["app_attribution"] or "")
             feature_key = str(row["feature_key"] or UNKNOWN_FEATURE_KEY)
             prompt = str(row["prompt"] or "")
+            feature_attribution = (
+                PROVIDER_PROMPT_EVIDENCE_SOURCE
+                if source_features.get(thread_id) == feature_key
+                else "feature_signature"
+            )
+            direct_feature = classify_background_feature(prompt) if prompt else None
+            if (
+                thread_id in source_conflicts
+                and current_attribution == PROVIDER_PROMPT_EVIDENCE_SOURCE
+                and (direct_feature is None or direct_feature.key == UNKNOWN_FEATURE_KEY)
+            ):
+                feature_key = UNKNOWN_FEATURE_KEY
+                connection.execute(
+                    "UPDATE background_events SET feature_key=?, feature_label=? WHERE event_id=?",
+                    (UNKNOWN_FEATURE_KEY, UNKNOWN_FEATURE_LABEL, str(row["event_id"])),
+                )
+                changed = True
             if feature_key == UNKNOWN_FEATURE_KEY:
-                repaired_feature = classify_background_feature(prompt)
+                repaired_feature = direct_feature or BackgroundFeature(
+                    UNKNOWN_FEATURE_KEY, UNKNOWN_FEATURE_LABEL, ""
+                )
+                if repaired_feature.key == UNKNOWN_FEATURE_KEY:
+                    source_feature_key = source_features.get(thread_id, "")
+                    if (
+                        source_feature_key
+                        and thread_id not in visible
+                        and thread_id not in child_threads
+                        and thread_id not in (user_turn_threads or set())
+                    ):
+                        repaired_feature = BackgroundFeature(
+                            source_feature_key,
+                            background_feature_label(source_feature_key),
+                            PROVIDER_PROMPT_EVIDENCE_SOURCE,
+                        )
                 if repaired_feature.key != UNKNOWN_FEATURE_KEY:
                     feature_key = repaired_feature.key
+                    feature_attribution = repaired_feature.attribution
                     connection.execute(
                         """
                         UPDATE background_events
@@ -1839,7 +2028,7 @@ class BackgroundUsageScanner:
                 pid_match = _PROCESS_PID_RE.match(process_uuid)
                 pid = int(pid_match.group(1)) if pid_match is not None else 0
                 if feature_key != UNKNOWN_FEATURE_KEY:
-                    next_attribution = "feature_signature"
+                    next_attribution = feature_attribution
                 elif process_uuid in process_evidence:
                     next_attribution = process_evidence[process_uuid]
                 elif pid in self.app_process_ids:
@@ -1930,6 +2119,7 @@ __all__ = [
     "background_feature_label",
     "background_feature_purpose",
     "classify_background_feature",
+    "classify_background_request_body",
     "decode_request_context",
     "decode_request_evidence",
     "decode_submission_prompt",

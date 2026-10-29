@@ -253,8 +253,11 @@ TEXT = r"""
           ? `${detailLabel}（${detailEnLabel}）`
           : detailLabel;
         const sourcePending = detail?.classificationState === "source_pending";
+        const sourceHint = String(detail?.sourceHint || "");
         const detailSubText = sourcePending
-          ? "已记录请求用量；当前日志缺少可确认具体后台功能的来源特征。"
+          ? sourceHint === "codex_memory_workdir"
+            ? "运行目录命中本机 Codex 记忆目录，较可能是记忆后台任务；原始任务标签缺失，仍待确认。"
+            : "已记录请求用量；当前日志缺少可确认具体后台功能的来源特征。"
           : detailPurpose
           ? `由 Codex App 官方 agent 工具在后台发起的请求 · 官方作用：${detailPurpose}`
           : "由 Codex App 官方 agent 工具在后台发起的请求";

@@ -6,6 +6,7 @@ from collections.abc import Callable, Iterable, Mapping
 from datetime import datetime
 import logging
 from pathlib import Path
+from queue import Empty, SimpleQueue
 import threading
 import time
 from typing import Any
@@ -67,6 +68,9 @@ class BackgroundUsageRuntime:
         self._wake = threading.Event()
         self._closed = threading.Event()
         self._idle = threading.Event()
+        self._source_evidence_queue: SimpleQueue[tuple[str, str]] = SimpleQueue()
+        self._provider_proxy: object | None = None
+        self._provider_proxy_listener_token = ""
         self._watcher = watcher_factory(
             self._on_source_changed,
             fallback_poll_seconds=BACKGROUND_USAGE_WATCHER_FALLBACK_SECONDS,
@@ -83,6 +87,7 @@ class BackgroundUsageRuntime:
         if self._started:
             return self
         self._started = True
+        self._connect_provider_proxy_source_evidence()
         self._worker.start()
         self._watcher.update(
             [
@@ -187,6 +192,7 @@ class BackgroundUsageRuntime:
         if self._closed.is_set():
             return not self._worker.is_alive()
         self._closed.set()
+        self._disconnect_provider_proxy_source_evidence()
         self._wake.set()
         try:
             self._watcher.close()
@@ -214,6 +220,7 @@ class BackgroundUsageRuntime:
             elif pending_deadline is None:
                 continue
             try:
+                self._flush_source_evidence()
                 with self._scanner_lock:
                     result = self._scanner.scan()
                 pending_deadline = result.pending_deadline
@@ -231,6 +238,49 @@ class BackgroundUsageRuntime:
                 _LOGGER.exception("background_usage_scan_failed")
             finally:
                 self._idle.set()
+
+    def _connect_provider_proxy_source_evidence(self) -> None:
+        try:
+            from .provider_proxy import provider_proxy_relay
+
+            self._provider_proxy = provider_proxy_relay
+            self._provider_proxy_listener_token = (
+                provider_proxy_relay.add_source_evidence_listener(
+                    self.submit_source_evidence
+                )
+            )
+        except Exception:
+            self._provider_proxy = None
+            self._provider_proxy_listener_token = ""
+
+    def _disconnect_provider_proxy_source_evidence(self) -> None:
+        relay = self._provider_proxy
+        token = self._provider_proxy_listener_token
+        self._provider_proxy = None
+        self._provider_proxy_listener_token = ""
+        if relay is None or not token:
+            return
+        remove_listener = getattr(relay, "remove_source_evidence_listener", None)
+        if callable(remove_listener):
+            remove_listener(token)
+
+    def submit_source_evidence(self, thread_id: str, feature_key: str) -> None:
+        if self._closed.is_set():
+            return
+        self._source_evidence_queue.put((str(thread_id or ""), str(feature_key or "")))
+        self.request_scan()
+
+    def _flush_source_evidence(self) -> None:
+        while True:
+            try:
+                thread_id, feature_key = self._source_evidence_queue.get_nowait()
+            except Empty:
+                return
+            self.store.record_source_evidence(
+                thread_id,
+                feature_key,
+                observed_at=int(self._clock()),
+            )
 
     def _local_now(self) -> datetime:
         return datetime.fromtimestamp(float(self._clock())).astimezone()

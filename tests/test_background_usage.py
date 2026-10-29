@@ -20,9 +20,11 @@ if str(SRC_ROOT) not in sys.path:
 from codex_usage_hud.core.background_usage import (
     BackgroundUsageScanner,
     BackgroundUsageStore,
+    _background_source_hint,
     background_feature_en_label,
     background_feature_purpose,
     classify_background_feature,
+    classify_background_request_body,
     decode_request_context,
     decode_request_evidence,
     decode_submission_prompt,
@@ -296,6 +298,23 @@ class BackgroundUsageDecoderTests(unittest.TestCase):
         self.assertEqual(feature.key, "unknown")
         self.assertEqual(feature.label, "未知后台任务")
 
+    def test_request_body_classifier_returns_only_known_source_signatures(self) -> None:
+        body = json.dumps(
+            {
+                "model": "gpt-test",
+                "instructions": "Memory Writing Agent: Phase 2 (Consolidation)",
+                "input": [{"role": "user", "content": "Private task text"}],
+            }
+        )
+        feature = classify_background_request_body(body)
+        self.assertEqual(feature.key, "memory_consolidation")
+        self.assertNotIn("Private task text", repr(feature))
+
+        unknown = classify_background_request_body(
+            json.dumps({"instructions": "An unrelated provider request"})
+        )
+        self.assertEqual(unknown.key, "unknown")
+
     def test_current_title_and_task_catch_up_prompts_are_attributed(self) -> None:
         title = classify_background_feature(
             "Generate a concise, single-line task title of at most 36 characters. "
@@ -374,6 +393,28 @@ class BackgroundUsageDecoderTests(unittest.TestCase):
 
 
 class BackgroundUsageScannerTests(unittest.TestCase):
+    def test_memory_workdir_hint_matches_only_codex_memory_roots(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            codex_home = Path(temp_dir) / ".codex"
+            self.assertEqual(
+                _background_source_hint(codex_home / "memories", codex_home=codex_home),
+                "codex_memory_workdir",
+            )
+            self.assertEqual(
+                _background_source_hint(codex_home / "memories_v2", codex_home=codex_home),
+                "codex_memory_workdir",
+            )
+            self.assertEqual(
+                _background_source_hint(
+                    codex_home / "memories" / "subfolder", codex_home=codex_home
+                ),
+                "",
+            )
+            self.assertEqual(
+                _background_source_hint(Path(temp_dir) / "project", codex_home=codex_home),
+                "",
+            )
+
     def test_unknown_user_turns_are_excluded_and_other_unknown_usage_is_pending(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -415,6 +456,92 @@ class BackgroundUsageScannerTests(unittest.TestCase):
                         BACKGROUND_ID,
                         APP_PROCESS,
                     ),
+                    (
+                        4,
+                        base_ts + 3,
+                        "feedback_tags",
+                        "codex_feedback",
+                        _feedback_body(
+                            BACKGROUND_ID,
+                            "gpt-test",
+                            str(Path.home() / ".codex" / "memories"),
+                        ),
+                        BACKGROUND_ID,
+                        APP_PROCESS,
+                    ),
+                ],
+            )
+            _create_state(state_path)
+            store = BackgroundUsageStore(root / "audit.sqlite3")
+            scanner = BackgroundUsageScanner(
+                logs_path=logs_path,
+                state_path=state_path,
+                store=store,
+                provider="custom",
+                price_table=_prices(),
+                app_process_ids=(1234,),
+                grace_seconds=0,
+                now=lambda: float(base_ts + 30),
+            )
+            store.record_source_evidence(UNKNOWN_ID, "memory_consolidation")
+
+            result = scanner.scan()
+            query = store.query(range_key="all")
+
+            self.assertTrue(result.content_changed)
+            self.assertEqual(
+                [event["eventId"] for event in query["events"]],
+                [BACKGROUND_ID],
+            )
+            self.assertEqual(query["events"][0]["featureLabel"], "来源待确认")
+            self.assertEqual(
+                query["events"][0]["sourceHint"], "codex_memory_workdir"
+            )
+            self.assertEqual(
+                query["events"][0]["classificationState"], "source_pending"
+            )
+            self.assertEqual(query["summary"]["sourcePendingEventCount"], 1)
+            self.assertEqual(query["summary"]["backgroundEventCount"], 0)
+            self.assertEqual(query["summary"]["totalTokens"], 80)
+            self.assertIsNone(store.detail(UNKNOWN_ID))
+            detail = store.detail(BACKGROUND_ID)
+            self.assertIsNotNone(detail)
+            assert detail is not None
+            self.assertEqual(detail["totalTokens"], 80)
+            self.assertTrue(store.confirm(BACKGROUND_ID))
+            self.assertFalse(store.detail(BACKGROUND_ID)["unread"])
+            self.assertEqual(
+                store.detail(BACKGROUND_ID)["classificationState"],
+                "source_pending",
+            )
+
+    def test_exact_source_evidence_reclassifies_only_matching_event_after_scan(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            logs_path = root / "logs_2.sqlite"
+            state_path = root / "state_5.sqlite"
+            base_ts = 1_900_000_000
+            _create_logs(
+                logs_path,
+                [
+                    (
+                        1,
+                        base_ts,
+                        "codex_core::session::turn",
+                        "codex_core::session::turn",
+                        _turn_body(BACKGROUND_ID, "gpt-test", 80, 60),
+                        BACKGROUND_ID,
+                        APP_PROCESS,
+                    ),
+                    (
+                        2,
+                        base_ts + 1,
+                        "codex_core::session::turn",
+                        "codex_core::session::turn",
+                        _turn_body(UNKNOWN_ID, "gpt-test", 40, 30),
+                        UNKNOWN_ID,
+                        APP_PROCESS,
+                    ),
                 ],
             )
             _create_state(state_path)
@@ -430,26 +557,50 @@ class BackgroundUsageScannerTests(unittest.TestCase):
                 now=lambda: float(base_ts + 30),
             )
 
-            result = scanner.scan()
-            query = store.query(range_key="all")
+            scanner.scan()
+            self.assertTrue(
+                store.record_source_evidence(
+                    BACKGROUND_ID,
+                    "memory_consolidation",
+                    observed_at=base_ts + 2,
+                )
+            )
+            self.assertFalse(
+                store.record_source_evidence(
+                    BACKGROUND_ID,
+                    "memory_consolidation",
+                    observed_at=base_ts + 3,
+                )
+            )
+            self.assertTrue(scanner.scan().content_changed)
 
-            self.assertTrue(result.content_changed)
+            events = {
+                event["eventId"]: event for event in store.query(range_key="all")["events"]
+            }
+            matched = events[BACKGROUND_ID]
+            self.assertEqual(matched["featureKey"], "memory_consolidation")
+            self.assertEqual(matched["featureLabel"], "记忆整理")
+            self.assertEqual(matched["classificationState"], "background")
+            self.assertEqual(matched["totalTokens"], 80)
             self.assertEqual(
-                [event["eventId"] for event in query["events"]],
-                [BACKGROUND_ID],
+                store.detail(BACKGROUND_ID)["appAttribution"],
+                "provider_prompt_signature",
             )
-            self.assertEqual(query["events"][0]["featureLabel"], "来源待确认")
-            self.assertEqual(
-                query["events"][0]["classificationState"], "source_pending"
+            self.assertEqual(events[UNKNOWN_ID]["featureKey"], "unknown")
+            self.assertEqual(events[UNKNOWN_ID]["classificationState"], "source_pending")
+
+            self.assertTrue(
+                store.record_source_evidence(
+                    BACKGROUND_ID,
+                    "title_description",
+                    observed_at=base_ts + 4,
+                )
             )
-            self.assertEqual(query["summary"]["sourcePendingEventCount"], 1)
-            self.assertEqual(query["summary"]["backgroundEventCount"], 0)
-            self.assertEqual(query["summary"]["totalTokens"], 80)
-            self.assertIsNone(store.detail(UNKNOWN_ID))
-            detail = store.detail(BACKGROUND_ID)
-            self.assertIsNotNone(detail)
-            assert detail is not None
-            self.assertEqual(detail["totalTokens"], 80)
+            self.assertTrue(scanner.scan().content_changed)
+            conflicted = store.detail(BACKGROUND_ID)
+            assert conflicted is not None
+            self.assertEqual(conflicted["featureKey"], "unknown")
+            self.assertEqual(conflicted["classificationState"], "source_pending")
 
     def test_visible_session_source_prompt_unwraps_vscode_request(self) -> None:
         source_prompt = "Build the OpenCV fallback into the scanner."
@@ -804,11 +955,21 @@ class BackgroundUsageScannerTests(unittest.TestCase):
                         "PRAGMA table_info(background_requests)"
                     )
                 }
+                source_columns = {
+                    str(row[1])
+                    for row in connection.execute(
+                        "PRAGMA table_info(background_source_evidence)"
+                    )
+                }
             self.assertIn("related_session_id", columns)
             self.assertIn("association_kind", columns)
             self.assertIn("price_status", request_columns)
             self.assertIn("price_version_id", request_columns)
-            self.assertEqual(version, "3")
+            self.assertEqual(
+                source_columns,
+                {"thread_id", "feature_key", "evidence_source", "observed_at"},
+            )
+            self.assertEqual(version, "4")
 
     def test_scan_excludes_sessions_aggregates_requests_and_persists_confirmation(
         self,
@@ -1562,6 +1723,71 @@ class _FakeWatcher:
 
 
 class BackgroundUsageRuntimeTests(unittest.TestCase):
+    def test_runtime_reconciles_queued_request_source_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            logs_path = root / "logs_2.sqlite"
+            state_path = root / "state_5.sqlite"
+            base_ts = 1_900_000_000
+            _create_logs(
+                logs_path,
+                [
+                    (
+                        1,
+                        base_ts,
+                        "codex_core::session::turn",
+                        "codex_core::session::turn",
+                        _turn_body(BACKGROUND_ID, "gpt-test", 80, 60),
+                        BACKGROUND_ID,
+                        APP_PROCESS,
+                    )
+                ],
+            )
+            _create_state(state_path)
+            runtime = BackgroundUsageRuntime(
+                logs_path=logs_path,
+                state_path=state_path,
+                database_path=root / "audit.sqlite3",
+                provider="custom",
+                price_table=_prices(),
+                app_process_ids=(1234,),
+                watcher_factory=_FakeWatcher,  # type: ignore[arg-type]
+                clock=lambda: float(base_ts + 30),
+            )
+            try:
+                runtime.start()
+                self.assertTrue(runtime.wait_until_idle())
+                self.assertEqual(
+                    runtime.detail(BACKGROUND_ID)["classificationState"],
+                    "source_pending",
+                )
+
+                relay = runtime._provider_proxy
+                self.assertIsNotNone(relay)
+                assert relay is not None
+                relay._report_source_evidence(
+                    {
+                        "x-codex-turn-metadata": json.dumps(
+                            {"thread_id": BACKGROUND_ID}
+                        )
+                    },
+                    json.dumps(
+                        {
+                            "instructions": "Memory Writing Agent: Phase 2 (Consolidation)",
+                            "input": [{"role": "user", "content": "Private task text"}],
+                        }
+                    ).encode("utf-8"),
+                )
+                self.assertTrue(runtime.wait_until_idle())
+                detail = runtime.detail(BACKGROUND_ID)
+                assert detail is not None
+                self.assertEqual(detail["featureKey"], "memory_consolidation")
+                self.assertEqual(detail["classificationState"], "background")
+                self.assertEqual(detail["appAttribution"], "provider_prompt_signature")
+                self.assertEqual(detail["prompt"], "")
+            finally:
+                runtime.close()
+
     def test_runtime_refreshes_session_notification_cache_after_confirm(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

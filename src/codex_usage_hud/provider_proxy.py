@@ -6,6 +6,7 @@ The relay is idle until Codex sends a request; it has no polling worker.
 
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping
 import http.client
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
@@ -47,6 +48,31 @@ def _rewrite_model(body: bytes | None, target_model: object, allowed_models: obj
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
 
 
+def _source_evidence_from_request(
+    headers: Mapping[str, object],
+    body: bytes | None,
+) -> tuple[str, str] | None:
+    from .core.background_usage import (
+        classify_background_request_body,
+        valid_background_event_id,
+    )
+
+    raw_metadata = str(headers.get("x-codex-turn-metadata") or "").strip()
+    try:
+        metadata = json.loads(raw_metadata)
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(metadata, dict):
+        return None
+    thread_id = valid_background_event_id(metadata.get("thread_id")).lower()
+    if not thread_id:
+        return None
+    feature = classify_background_request_body(body)
+    if not feature.key or feature.key == "unknown":
+        return None
+    return thread_id, feature.key
+
+
 def proxy_metadata(section: str) -> dict:
     match = _METADATA.search(section)
     if not match:
@@ -82,6 +108,7 @@ class ProviderProxyRelay:
         self.routes: dict[str, dict] = {}
         self.config_paths: set[Path] = set()
         self.lock = RLock()
+        self.source_evidence_listeners: dict[str, Callable[[str, str], None]] = {}
         self.stop_reader = None
         self.stop_writer = None
 
@@ -113,6 +140,37 @@ class ProviderProxyRelay:
             self.routes[token] = dict(metadata)
             self.config_paths.add(config_path)
             return f"http://127.0.0.1:{self.server.server_port}/{token}{upstream.path.rstrip('/')}"
+
+    def add_source_evidence_listener(
+        self,
+        listener: Callable[[str, str], None],
+    ) -> str:
+        token = secrets.token_urlsafe(16)
+        with self.lock:
+            self.source_evidence_listeners[token] = listener
+        return token
+
+    def remove_source_evidence_listener(self, token: object) -> None:
+        with self.lock:
+            self.source_evidence_listeners.pop(str(token or ""), None)
+
+    def _report_source_evidence(
+        self,
+        headers: Mapping[str, object],
+        body: bytes | None,
+    ) -> None:
+        with self.lock:
+            listeners = tuple(self.source_evidence_listeners.values())
+        if not listeners:
+            return
+        evidence = _source_evidence_from_request(headers, body)
+        if evidence is None:
+            return
+        for listener in listeners:
+            try:
+                listener(*evidence)
+            except Exception:
+                continue
 
     def _serve(self) -> None:
         server, stop_reader = self.server, self.stop_reader
@@ -217,6 +275,7 @@ class ProviderProxyRelay:
                     elif self.headers.get("Content-Length"):
                         body = read_exact(int(self.headers["Content-Length"]))
                     if target.endswith("/responses") or target.split("?", 1)[0].endswith("/responses"):
+                        relay._report_source_evidence(self.headers, body)
                         body = _rewrite_model(body, route.get("model"), route.get("models"))
                     connection.request(self.command, target or "/", body=body, headers=headers)
                     response = connection.getresponse()

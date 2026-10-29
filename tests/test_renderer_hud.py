@@ -1561,6 +1561,8 @@ class RendererHudPayloadTests(unittest.TestCase):
         self.assertIn('detail?.classificationState !== "source_pending"', script)
         self.assertIn('const policyButton = detail?.classificationState', script)
         self.assertIn('已记录请求用量；当前日志缺少可确认具体后台功能的来源特征。', script)
+        self.assertIn('sourceHint === "codex_memory_workdir"', script)
+        self.assertIn('运行目录命中本机 Codex 记忆目录，较可能是记忆后台任务；原始任务标签缺失，仍待确认。', script)
         self.assertIn('sourcePendingEventCount', script)
         self.assertIn('禁用此类任务', script)
         self.assertIn('启用此类任务', script)
