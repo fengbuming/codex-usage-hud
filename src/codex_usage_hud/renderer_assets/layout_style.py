@@ -284,10 +284,54 @@ TEXT = r"""
             grid-template-columns: minmax(0, 1fr) auto;
           }
           #${rootId} .${requestClass} .codex-usage-hud-collapsed {
-            grid-template-columns: auto minmax(0, 1fr) 22px;
+            grid-template-columns: auto minmax(0, 1fr) auto;
           }
           #${rootId} .${requestClass} .codex-usage-hud-collapsed[data-has-badge="true"] {
+            grid-template-columns: auto minmax(0, 1fr) auto auto;
+          }
+          #${rootId} .${requestClass} .codex-usage-hud-collapsed[data-notification-visible="true"] {
             grid-template-columns: auto minmax(0, 1fr) auto 22px;
+          }
+          #${rootId} .${requestClass} .codex-usage-hud-collapsed[data-has-badge="true"][data-notification-visible="true"] {
+            grid-template-columns: auto minmax(0, 1fr) auto auto 22px;
+          }
+          #${rootId} .${requestClass} .codex-usage-hud-main[data-has-glyph="false"] {
+            grid-template-columns: minmax(0, 1fr);
+            gap: 0;
+          }
+          #${rootId} .${requestClass} .codex-usage-hud-main[data-has-glyph="true"] {
+            grid-template-columns: auto minmax(0, 1fr);
+          }
+          #${rootId} .codex-usage-hud-output-speed {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            justify-self: end;
+            color: #7fd7a6;
+            font: 700 10px/1 Consolas, "Cascadia Mono", ui-monospace, monospace;
+            font-variant-numeric: tabular-nums;
+            white-space: nowrap;
+            cursor: default;
+          }
+          #${rootId} .codex-usage-hud-speed-icon {
+            display: inline-flex;
+            flex: 0 0 20px;
+            width: 20px;
+            height: 18px;
+            overflow: visible;
+          }
+          #${rootId} .codex-usage-hud-speed-icon svg {
+            width: 100%;
+            height: 100%;
+          }
+          #${rootId} .codex-usage-hud-output-speed[hidden] {
+            display: none !important;
+          }
+          #${rootId} .codex-usage-hud-output-speed[data-speed-mode="idle"] {
+            color: var(--codex-usage-hud-request-muted, #a9bcd2);
+          }
+          #${rootId} .codex-usage-hud-output-speed[data-speed-mode="measured"] {
+            color: var(--codex-usage-hud-info, #9ccbff);
           }
           #${rootId} .codex-usage-hud-token-badge {
             position: relative;
@@ -465,7 +509,11 @@ TEXT = r"""
             pointer-events: none;
             transition: opacity .12s ease;
           }
+          #${rootId} .codex-usage-hud-background-notification[data-visible="false"] {
+            display: none !important;
+          }
           #${rootId} .codex-usage-hud-background-notification[data-visible="true"] {
+            display: inline-grid;
             visibility: visible;
             opacity: 1;
             pointer-events: auto;
@@ -955,10 +1003,16 @@ TEXT = r"""
             grid-template-columns: auto minmax(0, auto) minmax(0, 1fr) minmax(90px, 150px) 22px;
           }
           #${rootId} .${requestClass} .codex-usage-hud-panel-header {
-            grid-template-columns: auto minmax(0, 1fr) 22px;
+            grid-template-columns: auto minmax(0, 1fr) auto;
             background: #151d27;
             margin-top: 4px;
             margin-bottom: 0;
+          }
+          #${rootId} .${requestClass} .codex-usage-hud-panel-header[data-notification-visible="true"] {
+            grid-template-columns: auto minmax(0, 1fr) auto 22px;
+          }
+          #${rootId} .${requestClass} .codex-usage-hud-panel-header[data-notification-visible="true"] {
+            grid-template-columns: auto minmax(0, 1fr) auto 22px;
           }
           #${rootId} .codex-usage-hud-title {
             min-width: 0;

@@ -126,6 +126,88 @@ class RendererHudPayloadTests(unittest.TestCase):
             "custom",
         )
 
+    def test_payload_projects_measured_output_speed_to_session_domains(self) -> None:
+        snapshot = ParsedSession(status="parsed")
+        snapshot.request = RequestTokens(
+            status="confirmed",
+            source="sse",
+            output_tokens_per_second=12.5,
+            output_usage_complete=True,
+            updated_at=datetime.fromisoformat("2026-05-28T00:00:02+00:00"),
+            completed_at=datetime.fromisoformat("2026-05-28T00:00:02+00:00"),
+        )
+
+        payload = payload_from_snapshot(snapshot).to_json()
+
+        self.assertEqual(payload["outputTokensPerSecond"], 12.5)
+        self.assertEqual(payload["outputSpeedMode"], "measured")
+        self.assertEqual(
+            payload["payloadDomains"]["currentSession"]["outputTokensPerSecond"],
+            12.5,
+        )
+        self.assertEqual(
+            payload["payloadDomains"]["sessionSwitch"]["outputTokensPerSecond"],
+            12.5,
+        )
+
+    def test_payload_does_not_substitute_historical_average_for_live_tps(self) -> None:
+        snapshot = ParsedSession(status="parsed")
+        snapshot.request = RequestTokens(status="running", source="jsonl")
+        snapshot.request_history = [
+            RequestRound(
+                index=1,
+                status="confirmed",
+                model="gpt-5.5",
+                input_tokens=50,
+                cached_tokens=0,
+                output_tokens=90,
+                reasoning_tokens=0,
+                total_tokens=140,
+                estimated=False,
+                started_at=datetime.fromisoformat("2026-05-28T00:00:00+00:00"),
+                completed_at=datetime.fromisoformat("2026-05-28T00:00:10+00:00"),
+            ),
+            RequestRound(
+                index=2,
+                status="confirmed",
+                model="gpt-5.5",
+                input_tokens=50,
+                cached_tokens=0,
+                output_tokens=60,
+                reasoning_tokens=0,
+                total_tokens=110,
+                estimated=False,
+                started_at=datetime.fromisoformat("2026-05-28T00:00:10+00:00"),
+                completed_at=datetime.fromisoformat("2026-05-28T00:00:30+00:00"),
+            ),
+            RequestRound(
+                index=3,
+                status="confirmed",
+                model="gpt-5.5",
+                input_tokens=50,
+                cached_tokens=0,
+                output_tokens=1000,
+                reasoning_tokens=0,
+                total_tokens=1050,
+                estimated=True,
+                started_at=datetime.fromisoformat("2026-05-28T00:00:30+00:00"),
+                completed_at=datetime.fromisoformat("2026-05-28T00:00:31+00:00"),
+            ),
+        ]
+
+        payload = payload_from_snapshot(snapshot).to_json()
+
+        self.assertIsNone(payload["outputTokensPerSecond"])
+        self.assertEqual(payload["outputSpeedMode"], "idle")
+        self.assertEqual(
+            payload["payloadDomains"]["currentSession"]["outputSpeedMode"],
+            "idle",
+        )
+        self.assertEqual(
+            payload["payloadDomains"]["sessionSwitch"]["outputTokensPerSecond"],
+            None,
+        )
+
     def test_renderer_theme_payload_accepts_persisted_source(self) -> None:
         snapshot = CodexThemeSnapshot.from_probe_result(
             {
@@ -766,7 +848,7 @@ class RendererHudPayloadTests(unittest.TestCase):
                 '<div class="codex-usage-hud-request-list" data-field="requestRows"></div>'
             ),
             renderer_hud.RENDERER_HUD_SCRIPT.index(
-                '<div class="codex-usage-hud-panel-header" data-action="toggle">',
+                '<div class="codex-usage-hud-panel-header" data-action="toggle" data-notification-visible="false">',
                 renderer_hud.RENDERER_HUD_SCRIPT.index("function requestExpandedMarkup()"),
             ),
         )
@@ -1590,7 +1672,7 @@ class RendererHudPayloadTests(unittest.TestCase):
         self.assertRegex(
             script,
             r"\.\$\{requestClass\} \.codex-usage-hud-collapsed\[data-has-badge=\"true\"\] "
-            r"\{\s+grid-template-columns: auto minmax\(0, 1fr\) auto 22px;",
+            r"\{\s+grid-template-columns: auto minmax\(0, 1fr\) auto auto;",
         )
         submit_start = script.index("function submitBackgroundUsageCommand")
         submit_end = script.index("function readThemeStorage", submit_start)

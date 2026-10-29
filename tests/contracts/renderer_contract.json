@@ -6,8 +6,8 @@
   },
   "currentBundle": {
     "phase": "P6.7",
-    "sha256": "32da76dc319c2e3c3785317e9e7f86214144bf4b528aefef3f830a0fccaaa157",
-    "byteLength": 1467138
+    "sha256": "a30f22030b3477ec1290981b45a6ba9d3588a6a15d29d55281cda5ebe1dbb9df",
+    "byteLength": 1495168
   },
   "sha256": "f83d65265c55143fa775f509f09ce109c2aa75a03946b42cf462cb6cbd4ea637",
   "byteLength": 548705,
@@ -44,7 +44,7 @@
     "mutationObservers": 11,
     "resizeObservers": 3,
     "setIntervals": 6,
-    "setTimeouts": 46,
+    "setTimeouts": 48,
     "kernelSetIntervals": 1,
     "kernelSetTimeouts": 10
   },
@@ -136,7 +136,8 @@
     {"kind": "setInterval", "owner": "session_cleanup_elapsed", "creation": "ctx.lifecycle.interval(\n            \"session_cleanup_elapsed\"", "startCondition": "session cleanup scan is visible", "cleanup": "ctx.lifecycle.clearInterval(sessionCleanupElapsedTimer)"}
   ],
   "currentTimeoutOwners": [
-    "model_picker", "theme", "session_view_progress", "copy_feedback", "activity_trail_locate",
+    "model_picker", "theme", "session_view_speed_tier", "session_view_speed_tier",
+    "session_view_progress", "copy_feedback", "activity_trail_locate",
     "activity_virtualization_frame", "activity_request_materialization",
     "activity_round_expand_settle", "conversation_locate_pulse", "thread_find_refill",
     "thread_find_refill", "thread_find_open", "thread_find_identity", "thread_find_identity",

@@ -10,6 +10,7 @@ from __future__ import annotations
 import copy
 from datetime import datetime
 import json
+import math
 from pathlib import Path
 import time
 from typing import Any
@@ -188,6 +189,7 @@ def payload_from_snapshot(
     # 会话供应商观察覆盖的 app_provider 不同，它只随 config 重载变化，供渲染器
     # 菜单栏「默认」徽标与供应商编辑器「默认 Codex App Provider」判定使用。
     settings_payload["default_provider"] = str(default_provider or "")
+    output_speed, output_speed_mode = _output_speed_projection(snapshot)
     return RendererHudPayload(
         top_line=top_line,
         request_line=request_line,
@@ -196,6 +198,8 @@ def payload_from_snapshot(
         active_session_provider=_active_session_provider(snapshot),
         source=snapshot.selection_source or "activity",
         request_status=snapshot.request.status or "waiting",
+        output_tokens_per_second=output_speed,
+        output_speed_mode=output_speed_mode,
         last_event=_format_time(snapshot.last_event_time),
         refreshed_at=_format_time(snapshot.refreshed_at),
         new_session=new_session,
@@ -287,6 +291,7 @@ def session_switch_payload_from_snapshot(
         request_line = _follow_feedback(snapshot)
     if snapshot.request.error:
         request_line = f"本次 Token 出错 | {_compact(snapshot.request.error, 120)}"
+    output_speed, output_speed_mode = _output_speed_projection(snapshot)
     domain = {
         "topLine": top_line,
         "requestLine": request_line,
@@ -294,6 +299,8 @@ def session_switch_payload_from_snapshot(
         "model": snapshot.request.model or "n/a",
         "source": snapshot.selection_source or "activity",
         "requestStatus": snapshot.request.status or "waiting",
+        "outputTokensPerSecond": output_speed,
+        "outputSpeedMode": output_speed_mode,
         "lastEvent": _format_time(snapshot.last_event_time),
         "refreshedAt": _format_time(snapshot.refreshed_at),
         "warning": bool(
@@ -987,6 +994,20 @@ def _request_total_line(snapshot: ParsedSession) -> str:
             f"∑{_fixed_token_total(total_tokens)}",
         ]
     )
+
+
+def _output_speed_projection(snapshot: ParsedSession) -> tuple[float | None, str]:
+    request = snapshot.request
+    live_rate = request.output_tokens_per_second
+    if (
+        request.status != "confirmed"
+        or not request.output_usage_complete
+        or live_rate is None
+        or not math.isfinite(float(live_rate))
+        or live_rate <= 0
+    ):
+        return None, "idle"
+    return float(live_rate), "measured"
 
 
 def _round_is_running(item: RequestRound) -> bool:

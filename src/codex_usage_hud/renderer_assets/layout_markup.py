@@ -62,7 +62,7 @@ TEXT = r"""
         return `
           <div class="codex-usage-hud-panel ${PANEL[name].className}" data-panel="${name}" data-expanded="false" role="status" aria-live="polite">
             ${resizeEdgesMarkup()}
-            <div class="codex-usage-hud-collapsed" data-has-settings="${name === "top" ? "true" : "false"}" data-has-badge="${name === "request" && composerBadgeEnabled ? "true" : "false"}">
+            <div class="codex-usage-hud-collapsed" data-has-settings="${name === "top" ? "true" : "false"}" data-has-badge="${name === "request" && composerBadgeEnabled ? "true" : "false"}" data-notification-visible="false">
               ${leftControlsMarkup}
               <button class="codex-usage-hud-main" data-action="toggle" data-has-glyph="${glyph ? "true" : "false"}" aria-label="${ariaLabel}">
                 ${glyphMarkup}
@@ -71,6 +71,7 @@ TEXT = r"""
               </button>
               ${panelSettingsMarkup}
               ${tokenBadgeMarkup}
+              ${name === "request" ? `<span class="codex-usage-hud-output-speed" data-field="outputSpeed" hidden><span data-field="outputSpeedValue"></span><span class="codex-usage-hud-speed-icon" data-field="outputSpeedIcon" role="img"></span></span>` : ""}
               ${backgroundNotificationMarkup}
             </div>
             ${name === "top" ? topExpandedMarkup() : requestExpandedMarkup()}
@@ -211,12 +212,13 @@ TEXT = r"""
             <div class="codex-usage-hud-request-subhead"><span>轮次流水</span><span>最新在上</span></div>
             <div class="codex-usage-hud-request-list" data-field="requestRows"></div>
             <div class="codex-usage-hud-active-session-candidates" data-field="activeSessionCandidates" hidden></div>
-            <div class="codex-usage-hud-panel-header" data-action="toggle">
+            <div class="codex-usage-hud-panel-header" data-action="toggle" data-notification-visible="false">
               <div class="codex-usage-hud-left-controls">
                 <button class="codex-usage-hud-handle" data-action="move" title="移动" aria-label="移动">⋮⋮</button>
                 <span class="codex-usage-hud-connection-dot" data-field="connectionDot" data-state="ok" title="CDP 连接正常" aria-label="CDP 连接正常" role="img"></span>
               </div>
               <div class="codex-usage-hud-title codex-usage-hud-line" data-action="toggle" data-field="requestLineExpanded"></div>
+              <span class="codex-usage-hud-output-speed" data-field="outputSpeed" hidden><span data-field="outputSpeedValue"></span><span class="codex-usage-hud-speed-icon" data-field="outputSpeedIcon" role="img"></span></span>
               ${backgroundUsageNotificationMarkup()}
             </div>
             ${requestExpandedResizeMarkup()}

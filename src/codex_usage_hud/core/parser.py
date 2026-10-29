@@ -751,6 +751,8 @@ class RequestTokens:
     completed_at: datetime | None = None
     cost_usd: float | None = None
     error: str = ""
+    output_tokens_per_second: float | None = None
+    output_usage_complete: bool = False
 
 
 @dataclass
@@ -3539,6 +3541,9 @@ class SseRequestStateMachine:
         self.round_index = 0
         self.history: list[RequestRound] = []
         self.pending_sse_events: list[str] = []
+        self.output_chunk_count = 0
+        self.first_output_chunk_at: float | None = None
+        self.last_output_chunk_at: float | None = None
         self.current = RequestTokens(status="waiting", source="sse")
 
     def reset_session(
@@ -3551,6 +3556,7 @@ class SseRequestStateMachine:
         self.round_index = 0
         self.history = []
         self.pending_sse_events = []
+        self.reset_output_timing()
         self.current = RequestTokens(status="waiting", source="sse")
 
     def reset_task(self, task_started_at: datetime | None) -> None:
@@ -3561,6 +3567,7 @@ class SseRequestStateMachine:
         self.round_index = 0
         self.history = []
         self.pending_sse_events = []
+        self.reset_output_timing()
         self.current = RequestTokens(status="waiting", source="sse")
 
     def build(
@@ -3648,16 +3655,28 @@ class SseRequestStateMachine:
         self.current = RequestTokens(status="waiting", source="sse")
 
     def consume_new_rows(self, con: sqlite3.Connection, session_id: str) -> None:
-        rows = con.execute(
-            """
-            select id, ts, target, feedback_log_body
+        query = """
+            select id, ts, ts_nanos, target, feedback_log_body
             from logs
             where id > ?
               and (target='codex_api::sse::responses' or target='codex_otel.log_only')
             order by id
-            """,
-            (self.last_seen_id,),
-        ).fetchall()
+        """
+        try:
+            rows = con.execute(query, (self.last_seen_id,)).fetchall()
+        except sqlite3.OperationalError as exc:
+            if "no such column: ts_nanos" not in str(exc).lower():
+                raise
+            rows = con.execute(
+                """
+                select id, ts, target, feedback_log_body
+                from logs
+                where id > ?
+                  and (target='codex_api::sse::responses' or target='codex_otel.log_only')
+                order by id
+                """,
+                (self.last_seen_id,),
+            ).fetchall()
         self.consume_log_rows(rows, session_id)
 
     def consume_log_rows(
@@ -3671,18 +3690,27 @@ class SseRequestStateMachine:
             target = str(_row_value(row, "target", "") or "")
             body = str(_row_value(row, "feedback_log_body", "") or "")
             if target == "codex_otel.log_only":
-                self.consume_otel(row_id, body, session_id)
+                row_timestamp = self.sqlite_timestamp(
+                    _row_value(row, "ts"), _row_value(row, "ts_nanos", 0)
+                )
+                self.consume_otel(row_id, body, session_id, row_timestamp)
             elif target == "codex_api::sse::responses":
                 self.pending_sse_events.append(body)
                 self.pending_sse_events = self.pending_sse_events[-200:]
             self.last_seen_id = max(self.last_seen_id, row_id)
 
-    def consume_otel(self, row_id: int, body: str, session_id: str) -> None:
+    def consume_otel(
+        self,
+        row_id: int,
+        body: str,
+        session_id: str,
+        row_timestamp: datetime | None = None,
+    ) -> None:
         del row_id
         if 'event.name="codex.sse_event"' not in body:
             return
         kind = self.extract_text(body, r"\bevent\.kind=([^\s]+)")
-        timestamp = self.extract_timestamp(body)
+        timestamp = self.extract_timestamp(body) or row_timestamp
         model = extract_log_field(body, "slug") or extract_log_field(body, "model")
         is_current_session = f"conversation.id={session_id}" in body
 
@@ -3692,7 +3720,7 @@ class SseRequestStateMachine:
         }:
             pending = self.pop_pending_sse_event(kind)
             if is_current_session and pending:
-                self.consume_sse(pending)
+                self.consume_sse(pending, timestamp=timestamp)
             return
 
         if not is_current_session:
@@ -3708,9 +3736,27 @@ class SseRequestStateMachine:
             return
 
         if kind == "response.completed":
+            pending = self.pop_pending_sse_event(kind)
+            if pending:
+                self.consume_sse(pending, timestamp=timestamp)
+            if self.current.status == "confirmed":
+                return
             exact = self.request_from_otel_counts(body, timestamp, model)
             if exact is not None:
                 self.finish_round(exact)
+
+    @staticmethod
+    def sqlite_timestamp(value: Any, nanoseconds: Any = 0) -> datetime | None:
+        """Use the SQLite row timestamp when an OTel event timestamp is absent."""
+        if isinstance(value, str):
+            parsed = parse_timestamp(value)
+            if parsed is not None:
+                return parsed
+        try:
+            epoch_seconds = float(value) + (float(nanoseconds or 0) / 1_000_000_000)
+            return datetime.fromtimestamp(epoch_seconds).astimezone()
+        except (OSError, OverflowError, TypeError, ValueError):
+            return None
 
     def pop_pending_sse_event(self, event_type: str) -> str | None:
         for index, body in enumerate(self.pending_sse_events):
@@ -3724,6 +3770,7 @@ class SseRequestStateMachine:
 
     def start_round(self, timestamp: datetime | None, model: str) -> None:
         self.archive_current()
+        self.reset_output_timing()
         self.round_index += 1
         self.current = RequestTokens(
             status="running",
@@ -3743,7 +3790,44 @@ class SseRequestStateMachine:
         exact.started_at = self.current.started_at
         exact.completed_at = exact.updated_at
         exact.cost_usd = self.calculate_request_cost(exact)
+        exact.output_tokens_per_second = self.completed_output_speed(exact)
         self.current = exact
+        self.reset_output_timing()
+
+    def reset_output_timing(self) -> None:
+        self.output_chunk_count = 0
+        self.first_output_chunk_at = None
+        self.last_output_chunk_at = None
+
+    def record_output_chunk(self, timestamp: datetime) -> None:
+        timestamp_seconds = timestamp.timestamp()
+        if (
+            self.last_output_chunk_at is not None
+            and timestamp_seconds < self.last_output_chunk_at
+        ):
+            return
+        if self.first_output_chunk_at is None:
+            self.first_output_chunk_at = timestamp_seconds
+        self.last_output_chunk_at = timestamp_seconds
+        self.output_chunk_count += 1
+
+    def completed_output_speed(self, request: RequestTokens) -> float | None:
+        """Compute TPS from complete usage and valid first-to-last output timing."""
+        if (
+            request.status != "confirmed"
+            or not request.output_usage_complete
+            or request.input_tokens is None
+            or request.output_tokens is None
+            or request.output_tokens <= 0
+            or self.output_chunk_count < 2
+            or self.first_output_chunk_at is None
+            or self.last_output_chunk_at is None
+        ):
+            return None
+        elapsed = self.last_output_chunk_at - self.first_output_chunk_at
+        if elapsed <= 0:
+            return None
+        return int(request.output_tokens) / elapsed
 
     def archive_current(self) -> None:
         if self.current.status == "waiting" or not self.current.round_index:
@@ -3846,7 +3930,9 @@ class SseRequestStateMachine:
             completed_at=request.completed_at,
         )
 
-    def consume_sse(self, body: str) -> None:
+    def consume_sse(
+        self, body: str, *, timestamp: datetime | None = None
+    ) -> None:
         event = self.parse_sse_event(body)
         if not event:
             return
@@ -3862,17 +3948,23 @@ class SseRequestStateMachine:
             delta = str(event.get("delta") or "")
             if not delta:
                 return
-            output = (self.current.output_tokens or 0) + estimate_tokens(delta)
+            speed_timestamp = timestamp or datetime.now().astimezone()
+            if event_type == "response.output_text.delta":
+                self.record_output_chunk(speed_timestamp)
+            delta_tokens = estimate_tokens(delta)
+            output = (self.current.output_tokens or 0) + delta_tokens
             self.current.status = "running"
             self.current.output_tokens = output
             self.current.total_tokens = output
             self.current.estimated = True
             self.current.source = "sse"
+            self.current.updated_at = speed_timestamp
             return
 
         if event_type == "response.completed":
             exact = self.request_from_sse_completed(event)
             if exact is not None:
+                exact.updated_at = timestamp or datetime.now().astimezone()
                 self.finish_round(exact)
 
     def request_from_otel_counts(
@@ -3897,6 +3989,7 @@ class SseRequestStateMachine:
             estimated=False,
             source="sse",
             updated_at=timestamp,
+            output_usage_complete=True,
         )
 
     def request_from_sse_completed(
@@ -3914,9 +4007,17 @@ class SseRequestStateMachine:
             details = {}
         if not isinstance(output_details, Mapping):
             output_details = {}
-        input_tokens = _as_int(usage.get("input_tokens"))
-        output_tokens = _as_int(usage.get("output_tokens"))
-        total_tokens = _as_int(usage.get("total_tokens"), input_tokens + output_tokens)
+        raw_input_tokens = usage.get("input_tokens")
+        raw_output_tokens = usage.get("output_tokens")
+        input_tokens = (
+            _as_int(raw_input_tokens) if raw_input_tokens is not None else None
+        )
+        output_tokens = (
+            _as_int(raw_output_tokens) if raw_output_tokens is not None else None
+        )
+        total_tokens = _as_int(
+            usage.get("total_tokens"), int(input_tokens or 0) + int(output_tokens or 0)
+        )
         return RequestTokens(
             status="confirmed",
             model=str(response.get("model") or ""),
@@ -3929,6 +4030,9 @@ class SseRequestStateMachine:
             estimated=False,
             source="sse",
             response_id=str(response.get("id") or ""),
+            output_usage_complete=(
+                raw_input_tokens is not None and raw_output_tokens is not None
+            ),
         )
 
     def calculate_request_cost(self, request: RequestTokens) -> float | None:

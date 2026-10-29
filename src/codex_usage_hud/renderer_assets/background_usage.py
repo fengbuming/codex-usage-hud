@@ -94,6 +94,10 @@ TEXT = r"""
         const visible = count > 0 && !!eventId;
         root.querySelectorAll('[data-action="background-usage-open-notification"]').forEach((button) => {
           button.dataset.visible = String(visible);
+          const collapsed = button.closest(".codex-usage-hud-collapsed");
+          const header = button.closest(".codex-usage-hud-panel-header");
+          if (collapsed) collapsed.dataset.notificationVisible = String(visible);
+          if (header) header.dataset.notificationVisible = String(visible);
           button.dataset.eventId = visible ? eventId : "";
           button.dataset.backgroundRange = visible ? range : "today";
           button.setAttribute("aria-hidden", String(!visible));

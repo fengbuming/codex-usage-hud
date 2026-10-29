@@ -68,6 +68,8 @@ class RendererHudPayload:
     debug: bool = False
     runtime_errors: list[dict[str, object]] = field(default_factory=list)
     connection_health: dict[str, object] = field(default_factory=dict)
+    output_tokens_per_second: float | None = None
+    output_speed_mode: str = "idle"
 
     def to_json(self) -> dict[str, object]:
         payload: dict[str, object] = {
@@ -77,6 +79,8 @@ class RendererHudPayload:
             "model": self.model,
             "source": self.source,
             "requestStatus": self.request_status,
+            "outputTokensPerSecond": self.output_tokens_per_second,
+            "outputSpeedMode": self.output_speed_mode,
             "lastEvent": self.last_event,
             "refreshedAt": self.refreshed_at,
             "warning": self.warning,
@@ -172,6 +176,8 @@ def payload_domains(payload: dict[str, object]) -> dict[str, dict[str, object]]:
     session_switch_keys = (
         "topLine", "requestLine", "session", "model", "source",
         "requestStatus", "lastEvent", "refreshedAt", "warning",
+        "outputTokensPerSecond",
+        "outputSpeedMode",
         "newSession", "pendingSession", "selectionSeq", "sessionId",
         "rendererSessionId", "cachedPreview", "selectionObservedAt",
         "followState", "followReason", "followElapsedMs", "followTiming",
@@ -181,6 +187,8 @@ def payload_domains(payload: dict[str, object]) -> dict[str, dict[str, object]]:
     current_session_keys = (
         "topLine", "requestLine", "session", "model", "source",
         "requestStatus", "lastEvent", "refreshedAt", "warning",
+        "outputTokensPerSecond",
+        "outputSpeedMode",
         "newSession", "pendingSession", "selectionSeq", "sessionId",
         "rendererSessionId", "cachedPreview", "selectionObservedAt",
         "followState", "followReason", "followElapsedMs", "topDetails",

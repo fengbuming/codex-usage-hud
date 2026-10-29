@@ -7,7 +7,7 @@ import sqlite3
 import sys
 import tempfile
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -24,7 +24,6 @@ from codex_usage_hud.core.parser import (
     RequestTokens,
     SseRequestStateMachine,
     active_output_tail,
-    classify_gap,
     command_execution_text,
     extract_log_field,
     extract_session_thread_identity,
@@ -1378,6 +1377,248 @@ class JsonlSessionParserTests(unittest.TestCase):
 
 
 class SseRequestStateMachineTests(unittest.TestCase):
+    def test_live_output_speed_falls_back_to_sqlite_row_timestamps(self) -> None:
+        machine = SseRequestStateMachine()
+        machine.consume_log_rows(
+            [
+                {
+                    "id": 1,
+                    "ts": 1_779_926_400,
+                    "target": "codex_otel.log_only",
+                    "feedback_log_body": (
+                        'event.name="codex.sse_event" event.kind=response.created '
+                        "conversation.id=session-a slug=gpt-5.5"
+                    ),
+                },
+                {
+                    "id": 2,
+                    "ts": 1_779_926_401,
+                    "target": "codex_api::sse::responses",
+                    "feedback_log_body": (
+                        'SSE event: {"type":"response.output_text.delta",'
+                        '"delta":"abcd"}'
+                    ),
+                },
+                {
+                    "id": 3,
+                    "ts": 1_779_926_401,
+                    "target": "codex_otel.log_only",
+                    "feedback_log_body": (
+                        'event.name="codex.sse_event" '
+                        "event.kind=response.output_text.delta "
+                        "conversation.id=session-a"
+                    ),
+                },
+                {
+                    "id": 4,
+                    "ts": 1_779_926_402,
+                    "target": "codex_api::sse::responses",
+                    "feedback_log_body": (
+                        'SSE event: {"type":"response.output_text.delta",'
+                        '"delta":"abcdefgh"}'
+                    ),
+                },
+                {
+                    "id": 5,
+                    "ts": 1_779_926_402,
+                    "target": "codex_otel.log_only",
+                    "feedback_log_body": (
+                        'event.name="codex.sse_event" '
+                        "event.kind=response.output_text.delta "
+                        "conversation.id=session-a"
+                    ),
+                },
+                {
+                    "id": 6,
+                    "ts": 1_779_926_403,
+                    "target": "codex_otel.log_only",
+                    "feedback_log_body": (
+                        'event.name="codex.sse_event" '
+                        "event.kind=response.completed input_token_count=100 "
+                        "output_token_count=20 conversation.id=session-a"
+                    ),
+                },
+            ],
+            "session-a",
+        )
+
+        self.assertEqual(machine.current.output_tokens_per_second, 20.0)
+        self.assertEqual(machine.current.started_at.timestamp(), 1_779_926_400)
+
+    def test_live_output_speed_uses_otel_event_timestamp(self) -> None:
+        machine = SseRequestStateMachine()
+        machine.consume_log_rows(
+            [
+                {
+                    "id": 1,
+                    "target": "codex_otel.log_only",
+                    "feedback_log_body": (
+                        'event.name="codex.sse_event" event.kind=response.created '
+                        "conversation.id=session-a slug=gpt-5.5 "
+                        "event.timestamp=2026-05-28T00:00:00Z"
+                    ),
+                },
+                {
+                    "id": 2,
+                    "target": "codex_api::sse::responses",
+                    "feedback_log_body": (
+                        'SSE event: {"type":"response.output_text.delta",'
+                        '"delta":"abcd"}'
+                    ),
+                },
+                {
+                    "id": 3,
+                    "target": "codex_otel.log_only",
+                    "feedback_log_body": (
+                        'event.name="codex.sse_event" '
+                        "event.kind=response.output_text.delta "
+                        "conversation.id=session-a "
+                        "event.timestamp=2026-05-28T00:00:01Z"
+                    ),
+                },
+                {
+                    "id": 4,
+                    "target": "codex_api::sse::responses",
+                    "feedback_log_body": (
+                        'SSE event: {"type":"response.output_text.delta",'
+                        '"delta":"abcdefgh"}'
+                    ),
+                },
+                {
+                    "id": 5,
+                    "target": "codex_otel.log_only",
+                    "feedback_log_body": (
+                        'event.name="codex.sse_event" '
+                        "event.kind=response.output_text.delta "
+                        "conversation.id=session-a "
+                        "event.timestamp=2026-05-28T00:00:03Z"
+                    ),
+                },
+                {
+                    "id": 6,
+                    "target": "codex_otel.log_only",
+                    "feedback_log_body": (
+                        'event.name="codex.sse_event" event.kind=response.completed '
+                        "input_token_count=100 output_token_count=10 "
+                        "conversation.id=session-a "
+                        "event.timestamp=2026-05-28T00:00:04Z"
+                    ),
+                },
+            ],
+            "session-a",
+        )
+
+        self.assertEqual(machine.current.output_tokens_per_second, 5.0)
+        self.assertEqual(
+            machine.current.completed_at,
+            parse_timestamp("2026-05-28T00:00:04Z"),
+        )
+
+    def test_live_output_speed_uses_first_and_last_valid_content_chunks(self) -> None:
+        machine = SseRequestStateMachine()
+        started_at = parse_timestamp("2026-05-28T00:00:00Z")
+        self.assertIsNotNone(started_at)
+        machine.start_round(started_at, "gpt-5.5")
+
+        def event(kind: str, timestamp: datetime, **fields: object) -> None:
+            machine.consume_sse(
+                "SSE event: " + json.dumps({"type": kind, **fields}),
+                timestamp=timestamp,
+            )
+
+        first_chunk_at = started_at + timedelta(seconds=3)
+        last_chunk_at = started_at + timedelta(seconds=7)
+        event("response.output_text.delta", first_chunk_at, delta="abcd")
+        self.assertIsNone(machine.current.output_tokens_per_second)
+        event(
+            "response.function_call_arguments.delta",
+            started_at + timedelta(seconds=5),
+            delta="function args do not count as visible content",
+        )
+        event("response.output_text.delta", last_chunk_at, delta="abcdefgh")
+        self.assertIsNone(machine.current.output_tokens_per_second)
+
+        event(
+            "response.completed",
+            started_at + timedelta(seconds=8),
+            response={
+                "usage": {
+                    "input_tokens": 10,
+                    "output_tokens": 12,
+                    "total_tokens": 22,
+                }
+            },
+        )
+
+        self.assertEqual(machine.current.output_tokens_per_second, 3.0)
+        self.assertEqual(machine.current.status, "confirmed")
+
+    def test_single_chunk_or_incomplete_usage_has_no_tps(self) -> None:
+        started_at = parse_timestamp("2026-05-28T00:00:00Z")
+        self.assertIsNotNone(started_at)
+        for output_deltas, usage in (
+            ([(1, "abcd")], {"input_tokens": 10, "output_tokens": 4}),
+            (
+                [(1, "abcd"), (3, "abcdefgh")],
+                {"output_tokens": 4, "total_tokens": 14},
+            ),
+        ):
+            with self.subTest(output_deltas=output_deltas, usage=usage):
+                machine = SseRequestStateMachine()
+                machine.start_round(started_at, "gpt-5.5")
+                for seconds, text in output_deltas:
+                    machine.consume_sse(
+                        "SSE event: "
+                        + json.dumps(
+                            {"type": "response.output_text.delta", "delta": text}
+                        ),
+                        timestamp=started_at + timedelta(seconds=seconds),
+                    )
+                machine.consume_sse(
+                    "SSE event: "
+                    + json.dumps(
+                        {"type": "response.completed", "response": {"usage": usage}}
+                    ),
+                    timestamp=started_at + timedelta(seconds=4),
+                )
+                self.assertIsNone(machine.current.output_tokens_per_second)
+
+    def test_complete_usage_uses_output_tokens_over_content_chunk_span(self) -> None:
+        started_at = parse_timestamp("2026-05-28T00:00:00Z")
+        self.assertIsNotNone(started_at)
+        machine = SseRequestStateMachine()
+        machine.start_round(started_at, "gpt-5.5")
+        machine.consume_sse(
+            'SSE event: {"type":"response.output_text.delta","delta":"abcd"}',
+            timestamp=started_at + timedelta(seconds=2),
+        )
+        machine.consume_sse(
+            'SSE event: {"type":"response.function_call_arguments.delta","delta":"ignored"}',
+            timestamp=started_at + timedelta(seconds=3),
+        )
+        machine.consume_sse(
+            'SSE event: {"type":"response.output_text.delta","delta":"abcdefgh"}',
+            timestamp=started_at + timedelta(seconds=4),
+        )
+        machine.consume_sse(
+            "SSE event: "
+            + json.dumps(
+                {
+                    "type": "response.completed",
+                    "response": {
+                        "usage": {
+                            "input_tokens": 10,
+                            "output_tokens": 12,
+                            "total_tokens": 22,
+                        }
+                    },
+                }
+            ),
+            timestamp=started_at + timedelta(seconds=7),
+        )
+
+        self.assertEqual(machine.current.output_tokens_per_second, 6.0)
+
     def test_state_machine_estimates_delta_then_confirms_from_otel_counts(self) -> None:
         machine = SseRequestStateMachine()
         rows = [

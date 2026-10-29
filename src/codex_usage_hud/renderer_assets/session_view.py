@@ -1,9 +1,192 @@
 """Renderer session-view JavaScript domain."""
 
+import json
+
+from .speed_titles import VEHICLE_ART
+
+
 TEXT = r"""
   function createSessionViewDomain(ctx, shared) {
   // ABI marker retained for existing renderer contract probes:
   // data-field="topTaskOrdinalSession"
+  const speedTitleArt = __CODEX_USAGE_HUD_SPEED_TITLE_ART__;
+  const speedTitleSteps = [
+    ["walk", "步行", 0.5],
+    ["bicycle", "自行车", null],
+    ["ebike", "电动自行车", null],
+    ["motorcycle", "摩托车", null],
+    ["car", "汽车", null],
+    ["sportsCar", "跑车", null],
+    ["bulletTrain", "高铁", null],
+    ["raceCar", "赛车", null],
+    ["maglev", "磁浮列车", null],
+    ["jetliner", "喷射客机", null],
+    ["fighterJet", "战斗机", null],
+    ["hypersonic", "高超音速飞机", null],
+    ["rocket", "火箭", null],
+  ];
+  const speedTitleFractions = [0.02, 0.03, 0.04, 0.06, 0.08, 0.12, 0.17, 0.24, 0.34, 0.5, 0.7, 1];
+  const speedTitleRedline = 2000;
+  const speedTitleColorStops = [
+    [0, "#7C8798"], [0.1, "#2DD4BF"], [0.3, "#38BDF8"], [0.48, "#818CF8"],
+    [0.64, "#E879F9"], [0.78, "#FB7185"], [0.9, "#FB923C"], [1, "#FACC15"],
+  ];
+  let displayedSpeedTitle = 0;
+  let pendingSpeedTitle = null;
+  let pendingSpeedTitleTimeout = 0;
+  let idleSpeedTitleTimeout = 0;
+  let currentSpeedValue = null;
+  let currentSpeedNodes = [];
+
+  function speedTitleThreshold(index) {
+    return index <= 1 ? 0.5 : speedTitleFractions[index - 2] * speedTitleRedline;
+  }
+
+  function rawSpeedTitle(value) {
+    for (let index = speedTitleSteps.length; index > 1; index -= 1) {
+      if (value >= speedTitleThreshold(index)) return index;
+    }
+    return value >= 0.5 ? 1 : 0;
+  }
+
+  function speedTitleCandidate(value) {
+    const raw = rawSpeedTitle(value);
+    if (raw >= displayedSpeedTitle) return raw;
+    for (let index = displayedSpeedTitle; index > 1; index -= 1) {
+      if (value >= speedTitleThreshold(index) * 0.9) return index;
+    }
+    return 1;
+  }
+
+  function speedTitleColor(value) {
+    const heat = Math.min(1, Math.pow(Math.max(0, value) / speedTitleRedline, 0.6));
+    for (let index = 1; index < speedTitleColorStops.length; index += 1) {
+      const [upper, upperColor] = speedTitleColorStops[index];
+      if (heat <= upper) {
+        const [lower, lowerColor] = speedTitleColorStops[index - 1];
+        const mix = (share, first, second) => {
+          const linear = (component) => {
+            const normalized = component / 255;
+            return normalized <= 0.04045 ? normalized / 12.92 : Math.pow((normalized + 0.055) / 1.055, 2.4);
+          };
+          const encoded = (component) => {
+            const channel = component <= 0.0031308
+              ? component * 12.92
+              : (1.055 * Math.pow(component, 1 / 2.4)) - 0.055;
+            return Math.round(Math.max(0, Math.min(1, channel)) * 255);
+          };
+          const a = first.slice(1).match(/../g).map((part) => linear(parseInt(part, 16)));
+          const b = second.slice(1).match(/../g).map((part) => linear(parseInt(part, 16)));
+          return `#${a.map((channel, component) => encoded(channel + ((b[component] - channel) * share)).toString(16).padStart(2, "0")).join("")}`;
+        };
+        return mix((heat - lower) / (upper - lower), lowerColor, upperColor);
+      }
+    }
+    return speedTitleColorStops.at(-1)[1];
+  }
+
+  function speedTitleMarkup(index) {
+    const [key, label] = index === 0 ? ["walk", "待机"] : speedTitleSteps[index - 1];
+    const art = speedTitleArt[key];
+    const viewBox = art.viewBox.join(" ");
+    const parts = art.parts.map((part) => {
+      const detail = part.role === "detail" || part.role === "rim" || part.role === "spoke";
+      const strokeWidth = detail ? 0.9 : (part.role === "wheel" ? 1.25 : 1.45);
+      const opacity = detail ? 0.72 : 1;
+      if (part.d) return `<path d="${part.d}" stroke-width="${strokeWidth}" opacity="${opacity}" vector-effect="non-scaling-stroke"/>`;
+      const [cx, cy, radius] = part.circle;
+      return `<circle cx="${cx}" cy="${cy}" r="${radius}" stroke-width="${strokeWidth}" opacity="${opacity}" vector-effect="non-scaling-stroke"/>`;
+    }).join("");
+    return `<svg viewBox="${viewBox}" focusable="false" aria-hidden="true" xmlns="http://www.w3.org/2000/svg"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">${parts}</g></svg>`;
+  }
+
+  function paintSpeedTitle(value = currentSpeedValue) {
+    const [key, label] = displayedSpeedTitle === 0
+      ? ["walk", "待机"]
+      : speedTitleSteps[displayedSpeedTitle - 1];
+    const threshold = displayedSpeedTitle === 0 ? null : speedTitleThreshold(displayedSpeedTitle);
+    const iconTitle = threshold === null
+      ? "待机：低于 0.5 tok/s 持续 3 秒"
+      : `${label}：达到 ${threshold.toLocaleString("zh-CN")} tok/s`;
+    const color = speedTitleColor(value || 0);
+    currentSpeedNodes.forEach((node) => {
+      const icon = node.querySelector('[data-field="outputSpeedIcon"]');
+      if (!icon) return;
+      if (icon.dataset.speedTitle !== key) {
+        icon.innerHTML = speedTitleMarkup(displayedSpeedTitle);
+        icon.dataset.speedTitle = key;
+      }
+      node.dataset.speedTier = String(displayedSpeedTitle);
+      node.dataset.speedTitle = label;
+      node.dataset.speedThreshold = threshold === null ? "0.5" : String(threshold);
+      icon.title = iconTitle;
+      icon.setAttribute("aria-label", iconTitle);
+      icon.style.color = color;
+    });
+  }
+
+  function cancelSpeedTitleTimeouts() {
+    ctx.lifecycle.clearTimeout(pendingSpeedTitleTimeout);
+    ctx.lifecycle.clearTimeout(idleSpeedTitleTimeout);
+    pendingSpeedTitleTimeout = 0;
+    idleSpeedTitleTimeout = 0;
+    pendingSpeedTitle = null;
+  }
+
+  function resetSpeedTitle() {
+    cancelSpeedTitleTimeouts();
+    currentSpeedValue = null;
+    if (displayedSpeedTitle === 0) {
+      paintSpeedTitle(0);
+      return;
+    }
+    displayedSpeedTitle = 0;
+    paintSpeedTitle(0);
+  }
+
+  function updateSpeedTitle(value) {
+    currentSpeedValue = value;
+    if (value < 0.5) {
+      ctx.lifecycle.clearTimeout(pendingSpeedTitleTimeout);
+      pendingSpeedTitleTimeout = 0;
+      pendingSpeedTitle = null;
+      paintSpeedTitle(value);
+      if (displayedSpeedTitle > 0 && !idleSpeedTitleTimeout) {
+        idleSpeedTitleTimeout = ctx.lifecycle.timeout("session_view_speed_tier", () => {
+          idleSpeedTitleTimeout = 0;
+          if (currentSpeedValue !== null && currentSpeedValue < 0.5) {
+            displayedSpeedTitle = 0;
+            paintSpeedTitle(currentSpeedValue);
+          }
+        }, 3000);
+      }
+      return;
+    }
+
+    ctx.lifecycle.clearTimeout(idleSpeedTitleTimeout);
+    idleSpeedTitleTimeout = 0;
+    paintSpeedTitle(value);
+    const candidate = speedTitleCandidate(value);
+    if (candidate === displayedSpeedTitle) {
+      ctx.lifecycle.clearTimeout(pendingSpeedTitleTimeout);
+      pendingSpeedTitleTimeout = 0;
+      pendingSpeedTitle = null;
+      return;
+    }
+    if (pendingSpeedTitle === candidate) return;
+
+    ctx.lifecycle.clearTimeout(pendingSpeedTitleTimeout);
+    pendingSpeedTitle = candidate;
+    pendingSpeedTitleTimeout = ctx.lifecycle.timeout("session_view_speed_tier", () => {
+      pendingSpeedTitleTimeout = 0;
+      const settled = currentSpeedValue === null ? null : speedTitleCandidate(currentSpeedValue);
+      if (settled !== pendingSpeedTitle) return;
+      displayedSpeedTitle = settled;
+      pendingSpeedTitle = null;
+      paintSpeedTitle(currentSpeedValue);
+    }, 800);
+  }
+
   function lineInner(node) {
     let inner = node.querySelector(":scope > .codex-usage-hud-line-inner");
     if (!inner) {
@@ -178,6 +361,39 @@ TEXT = r"""
       node.textContent = text;
       if (text) node.title = text;
       else node.removeAttribute("title");
+    });
+  }
+
+  function renderOutputSpeed(root, payload) {
+    const speedNodes = root.querySelectorAll('[data-field="outputSpeed"]');
+    currentSpeedNodes = Array.from(speedNodes);
+    const value = Number(payload?.outputTokensPerSecond);
+    const mode = String(payload?.outputSpeedMode || "idle");
+    const hasRate = payload?.requestStatus === "confirmed"
+      && mode === "measured"
+      && Number.isFinite(value)
+      && value > 0;
+    const formatted = value >= 100
+      ? String(Math.round(value))
+      : value >= 10 ? value.toFixed(1) : value.toFixed(2);
+    const text = hasRate
+      ? `≈${formatted} tok/s`
+      : "— tok/s";
+    currentSpeedNodes.forEach((node) => {
+      const valueNode = node.querySelector('[data-field="outputSpeedValue"]');
+      if (valueNode) valueNode.textContent = text;
+    });
+    if (hasRate) updateSpeedTitle(value);
+    else resetSpeedTitle();
+    const title = hasRate
+      ? "完整输出 usage ÷ 首个到最后有效内容块的时间；不含首包/首字延迟，受网络、合并发送、下游背压及不可见思考影响"
+      : (payload?.requestStatus === "running"
+        ? "至少两个有效内容块且输出 usage 完整后计算"
+        : "单块输出或 usage 不完整时显示短横线");
+    speedNodes.forEach((node) => {
+      node.hidden = false;
+      node.title = `${title} · ${node.dataset.speedTitle || "待机"} · ${node.dataset.speedThreshold || "0.5"} tok/s`;
+      node.dataset.speedMode = mode;
     });
   }
 
@@ -1767,6 +1983,7 @@ TEXT = r"""
     setText(root, "topLine", payload?.topLine || "codex-usage-hud 等待数据");
     setText(root, "requestLine", payload?.requestLine || "本次请求 等待");
     setText(root, "requestLineExpanded", payload?.requestLine || "最近模型请求轮次");
+    renderOutputSpeed(root, payload || {});
     root.querySelectorAll('[data-field="topLine"], [data-field="requestLine"], [data-field="requestLineExpanded"]').forEach((node) => {
       node.classList.remove(warningClass);
     });
@@ -1808,6 +2025,7 @@ TEXT = r"""
     setText(root, "topLine", payload?.topLine || "codex-usage-hud 等待数据");
     setText(root, "requestLine", payload?.requestLine || "本次请求 等待");
     setText(root, "requestLineExpanded", payload?.requestLine || "最近模型请求轮次");
+    renderOutputSpeed(root, payload || {});
     root.querySelectorAll('[data-field="topLine"], [data-field="requestLine"], [data-field="requestLineExpanded"]').forEach((node) => {
       node.classList.remove(warningClass);
     });
@@ -2463,11 +2681,20 @@ TEXT = r"""
     function dispose() {
       const wasInstalled = installed;
       installed = false;
+      cancelSpeedTitleTimeouts();
+      displayedSpeedTitle = 0;
+      currentSpeedValue = null;
       cancelThreadFindJump();
       cancelActivityScroll();
       ctx.observers?.clear?.("activity_request_materialization");
       const root = document.getElementById(rootId);
       root?.querySelectorAll(".codex-usage-hud-line").forEach(cancelNumericAnimation);
+      root?.querySelectorAll('[data-field="outputSpeed"]').forEach((node) => {
+        node.hidden = true;
+        node.title = "";
+        node.querySelector('[data-field="outputSpeedValue"]')?.replaceChildren();
+      });
+      currentSpeedNodes = [];
       ctx.lifecycle.clearInterval(window[runningTimerName] || 0);
       window[runningTimerName] = 0;
       return wasInstalled;
@@ -2494,6 +2721,7 @@ TEXT = r"""
       applySearchJump,
       setFieldTitle,
       setText,
+      renderOutputSpeed,
     };
   }
 
@@ -2512,6 +2740,9 @@ TEXT = r"""
     setFieldTitle,
     setText,
   } = sessionViewDomain;
-"""
+""".replace(
+    "__CODEX_USAGE_HUD_SPEED_TITLE_ART__",
+    json.dumps(VEHICLE_ART, ensure_ascii=False, separators=(",", ":")),
+)
 
 __all__ = ["TEXT"]
