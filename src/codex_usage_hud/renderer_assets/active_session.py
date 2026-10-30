@@ -266,7 +266,7 @@ TEXT = r"""
           // following tool-execution disclosure. Never forward it as the
           // bubble's execution-state title.
           if (/^(?:已处理|处理了|用时|耗时|历时|worked(?:\s+for)?\s|duration\b|processed\b|took\b)/i.test(line)) continue;
-          if (/^(?:正在(?:编辑|运行|读取|执行|调用|处理|查看|操作)|等待(?:确认|用户)|(?:编辑了|运行了|读取了|执行了|调用了|处理了|已(?:编辑|运行|读取|执行|调用|处理|使用|创建|写入|修改))|(?:working|editing|running|reading|executing|calling|waiting|edited|ran|read|executed|used|created)\b)/i.test(line)) {
+          if (/^(?:正在(?:编辑|运行|读取|执行|调用|处理|查看|操作|检查|分析|搜索|规划|编写|更新)|等待(?:确认|用户)|(?:编辑了|运行了|读取了|执行了|调用了|处理了|检查了|分析了|搜索了|规划了|编写了|更新了|已(?:编辑|运行|读取|执行|调用|处理|使用|创建|写入|修改|检查|分析|搜索|规划|编写|更新))|(?:working|editing|running|reading|executing|calling|waiting|checking|analyzing|analysing|searching|planning|writing|updating|reviewing|loading|inspecting|edited|ran|read|executed|used|created)\b)/i.test(line)) {
             return line.slice(0, 512);
           }
         }
@@ -275,7 +275,7 @@ TEXT = r"""
 
       function activeSessionDisclosureTitleIsActive(value) {
         const line = normalize(value);
-        return /^(?:正在(?:编辑|运行|读取|执行|调用|处理|查看|操作)|等待(?:确认|用户)|(?:working|editing|running|reading|executing|calling|waiting)\b)/i.test(line);
+        return /^(?:正在(?:编辑|运行|读取|执行|调用|处理|查看|操作|检查|分析|搜索|规划|编写|更新)|等待(?:确认|用户)|(?:working|editing|running|reading|executing|calling|waiting|checking|analyzing|analysing|searching|planning|writing|updating|reviewing|loading|inspecting)\b)/i.test(line);
       }
 
       function activeSessionWorkDisclosureTitle(node) {

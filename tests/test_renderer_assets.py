@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import subprocess
 
 from codex_usage_hud.renderer_assets import manifest
 from codex_usage_hud.renderer_assets import layout
@@ -745,6 +746,35 @@ def test_active_session_reports_native_current_work_disclosure_title() -> None:
     observer = script[observer_start:observer_end]
     assert "const conversation = activeSessionConversationScope();" in observer
     assert "aria-expanded" in observer
+
+
+def test_native_work_titles_recognize_progress_and_preserve_finished_headings() -> None:
+    script = renderer_script._RENDERER_HUD_SCRIPT_TEMPLATE
+    start = script.index("function activeSessionDisclosureTitleLine(value)")
+    end = script.index("function activeSessionWorkDisclosureTitle(node)", start)
+    program = r"""
+const assert = require('node:assert/strict');
+const normalize = value => String(value || '').replace(/\s+/g, ' ').trim();
+""" + script[start:end] + r"""
+for (const title of ['Checking wheel notice inclusion', 'Analyzing output',
+                     'Searching source', '正在检查发布内容']) {
+  assert.equal(activeSessionDisclosureTitleLine(title), title);
+  assert.equal(activeSessionDisclosureTitleIsActive(title), true);
+}
+for (const title of ['Edited files and ran commands', 'Used Codebase Memory MCP',
+                     '已读取文件运行了命令']) {
+  assert.equal(activeSessionDisclosureTitleLine(title), title);
+  assert.equal(activeSessionDisclosureTitleIsActive(title), false);
+}
+for (const title of ['Worked for 2m', '用时 2分钟', 'Expand all', 'Model settings']) {
+  assert.equal(activeSessionDisclosureTitleLine(title), '');
+}
+"""
+    result = subprocess.run(
+        ["node", "--input-type=commonjs", "-"], input=program,
+        capture_output=True, text=True, encoding="utf-8", check=False,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 def test_active_session_groups_disclosures_per_turn_and_picks_latest() -> None:

@@ -562,11 +562,7 @@ def _overlay_output_is_stale(item: Mapping[str, object]) -> bool:
 
 
 def _overlay_feed_active(item: Mapping[str, object]) -> bool:
-    """Whether the bubble body should show the live activity feed.
-
-    Execution windows emit zero rollout events, so the feed is the only
-    surface that can show local progress; the output view returns as soon as
-    a fresh agent message lands and no step is left open.
+    """Whether an active bubble can expose its latest tools beside output.
 
     Rest-reminder cards never participate in the session activity feed: their
     ``waiting_user`` status must not be mistaken for a Codex turn waiting on
@@ -576,6 +572,8 @@ def _overlay_feed_active(item: Mapping[str, object]) -> bool:
     if _item_is_rest_reminder(item):
         return False
     status = str(item.get("status") or "").strip().lower()
+    if status not in _FEED_ACTIVE_STATUSES | {"waiting_user"}:
+        return False
     steps = _overlay_activity_steps(item)
     if any(
         str(step.get("status") or "").strip().lower() == "running" for step in steps
@@ -584,6 +582,10 @@ def _overlay_feed_active(item: Mapping[str, object]) -> bool:
     if status == "waiting_user":
         return True
     if status in _FEED_ACTIVE_STATUSES:
+        if _overlay_execution_group_steps(item):
+            # Fresh assistant output updates the pinned text while the latest
+            # concrete tool row/history remain available for the active task.
+            return True
         if steps and str(steps[-1].get("status") or "").strip().lower() == "failed":
             # 失败滞留：hold the feed so the failure stays visible until the
             # next output arrives.
@@ -827,6 +829,17 @@ def _overlay_title_is_active(value: object) -> bool:
             "reading",
             "executing",
             "calling",
+            "waiting",
+            "checking",
+            "analyzing",
+            "analysing",
+            "searching",
+            "planning",
+            "writing",
+            "updating",
+            "reviewing",
+            "loading",
+            "inspecting",
         )
     )
 
@@ -858,7 +871,6 @@ def _overlay_execution_rows(
     """Render the latest commands/tools inside the current execution group."""
     rows: list[dict[str, str]] = []
     for step in _overlay_execution_group_steps(item):
-        title = str(step.get("title") or "").strip()
         status = str(step.get("status") or "").strip().lower()
         tool_name = str(step.get("toolName") or step.get("tool_name") or "").strip()
         detail = " ".join(str(step.get("detail") or "").split()) or tool_name
@@ -894,11 +906,17 @@ def _overlay_execution_rows(
         else:
             text = f"• {detail}".strip()
             action = "peek_output"
+        if status in {"failed", "error"} and not text.startswith("✗"):
+            text = f"✗ {detail}".strip()
         if status in {"failed", "error"} and step.get("exitCode") not in (None, ""):
             text = f"{text} · 退出码 {step.get('exitCode')}"
         rows.append(
             {
-                "kind": "execution",
+                "kind": (
+                    "failed" if status in {"failed", "error"}
+                    else "wait" if prefix == "等确认"
+                    else "execution"
+                ),
                 "mode": "execution",
                 "text": text,
                 "tooltip": (

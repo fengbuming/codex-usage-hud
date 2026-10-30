@@ -38,7 +38,6 @@ from .constants import (
     WORK_OVERLAY_COMPLETED_BADGE_SIZE,
     WORK_OVERLAY_EMPTY_GRACE_SECONDS,
     WORK_OVERLAY_FEED_SPINNER_ENABLED,
-    WORK_OVERLAY_FEED_SPINNER_TIMER_MS,
     WORK_OVERLAY_MARGIN,
     WORK_OVERLAY_QT_TRANSITION_ANIMATIONS_ENABLED,
     WORK_OVERLAY_TEXT_WRAP_WIDTH,
@@ -74,13 +73,10 @@ from .model import (
     _overlay_activity_steps,
     _overlay_activity_tooltip,
     _overlay_feed_active,
-    _overlay_feed_rows,
-    _overlay_feed_summary_row,
     _overlay_feed_spinner_frame,
     _overlay_footer_selection,
     _overlay_execution_body_active,
     _overlay_execution_group_title,
-    _overlay_execution_live_summary,
     _overlay_execution_rows,
     _overlay_running_execution_title,
     _overlay_title_is_active,
@@ -262,13 +258,7 @@ class OverlayRenderingMixin:
         *,
         now: float | None = None,
     ) -> tuple[str, str]:
-        """Show the newest parsed action as soon as the payload refreshes.
-
-        The footer picks its row by priority (running > 等确认 > 失败 > 思考
-        标题 > 末条). Running rows carry the local elapsed seconds that share
-        the 1s elapsed tick, and thinking rows carry the rotating spinner;
-        the full step list stays available in the tooltip.
-        """
+        """Mirror the native task status, falling back to its reasoning title."""
         del record, now
         native_title = _compact_work_text(
             item.get("nativeCollapsedTitle") or item.get("collapsedTitle"),
@@ -281,6 +271,14 @@ class OverlayRenderingMixin:
             if activity_tooltip:
                 tooltip = f"{tooltip}\n{activity_tooltip}"
             return native_title, tooltip
+        # Reasoning summaries are Codex's live task/progress label (the line
+        # above the concrete tools), including arbitrary localized wording.
+        # Keep them separate from command status and completed group headings.
+        for step in reversed(_overlay_activity_steps(item)):
+            if str(step.get("title") or "") == "思考" and not step.get("toolName"):
+                progress = _compact_work_text(step.get("detail"), 512)
+                if progress:
+                    return progress, "\n".join(filter(None, (progress, _overlay_activity_tooltip(item))))
         texts = _overlay_activity_step_texts(item)
         running_title = _overlay_running_execution_title(item)
         if running_title and _overlay_feed_active(item) and _overlay_execution_body_active(item):
@@ -368,54 +366,34 @@ class OverlayRenderingMixin:
             return []
         item_id = _item_id(item)
         peek_ids = getattr(self, "_feed_peek_item_ids", None)
-        rows = _overlay_feed_rows(
-            item,
-            spinner_frame=self._feed_spinner_glyph(),
-            now=datetime.now().astimezone(),
-        )
-        if not rows:
-            return []
         expanded = isinstance(peek_ids, set) and item_id and item_id in peek_ids
-        if _overlay_execution_body_active(item):
-            rows = _overlay_execution_rows(
-                item,
-                max_rows=WORK_OVERLAY_BODY_MAX_LINES if expanded else 1,
-            )
-            if expanded and rows:
-                rows = [dict(row) for row in rows]
-                rows[-1]["action"] = "resume_feed"
-                rows[-1]["tooltip"] = "收起执行详情"
-        elif not expanded:
-            summary = _overlay_feed_summary_row(rows)
-            rows = [dict(summary)] if summary else rows[-1:]
-            if rows:
-                rows[0]["action"] = "peek_output"
-                rows[0]["tooltip"] = "展开执行详情"
-        else:
-            rows = [dict(row) for row in rows]
-            if rows:
-                rows[-1]["action"] = "resume_feed"
-                rows[-1]["tooltip"] = "收起执行详情"
+        rows = _overlay_execution_rows(
+            item,
+            max_rows=WORK_OVERLAY_BODY_MAX_LINES if expanded else 1,
+        )
+        if expanded and rows:
+            rows[-1]["action"] = "resume_feed"
         if rows:
             mode = "expanded" if expanded else str(rows[0].get("mode") or "summary")
             for row in rows:
-                row.setdefault("mode", mode)
+                row["mode"] = mode
         metrics = QFontMetrics(detail.font())
         width = WORK_OVERLAY_TEXT_WRAP_WIDTH
-        for row in rows:
+        for index, row in enumerate(rows):
             text = str(row.get("text") or "")
+            row_width = width - (22 if expanded and index == 0 else 0)
             if row.get("kind") == "cmd" and row.get("command"):
                 command = str(row["command"])
                 row["text"] = metrics.elidedText(
                     f"$ {command}",
                     Qt.TextElideMode.ElideMiddle,
-                    width,
+                    row_width,
                 )
             elif text:
                 row["text"] = metrics.elidedText(
                     text,
                     Qt.TextElideMode.ElideRight,
-                    width,
+                    row_width,
                 )
         return rows
 
@@ -437,27 +415,10 @@ class OverlayRenderingMixin:
         if not rows:
             return
         expanded = _item_id(item) in getattr(self, "_feed_peek_item_ids", set())
-        mode = str(rows[0].get("mode") or "summary")
-        if expanded or mode == "expanded" or mode == "execution":
-            text = "\n".join(str(row.get("text") or "") for row in rows)
-        else:
-            body_text = str(item.get("lastText") or item.get("detail") or "").strip()
-            output_text = self._multiline_elided_text(
-                body_text,
-                font=detail.font(),
-                width=WORK_OVERLAY_TEXT_WRAP_WIDTH,
-                max_lines=2,
-            )
-            summary_text = str(rows[0].get("text") or "")
-            summary_text = self._multiline_elided_text(
-                summary_text,
-                font=detail.font(),
-                width=max(1, WORK_OVERLAY_TEXT_WRAP_WIDTH - 52),
-                max_lines=1,
-            )
-            text = "\n".join(part for part in (output_text, summary_text) if part)
+        mode = str(rows[0].get("mode") or "execution")
+        text = "\n".join(str(row.get("text") or "") for row in rows)
         record["feed_rows_meta"] = list(rows)
-        if not expanded and mode in {"summary", "execution"}:
+        if not expanded:
             live_symbol = record.get("live_symbol")
             if isinstance(live_symbol, QLabel):
                 live_symbol.setText(
@@ -471,21 +432,13 @@ class OverlayRenderingMixin:
                 record,
                 mode=mode,
                 expanded=False,
-                body_text=str(item.get("lastText") or item.get("detail") or "").strip(),
+                body_text=str(item.get("lastText") or "").strip(),
                 live_text=str(rows[-1].get("text") or ""),
                 detail_text=text,
             )
             self._sync_feed_action_label(record, expanded=False)
             self._sync_feed_anchor_geometry(record)
             return
-        if text == detail.text() and mode != "expanded":
-            return
-        if isinstance(detail, ScrollingFeedLabel):
-            detail.clear_scrolling_lines()
-        detail.setText(text)
-        detail.setFixedHeight(
-            self._wrapped_label_height(detail, WORK_OVERLAY_TEXT_WRAP_WIDTH)
-        )
         detail.setToolTip(
             "\n".join(
                 str(row.get("tooltip") or "") for row in rows if row.get("tooltip")
@@ -681,8 +634,11 @@ class OverlayRenderingMixin:
                 )
                 pinned.setText(pinned_text)
                 pinned.setGeometry(0, 0, width, pinned_height)
+                pinned.setToolTip(body_text)
                 pinned.setStyleSheet(
-                    "QLabel { color: #B9B9B9; border: none; background: transparent; opacity: 0.72; }"
+                    "QLabel {"
+                    f"color: {self._theme_tokens['text']};"
+                    "border: none; background: transparent; }"
                 )
                 pinned.show()
             if isinstance(live_line, QWidget):
@@ -701,6 +657,7 @@ class OverlayRenderingMixin:
                         max_lines=1,
                     )
                 )
+                live.setToolTip(live_text)
                 live.show()
             if isinstance(action, QLabel):
                 action.show()
@@ -982,7 +939,9 @@ class OverlayRenderingMixin:
         live_text.setWordWrap(False)
         live_text.setTextFormat(text_format.PlainText)
         live_text.setAlignment(alignment.AlignVCenter | alignment.AlignLeft)
-        live_text.setFont(QFont("Microsoft YaHei UI", 8))
+        # Keep the live tool row visually subordinate to the assistant output
+        # pinned above it while retaining enough room for a command tail.
+        live_text.setFont(QFont("Microsoft YaHei UI", 7))
         live_text.setStyleSheet("QLabel { border: none; background: transparent; color: #8492A6; }")
 
         feed_action_label = QLabel("", body_host)
@@ -1321,67 +1280,16 @@ class OverlayRenderingMixin:
                 part for part in (feature_text, secondary) if part
             )
         else:
-            body_text = str(item.get("lastText") or item.get("detail") or "").strip()
+            special_body = system_action or system_notice or rest_reminder or status == "draft"
+            body_text = str(
+                item.get("lastText") or (item.get("detail") if special_body else "") or ""
+            ).strip()
         detail = record["detail"]
         feed_mode = str(feed_rows[0].get("mode") or "summary") if feed_rows else ""
-        if feed_rows and peeking:
-            # Live activity feed: pre-elided single lines so each row keeps a
-            # stable click band without touching the body layout constants.
-            action_width = 22
-            metrics = QFontMetrics(detail.font())
-            detail_lines = [
-                metrics.elidedText(
-                    str(row.get("text") or ""),
-                    Qt.TextElideMode.ElideRight,
-                    max(
-                        1,
-                        WORK_OVERLAY_TEXT_WRAP_WIDTH
-                        - (action_width if index == len(feed_rows) - 1 else 0),
-                    ),
-                )
-                for index, row in enumerate(feed_rows)
-            ]
-            detail_text = "\n".join(detail_lines)
-            detail.setToolTip(
-                "\n".join(
-                    str(row.get("tooltip") or "")
-                    for row in feed_rows
-                    if row.get("tooltip")
-                )
-            )
-        elif feed_rows and feed_mode == "execution":
-            # When the Codex turn is inside a collapsed tool group, show the
-            # group's latest concrete instructions in the body. The footer
-            # carries the group heading; stale assistant text stays hidden
-            # until a fresh assistant message arrives.
+        if feed_rows:
+            # Keep concrete instructions separate from the latest assistant
+            # output, even after a fresh output arrives between tool groups.
             detail_text = "\n".join(str(row.get("text") or "") for row in feed_rows)
-            detail.setToolTip(
-                "\n".join(
-                    str(row.get("tooltip") or "")
-                    for row in feed_rows
-                    if row.get("tooltip")
-                )
-            )
-        elif feed_rows:
-            # Scheme B: preserve the latest assistant output and append one
-            # truthful execution summary line. Full rows appear only after
-            # the user activates that summary.
-            summary_text = str(feed_rows[0].get("text") or "")
-            output_text = self._multiline_elided_text(
-                body_text,
-                font=detail.font(),
-                width=WORK_OVERLAY_TEXT_WRAP_WIDTH,
-                max_lines=2,
-            )
-            summary_text = self._multiline_elided_text(
-                summary_text,
-                font=detail.font(),
-                width=max(1, WORK_OVERLAY_TEXT_WRAP_WIDTH - 52),
-                max_lines=1,
-            )
-            detail_text = "\n".join(
-                part for part in (output_text, summary_text) if part
-            )
             detail.setToolTip(
                 "\n".join(
                     str(row.get("tooltip") or "")
@@ -1401,18 +1309,11 @@ class OverlayRenderingMixin:
                 detail.setToolTip(
                     body_text if detail_text and detail_text != body_text else ""
                 )
-        if isinstance(detail, ScrollingFeedLabel):
-            if peeking:
-                detail.set_scrolling_lines(detail_text.splitlines())
-            else:
-                detail.clear_scrolling_lines()
-                detail.setText(detail_text)
-        else:
-            detail.setText(detail_text)
-        detail_height = self._wrapped_label_height(detail, WORK_OVERLAY_TEXT_WRAP_WIDTH)
-        detail.setFixedHeight(detail_height)
         record["feed_rows_meta"] = list(feed_rows)
-        live_body_text = _overlay_execution_live_summary(item) if feed_rows else ""
+        # Use the same latest concrete tool row on payload and timer refreshes.
+        live_body_text = (
+            str(feed_rows[-1].get("text") or "") if feed_rows else ""
+        )
         scheme_b_enabled = not (
             system_action
             or system_notice
@@ -1468,7 +1369,7 @@ class OverlayRenderingMixin:
             )
         detail.setStyleSheet(
             "QLabel {"
-            f"color: {theme['requestText']};"
+            f"color: {theme['text'] if scheme_b_enabled else theme['requestText']};"
             "border: none;"
             "background: transparent;"
             "}"

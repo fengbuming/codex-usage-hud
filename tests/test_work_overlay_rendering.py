@@ -23,6 +23,7 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 from PySide6.QtWidgets import QApplication, QWidget
+from PySide6.QtGui import QFontDatabase
 
 import codex_usage_hud.overlay_projection as overlay_projection
 import codex_usage_hud.active_work as active_work
@@ -81,6 +82,14 @@ class WorkOverlayRenderingTests(unittest.TestCase):
         os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
         cls._app = QApplication.instance() or QApplication(sys.argv[:1])
         cls._app.setQuitOnLastWindowClosed(False)
+        # Qt's Windows offscreen plugin may expose no system fonts at all.
+        # Load the installed UI font so geometry checks use real glyph widths.
+        if not QFontDatabase.families():
+            font_root = Path(os.environ.get("WINDIR", "C:/Windows")) / "Fonts"
+            for name in ("msyh.ttc", "seguisym.ttf"):
+                font_path = font_root / name
+                if font_path.is_file():
+                    QFontDatabase.addApplicationFont(str(font_path))
 
     def setUp(self) -> None:
         self.shell = QWidget()
@@ -225,6 +234,9 @@ class WorkOverlayRenderingTests(unittest.TestCase):
         self.assertTrue(live.isVisible())
         self.assertFalse(detail.isVisible())
         self.assertLessEqual(len(pinned.text().splitlines()), 2)
+        self.assertTrue(live.text().startswith("$ python -m pytest tests/test_ui.py"))
+        self.assertNotIn("运行中", live.text())
+        self.assertLess(live.font().pointSize(), pinned.font().pointSize())
         self.assertEqual(live_line.y(), pinned.height())
         self.assertEqual(live_line.height(), body_host.height() - pinned.height())
         self.assertIn("border: none", live_line.styleSheet())
@@ -239,6 +251,109 @@ class WorkOverlayRenderingTests(unittest.TestCase):
         self.assertFalse(live_line.isVisible())
         self.assertEqual(len(detail.text().splitlines()), WORK_OVERLAY_BODY_MAX_LINES)
         self.assertGreaterEqual(body_host.height(), detail.fontMetrics().height() * WORK_OVERLAY_BODY_MAX_LINES)
+
+    def test_native_english_collapsed_status_reaches_shimmer_footer(self) -> None:
+        now = datetime.now(timezone.utc)
+        item = {
+            "id": "session-checking",
+            "sessionId": "session-checking",
+            "title": "Checking",
+            "status": "tool",
+            "current": True,
+            "collapsedTitle": "Checking wheel notice inclusion",
+            "lastOutputAt": (now - timedelta(minutes=2)).isoformat(),
+            "activitySteps": (
+                self._command_step(
+                    "python -m pytest tests/test_ui.py -q",
+                    "running",
+                    timestamp=now - timedelta(seconds=8),
+                    call_id="checking",
+                ),
+            ),
+        }
+
+        rendering = self._rendering()
+        rendering._build_item_card(item)
+        status_label = rendering._item_widgets[-1]["status_label"]
+
+        self.assertTrue(status_label.text().startswith("Checking whee"))
+        self.assertTrue(status_label.toolTip().startswith("Checking wheel notice inclusion"))
+
+    def test_progress_uses_reasoning_title_without_replacing_latest_tool(self) -> None:
+        now = datetime.now(timezone.utc)
+        rendering = self._rendering()
+        item = {
+            "id": "progress",
+            "status": "tool",
+            "lastText": "Latest assistant output",
+            "activitySteps": (
+                {"title": "思考", "detail": "Reconciling release artifacts", "status": "completed"},
+                self._command_step("git diff --check", "running", timestamp=now, call_id="1"),
+            ),
+        }
+        rendering._build_item_card(item)
+        record = rendering._item_widgets[-1]
+        self.assertTrue(record["status_label"].toolTip().startswith("Reconciling release artifacts"))
+        self.assertTrue(record["status_label"].text().startswith("Reconciling"))
+        self.assertEqual(record["live_text"].text(), "$ git diff --check")
+
+    def test_fresh_output_keeps_latest_tool_and_expanded_history_scrolls(self) -> None:
+        now = datetime.now(timezone.utc)
+        rendering = self._rendering()
+        steps = [
+            self._command_step(f"git show step-{i}", "completed", timestamp=now - timedelta(seconds=10-i), call_id=str(i))
+            for i in range(4)
+        ]
+        item = {
+            "id": "live-history", "status": "active", "lastText": "Initial output",
+            "taskStartedAt": (now - timedelta(minutes=1)).isoformat(),
+            "lastOutputAt": (now - timedelta(seconds=20)).isoformat(),
+            "activitySteps": steps,
+        }
+        rendering._build_item_card(item)
+        self.shell.show()
+        self._app.processEvents()
+        record = rendering._item_widgets[-1]
+
+        fresh = {**item, "lastText": "New assistant output", "lastOutputAt": now.isoformat()}
+        rendering._update_item_card(record, fresh)
+        self.assertTrue(record["pinned_output"].isVisible())
+        self.assertEqual(record["pinned_output"].text(), "New assistant output")
+        self.assertIn("step-3", record["live_text"].text())
+        self.assertIn(DEFAULT_WORK_OVERLAY_THEME["text"], record["pinned_output"].styleSheet())
+
+        rendering._feed_peek_item_ids.add(item["id"])
+        rendering._update_item_card(record, fresh)
+        detail = record["detail"]
+        self.assertTrue(detail.isVisible())
+        self.assertEqual(detail.text().splitlines(), [f"✓ git show step-{i}" for i in range(1, 4)])
+
+        next_step = self._command_step("git show step-4", "running", timestamp=now + timedelta(seconds=1), call_id="4")
+        updated = {**fresh, "activitySteps": [*steps, next_step]}
+        rendering._update_item_card(record, updated)
+        # A new output starts a new native tool block; previous-block commands
+        # must not leak into that block's expanded history.
+        self.assertEqual(detail.text().splitlines(), ["$ git show step-4"])
+        new_steps = [
+            self._command_step(f"git show step-{i}", "completed", timestamp=now + timedelta(seconds=i), call_id=str(i))
+            for i in range(4, 7)
+        ]
+        updated = {**fresh, "activitySteps": [*steps, *new_steps]}
+        rendering._update_item_card(record, updated)
+        next_step = self._command_step("git show step-7", "running", timestamp=now + timedelta(seconds=7), call_id="7")
+        updated = {**fresh, "activitySteps": [*steps, *new_steps, next_step]}
+        rendering._update_item_card(record, updated)
+        self.assertEqual(detail.text().splitlines(), ["✓ git show step-5", "✓ git show step-6", "$ git show step-7"])
+        self.assertEqual(detail._scroll_animation.state().name, "Running")
+        previous_lines = list(detail._old_scroll_lines)
+        rendering._refresh_feed_body(record, updated)
+        self.assertEqual(detail._scroll_animation.state().name, "Running")
+        self.assertEqual(detail._old_scroll_lines, previous_lines)
+
+        rendering._feed_peek_item_ids.discard(item["id"])
+        rendering._update_item_card(record, updated)
+        self.assertEqual(record["pinned_output"].text(), "New assistant output")
+        self.assertIn("step-7", record["live_text"].text())
 
     def test_explicit_empty_collapsed_title_is_not_restored_from_stale_cache(self) -> None:
         now = datetime.now(timezone.utc)
