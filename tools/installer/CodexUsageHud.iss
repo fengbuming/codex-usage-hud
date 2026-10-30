@@ -60,6 +60,7 @@ Source: "{#SourceExe}"; DestDir: "{tmp}"; DestName: "codex-hud-stop.exe"; Flags:
 Source: "{#ProjectRoot}\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#ProjectRoot}\README.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#ProjectRoot}\README_EN.md"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
+Source: "{#ProjectRoot}\THIRD_PARTY_NOTICES.md"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{autoprograms}\codex-usage-hud\Codex Usage HUD"; Filename: "{app}\{#AppExeName}"; Parameters: "--daemon"; WorkingDir: "{app}"

@@ -7,7 +7,13 @@ from pathlib import Path
 
 from codex_usage_hud import renderer_activity_projection as projection
 from codex_usage_hud import renderer_activity_trail as trail_owner
-from codex_usage_hud.core.parser import Activity, ParsedSession, RequestRound, RequestTokens
+from codex_usage_hud.core.parser import (
+    Activity,
+    ActivityStep,
+    ParsedSession,
+    RequestRound,
+    RequestTokens,
+)
 from codex_usage_hud.renderer_presenters import common
 from codex_usage_hud.renderer_presenters import request
 
@@ -113,3 +119,23 @@ def test_activity_owner_has_no_runtime_or_overlay_dependency() -> None:
     assert "renderer_payload_builder" not in trail_source
     assert "renderer_runtime" not in trail_source
     assert "desktop_overlay" not in trail_source
+
+
+def test_renderer_work_feed_projects_latest_output_and_three_tools() -> None:
+    moment = datetime(2026, 8, 1, 11, 59, 0, tzinfo=timezone.utc)
+    snapshot = ParsedSession(
+        session_id="session-work-feed",
+        request=RequestTokens(status="running", model="gpt-5.5"),
+        activity=Activity("tool call", "正在执行", moment),
+        refreshed_at=moment,
+    )
+    snapshot.last_output = Activity("assistant", "最新助手正文", moment)
+    snapshot.activity_steps = [
+        ActivityStep(title="执行命令", detail=f"命令 {index}", status="completed")
+        for index in range(1, 5)
+    ]
+    context = _context([])
+
+    assert projection.work_output(snapshot, context=context) == "最新助手正文"
+    rows = projection.work_tool_rows(snapshot, context=context)
+    assert [row["text"] for row in rows] == ["执行命令：命令 2", "执行命令：命令 3", "执行命令：命令 4"]

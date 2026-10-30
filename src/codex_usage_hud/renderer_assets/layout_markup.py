@@ -172,6 +172,12 @@ TEXT = r"""
                       <div class="codex-usage-hud-section-title" data-field="topExecutingLabel">正在执行</div>
                       <div class="codex-usage-hud-value blue" data-field="topExecuting"></div>
                     </div>
+                    <div class="codex-usage-hud-work-feed" data-field="topWorkFeed">
+                      <div class="codex-usage-hud-work-status" data-field="topWorkStatus"></div>
+                      <div class="codex-usage-hud-work-output" data-field="topWorkOutput"></div>
+                      <div class="codex-usage-hud-work-latest-tool" data-field="topWorkLatestTool"></div>
+                      <div class="codex-usage-hud-work-tools" data-field="topWorkTools"></div>
+                    </div>
                     <div class="codex-usage-hud-activity-metrics">
                       <div class="codex-usage-hud-activity-metric">
                         <div class="codex-usage-hud-section-title" data-field="topActivityElapsedLabel">已运行</div>

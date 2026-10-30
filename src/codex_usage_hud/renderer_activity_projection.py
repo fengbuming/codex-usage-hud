@@ -232,6 +232,52 @@ def executing_text(
     return activity_main(snapshot, context=context)
 
 
+def work_output(
+    snapshot: ParsedSession,
+    *,
+    context: ActivityProjectionContext,
+    limit: int = 180,
+) -> str:
+    """Return the latest assistant output for the Renderer work feed."""
+    output = getattr(snapshot, "last_output", None)
+    kind = str(getattr(output, "kind", "") or "").strip().lower()
+    detail = str(getattr(output, "detail", "") or "").strip()
+    if kind not in {"agent", "assistant", "output"} or not detail:
+        return ""
+    return context.compact(detail, limit)
+
+
+def work_tool_rows(
+    snapshot: ParsedSession,
+    *,
+    context: ActivityProjectionContext,
+    max_rows: int = 3,
+) -> list[dict[str, object]]:
+    """Return the latest concrete tool rows for the Renderer work feed."""
+    rows: list[dict[str, object]] = []
+    for step in getattr(snapshot, "activity_steps", []) or []:
+        title = str(_step_field(step, "title") or "执行命令").strip()
+        tool_name = str(_step_field(step, "tool_name", "toolName") or "").strip()
+        detail = " ".join(str(_step_field(step, "detail") or "").split())
+        if title == "思考" and not tool_name:
+            continue
+        if not detail and not tool_name:
+            continue
+        status = str(_step_field(step, "status") or "").strip().lower()
+        text = title if not detail else f"{title}：{detail}"
+        rows.append(
+            {
+                "title": context.compact(title, 32),
+                "detail": context.compact(detail or tool_name, 140),
+                "text": context.compact(text, 180),
+                "status": status,
+                "active": status == "running",
+                "tooltip": text,
+            }
+        )
+    return rows[-max(1, int(max_rows)) :]
+
+
 def activity_labels(
     snapshot: ParsedSession,
     *,
@@ -539,4 +585,6 @@ __all__ = [
     "task_round_count",
     "task_spend_money_text",
     "task_spend_text",
+    "work_output",
+    "work_tool_rows",
 ]

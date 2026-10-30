@@ -1488,7 +1488,7 @@ TEXT = r"""
           }
           #${rootId} .codex-usage-hud-activity-card {
             display: grid;
-            grid-template-rows: auto auto auto auto minmax(0, 1fr);
+            grid-template-rows: auto auto auto auto auto minmax(0, 1fr);
             height: 100%;
             min-height: 0;
           }
@@ -1508,6 +1508,52 @@ TEXT = r"""
             color: #9ccbff;
             font-family: Consolas, "Cascadia Mono", ui-monospace, monospace;
             font-size: 12.5px;
+          }
+          #${rootId} .codex-usage-hud-work-feed {
+            box-sizing: border-box;
+            display: grid;
+            gap: 4px;
+            min-width: 0;
+            margin-bottom: 10px;
+            padding: 8px 10px;
+            border: 1px solid rgba(132, 146, 166, .16);
+            border-radius: 6px;
+            background: #0d151e;
+          }
+          #${rootId} .codex-usage-hud-work-feed[hidden] {
+            display: none;
+          }
+          #${rootId} .codex-usage-hud-work-status {
+            color: #f3d27a;
+            font-size: 11px;
+            font-weight: 800;
+          }
+          #${rootId} .codex-usage-hud-work-output,
+          #${rootId} .codex-usage-hud-work-latest-tool,
+          #${rootId} .codex-usage-hud-work-tool-row {
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+          }
+          #${rootId} .codex-usage-hud-work-output {
+            color: #e5edf7;
+            font-size: 11px;
+          }
+          #${rootId} .codex-usage-hud-work-latest-tool,
+          #${rootId} .codex-usage-hud-work-tool-row {
+            color: #8492a6;
+            font-size: 10px;
+          }
+          #${rootId} .codex-usage-hud-work-tool-row[data-active="true"] {
+            color: #9ccbff;
+          }
+          #${rootId} .codex-usage-hud-work-tools {
+            display: grid;
+            gap: 3px;
+            max-height: 54px;
+            overflow-y: auto;
+            scrollbar-width: thin;
           }
           #${rootId} .codex-usage-hud-activity-step {
             box-sizing: border-box;

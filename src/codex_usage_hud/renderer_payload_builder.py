@@ -551,6 +551,9 @@ def _activity_task_payload(
         "executingLabel": labels["executingLabel"],
         "currentTaskLabel": labels["currentTaskLabel"],
         "activityState": _top_activity_state(projected),
+        "workStatus": _top_activity_state(projected),
+        "workOutput": _top_work_output(projected),
+        "workTools": _top_work_tools(projected),
         "activityElapsed": _top_activity_elapsed(projected),
         "activityElapsedLabel": labels["activityElapsedLabel"],
         "activityGap": _top_activity_gap_value(projected),
@@ -1632,6 +1635,21 @@ def _top_activity_trail(snapshot: ParsedSession) -> list[dict[str, object]]:
     )
 
 
+def _top_work_output(snapshot: ParsedSession) -> str:
+    return renderer_activity_projection.work_output(
+        snapshot,
+        context=_activity_projection_context(),
+    )
+
+
+def _top_work_tools(snapshot: ParsedSession) -> list[dict[str, object]]:
+    return renderer_activity_projection.work_tool_rows(
+        snapshot,
+        context=_activity_projection_context(),
+        max_rows=3,
+    )
+
+
 def _top_details(snapshot: ParsedSession, session_cost: float | None) -> dict[str, object]:
     session_parts = _top_session_parts(snapshot)
     activity_labels = _top_activity_labels(snapshot)
@@ -1658,6 +1676,9 @@ def _top_details(snapshot: ParsedSession, session_cost: float | None) -> dict[st
         "executing": _top_executing_text(snapshot),
         "currentTask": _top_current_task(snapshot),
         "activityState": _top_activity_state(snapshot),
+        "workStatus": _top_activity_state(snapshot),
+        "workOutput": _top_work_output(snapshot),
+        "workTools": _top_work_tools(snapshot),
         "activityElapsed": _top_activity_elapsed(snapshot),
         "activityGap": _top_activity_gap_value(snapshot),
         "activityLast": _top_activity_last(snapshot),

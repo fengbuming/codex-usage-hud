@@ -871,6 +871,31 @@ TEXT = r"""
     }
   }
 
+  function renderWorkFeed(root, details) {
+    const feed = root.querySelector('[data-field="topWorkFeed"]');
+    if (!feed) return;
+    const status = String(details?.workStatus || details?.activityState || "").trim();
+    const output = String(details?.workOutput || "").trim();
+    const tools = Array.isArray(details?.workTools) ? details.workTools : [];
+    const latest = tools.length ? tools[tools.length - 1] : null;
+    feed.hidden = !(status || output || latest || tools.length);
+    setText(root, "topWorkStatus", status);
+    setText(root, "topWorkOutput", output);
+    setText(root, "topWorkLatestTool", latest?.text || "");
+    const toolsNode = root.querySelector('[data-field="topWorkTools"]');
+    if (!toolsNode) return;
+    toolsNode.replaceChildren();
+    tools.slice(-3).forEach((item) => {
+      const row = document.createElement("div");
+      row.className = "codex-usage-hud-work-tool-row";
+      row.dataset.status = String(item?.status || "");
+      row.dataset.active = String(item?.active === true);
+      row.textContent = String(item?.text || "");
+      row.title = String(item?.tooltip || item?.text || "");
+      toolsNode.appendChild(row);
+    });
+  }
+
   function activityTaskItems(details) {
     return Array.isArray(details?.activityTasks)
       ? details.activityTasks.filter((item) => item && typeof item === "object")
@@ -1995,6 +2020,7 @@ TEXT = r"""
     setFieldTitle(root, "topActivityTaskOrdinal", selected?.taskOrdinal || "");
     renderHeavyRounds(root, details);
     renderActivityTimeline(root, details);
+    renderWorkFeed(root, details);
     const hasWarnings = !!String(details.warnings || "").trim();
     root.querySelectorAll('[data-field-panel="topWarnings"]').forEach((node) => {
       node.hidden = !hasWarnings;

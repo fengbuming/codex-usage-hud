@@ -429,6 +429,10 @@ class RendererHudPayloadTests(unittest.TestCase):
         self.assertIn("codex-usage-hud-resize-corner-bottom-right", renderer_hud.RENDERER_HUD_SCRIPT)
         self.assertIn("codex-usage-hud-progress-overflow", renderer_hud.RENDERER_HUD_SCRIPT)
         self.assertIn("codex-usage-hud-progress-badge", renderer_hud.RENDERER_HUD_SCRIPT)
+        self.assertIn('data-field="topWorkFeed"', renderer_hud.RENDERER_HUD_SCRIPT)
+        self.assertIn('data-field="topWorkOutput"', renderer_hud.RENDERER_HUD_SCRIPT)
+        self.assertIn('data-field="topWorkTools"', renderer_hud.RENDERER_HUD_SCRIPT)
+        self.assertIn("function renderWorkFeed", renderer_hud.RENDERER_HUD_SCRIPT)
         self.assertRegex(
             renderer_hud.RENDERER_HUD_SCRIPT,
             r"\.codex-usage-hud-progress-track-text \{[^}]*z-index: 6;",

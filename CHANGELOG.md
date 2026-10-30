@@ -7,6 +7,28 @@ and this repository follows Semantic Versioning for release tags.
 
 ## [Unreleased]
 
+## [1.5.1] - 2026-10-30
+
+### Added
+
+- Added a Renderer work feed showing the current task state, latest assistant
+  output, latest tool activity, and the three most recent tool records.
+- Included the Agent Speed third-party license notice in source distributions
+  and the Windows installer.
+
+### Fixed
+
+- Protected pinned provider session trees using both thread metadata and the
+  Desktop sidebar pin list.
+- Prevented cross-session SSE completions from supplying the current request's
+  token counts.
+- Kept direct providers on their upstream URL when no proxy or Desktop model
+  rewrite is required, while preserving existing relay routes.
+- Restored source-evidence subscriptions after detached relay helper restarts.
+- Rewrote `/responses/compact` model fallbacks for provider-selected models.
+- Improved Renderer title-bar fitting, native-title reveal, output-speed
+  display, and work-feed updates.
+
 ## [1.5.0] - 2026-10-23
 
 ### Added
