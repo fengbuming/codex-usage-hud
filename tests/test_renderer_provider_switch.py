@@ -58,10 +58,81 @@ async function importModule(href) {
   assert(!imported.some(href => href.endsWith('.css') || href.includes('unrelated-')));
   if (managerBundle === 'app-initial') assert.equal(imported.length, 2);
   document.querySelectorAll = () => [];
-  await assert.rejects(resolveCodexProviderRuntime(), /当前版本不支持清理预热会话/);
+  delete resolveCodexProviderRuntime.managerForHost;
+  await assert.rejects(resolveCodexProviderRuntime(), /无法自动刷新供应商设置/);
 })().catch(error => { console.error(error); process.exitCode = 1; });
 ''')
     path = tmp_path / "provider_runtime_bundles.js"
+    path.write_text(script, encoding="utf-8")
+    result = subprocess.run(["node", str(path)], capture_output=True, text=True, encoding="utf-8")
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("failed_entry", [False, True])
+def test_runtime_discovers_indirect_manager_and_reuses_factory_with_live_scope(tmp_path, failed_entry):
+    start = TEXT.index("      async function resolveCodexProviderRuntime()")
+    end = TEXT.index("      function desktopModelReasoningEffort", start)
+    resolver = TEXT[start:end].replace("await import(href)", "await importModule(href)")
+    script = r'''
+const assert = require('node:assert/strict');
+const failedEntry = FAILED_ENTRY;
+const imported = [], fetched = [];
+const firstManager = {clearPrewarmedThreads() {}, sendRequest() {}};
+const secondManager = {clearPrewarmedThreads() {}, sendRequest() {}};
+const makeScope = () => ({node: {}, query() {}, get() {}, set() {}});
+let liveScope = makeScope(), liveManager = firstManager;
+const hook = {memoizedState: {current: liveScope}};
+const root = {__reactContainer$test: {stateNode: {current: {memoizedState: hook}}}};
+const window = {};
+const document = {
+  querySelectorAll() { return [
+    {href: 'app://-/assets/app-shared-buildA.js'},
+    {href: 'app://-/assets/app-shared-style.css'},
+    ...(failedEntry ? [{src: 'app://-/assets/index-missing.js'}] : []),
+    {src: 'app://-/assets/index-buildB.js'},
+  ]; },
+  getElementById() { return root; },
+};
+function managerForHost(scope, hostId) {
+  if (scope !== liveScope || hostId !== 'local') {
+    throw new Error('AppServerManager RPC is unavailable for hostId: ' + hostId);
+  }
+  return liveManager;
+}
+async function importModule(href) {
+  imported.push(href);
+  if (href.endsWith('app-shared-buildA.js')) return {irrelevant() {}};
+  assert.equal(href, 'app://-/assets/app-initial-buildD.js');
+  return {renamedMinifiedExport: managerForHost};
+}
+async function fetch(href) {
+  fetched.push(href);
+  if (href.endsWith('index-missing.js')) throw new Error('entry unavailable');
+  const sources = {
+    'app://-/assets/index-buildB.js': 'import "./app-shared-buildA.js"; import("./app-main-buildC.js");',
+    'app://-/assets/app-main-buildC.js': 'import "./app-main-buildC.js"; import "./app-initial-buildD.js";',
+  };
+  assert(href in sources, 'only small entry modules should be fetched');
+  return {ok: true, async text() {return sources[href];}};
+}
+'''.replace('FAILED_ENTRY', str(failed_entry).lower()) + resolver + r'''
+(async () => {
+  const first = await resolveCodexProviderRuntime();
+  assert.equal(first.manager, firstManager);
+  assert.equal(first.scope, liveScope);
+  assert.deepEqual(imported, ['app://-/assets/app-shared-buildA.js', 'app://-/assets/app-initial-buildD.js']);
+  assert.equal(fetched.filter(href => href.endsWith('app-main-buildC.js')).length, 1);
+  const fetchCount = fetched.length;
+  liveScope = makeScope(); liveManager = secondManager;
+  hook.memoizedState.current = liveScope;
+  const second = await resolveCodexProviderRuntime();
+  assert.equal(second.manager, secondManager, 'a cached factory must resolve the replacement backend');
+  assert.equal(second.scope, liveScope);
+  assert.equal(fetched.length, fetchCount);
+  assert.equal(imported.length, 2);
+})().catch(error => {console.error(error); process.exitCode = 1;});
+'''
+    path = tmp_path / "provider_runtime_indirect.js"
     path.write_text(script, encoding="utf-8")
     result = subprocess.run(["node", str(path)], capture_output=True, text=True, encoding="utf-8")
     assert result.returncode == 0, result.stdout + result.stderr
@@ -165,7 +236,8 @@ function apply(status) {
   codexProviderSwitchMenuState.refreshPendingRequestId = '';
   apply(status); rejectRefresh(new Error('unsupported-build'));
   await new Promise(setImmediate);
-  assert.equal(finished[1].ok, false); assert.match(finished[1].message, /unsupported-build/);
+  assert.equal(finished[1].ok, false); assert.match(finished[1].message, /重试切换/);
+  assert(!finished[1].message.includes('unsupported-build'), 'implementation errors belong in diagnostics');
 })().catch(e => { console.error(e); process.exitCode=1; });
 '''
     path = tmp_path / "provider_ack.js"

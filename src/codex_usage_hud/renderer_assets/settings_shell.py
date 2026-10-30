@@ -5434,11 +5434,12 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
                   message: status?.message,
                 });
               }).catch((error) => {
+                console.warn("[Codex HUD] Provider runtime refresh failed", error);
                 finishDefaultProviderSwitch({
                   requestId,
                   provider,
                   ok: false,
-                  message: `默认配置已保存，但 Codex 未确认切换：${String(error?.message || error)}。请重启 Codex 后新建会话。`,
+                  message: "供应商设置已保存，但 Codex 暂未应用。请重试切换；若仍失败，重启 Codex 后新建会话。",
                 });
               });
             }
@@ -7935,28 +7936,62 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
       }
 
       async function resolveCodexProviderRuntime() {
-        // Resolve the loaded native manager by capability rather than a build's
-        // hashed asset/export names. Newer builds moved the manager from
-        // app-shared to app-initial. Inspect both loaded entry points.
-        // Codex does not expose prewarm invalidation
-        // on electronBridge. This adapter must fail closed on unsupported builds.
-        const links = Array.from(document.querySelectorAll('link[href]'))
-          .map((link) => link.href)
-          .filter((href) => /\/assets\/(?:app-shared|app-initial)-[^/]+\.js$/.test(href));
-        let managerForHost = null;
-        for (const href of links) {
-          let module;
-          try { module = await import(href); } catch (_) { continue; }
-          managerForHost = Object.values(module).find((value) => {
-            if (typeof value !== "function") return false;
+        // Discover the native manager from this page's assets, without pinning
+        // hashed filenames or minified exports. Rolldown builds only preload
+        // app-shared in HTML; app-initial is imported through index -> app-main.
+        let managerForHost = resolveCodexProviderRuntime.managerForHost || null;
+        if (!managerForHost) {
+          const links = Array.from(document.querySelectorAll('link[href], script[src]'))
+            .map((node) => node.href || node.src)
+            .filter((href) => /\/assets\/(?:app-(?:shared|initial|main)|index)-[A-Za-z0-9_-]+\.js$/.test(href));
+          const imported = new Set();
+          const loadManagerFactory = async (href) => {
+            if (imported.has(href)) return null;
+            imported.add(href);
             try {
-              return Function.prototype.toString.call(value)
-                .includes("AppServerManager RPC is unavailable for hostId:");
-            } catch (_) { return false; }
-          });
-          if (managerForHost) break;
+              const module = await import(href);
+              return Object.values(module).find((value) => {
+                if (typeof value !== "function") return false;
+                try {
+                  return Function.prototype.toString.call(value)
+                    .includes("AppServerManager RPC is unavailable for hostId:");
+                } catch (_) { return false; }
+              }) || null;
+            } catch (_) { return null; }
+          };
+          for (const href of links.filter((href) => /\/app-(?:shared|initial)-/.test(href))) {
+            managerForHost = await loadManagerFactory(href);
+            if (managerForHost) break;
+          }
+          if (!managerForHost) {
+            const queue = links.filter((href) => /\/(?:index|app-main)-/.test(href));
+            const visited = new Set();
+            while (queue.length && visited.size < 6 && !managerForHost) {
+              const href = queue.shift();
+              if (visited.has(href)) continue;
+              visited.add(href);
+              let source;
+              try {
+                const signal = typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function"
+                  ? AbortSignal.timeout(1500) : undefined;
+                const response = await fetch(href, { signal });
+                if (!response.ok) continue;
+                source = await response.text();
+              } catch (_) { continue; }
+              const dependencies = source.matchAll(/["'`](\.\/app-(?:shared|initial|main)-[A-Za-z0-9_-]+\.js)["'`]/g);
+              for (const match of dependencies) {
+                const dependency = new URL(match[1], href).href;
+                if (/\/app-main-/.test(dependency)) {
+                  if (!visited.has(dependency)) queue.push(dependency);
+                } else {
+                  managerForHost = await loadManagerFactory(dependency);
+                  if (managerForHost) break;
+                }
+              }
+            }
+          }
         }
-        if (!managerForHost) throw new Error("当前版本不支持清理预热会话");
+        if (!managerForHost) throw new Error("当前 Codex 版本暂时无法自动刷新供应商设置");
         const root = document.getElementById("root");
         const rootKey = root && Object.keys(root).find((key) => key.startsWith("__reactContainer$"));
         const queue = [window.__codexRoot?._internalRoot?.current || root?.[rootKey]?.stateNode?.current];
@@ -7972,12 +8007,15 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
               if (!scope?.node || !scope.query || typeof scope.get !== "function" || typeof scope.set !== "function") continue;
               const manager = managerForHost(scope, "local");
               if (typeof manager?.clearPrewarmedThreads === "function" && typeof manager?.sendRequest === "function") {
+                // Cache only the factory. Resolve the live scope and manager
+                // again on each switch so replaced backends are never reused.
+                resolveCodexProviderRuntime.managerForHost = managerForHost;
                 return { manager, scope };
               }
             }
           }
         }
-        throw new Error("未找到 Codex 会话管理器");
+        throw new Error("Codex 界面尚未准备好，请稍后重试切换");
       }
 
       function desktopModelReasoningEffort(model, catalog, requested = "") {
