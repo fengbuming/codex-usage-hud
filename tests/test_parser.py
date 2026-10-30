@@ -89,6 +89,85 @@ class TimestampAndFieldTests(unittest.TestCase):
 
 
 class JsonlSessionParserTests(unittest.TestCase):
+    def speed_snapshot(self, records, *, sse_tracker=None):
+        for index, item in enumerate(records, 1):
+            item["_line"] = index
+            item["_dt"] = parse_timestamp(item["timestamp"])
+        return JsonlSessionParser().parse_records(
+            records, session_id="session-a", sse_tracker=sse_tracker
+        )
+
+    def test_jsonl_speed_works_without_legacy_sse_logs_and_excludes_tool_wait(self) -> None:
+        usage = {
+            "input_tokens": 10, "output_tokens": 100,
+            "reasoning_output_tokens": 0, "total_tokens": 110,
+        }
+        mirrored = token_count("2026-05-28T00:00:23Z", 10, 0, 100, 0, 110, 140)
+        mirrored["payload"]["info"]["total_token_usage"].update(
+            input_tokens=20, output_tokens=120
+        )
+        snapshot = self.speed_snapshot([
+            record("2026-05-28T00:00:00Z", "event_msg", {"type": "task_started"}),
+            record("2026-05-28T00:00:02Z", "response_item", {"type": "custom_tool_call", "input": "command"}),
+            token_count("2026-05-28T00:00:03Z", 10, 0, 20, 0, 30, 30),
+            record("2026-05-28T00:00:12Z", "response_item", {"type": "custom_tool_call_output", "output": "tool result"}),
+            record("2026-05-28T00:00:16Z", "response_item", {"type": "custom_tool_call", "input": "command"}),
+            record("2026-05-28T00:00:17Z", "token_usage_record", {
+                "thread_id": "session-a", "usage": usage,
+                "thread_token_usage": {"total_tokens": 140},
+            }),
+            mirrored,
+        ], sse_tracker=SseRequestStateMachine())
+
+        self.assertEqual(snapshot.request.status, "confirmed")
+        self.assertEqual(snapshot.request.source, "jsonl")
+        self.assertFalse(snapshot.request.estimated)
+        self.assertTrue(snapshot.request.output_speed_estimated)
+        self.assertEqual(snapshot.request.output_tokens_per_second, 25.0)
+        self.assertEqual(len(snapshot.request_history), 2)
+        self.assertEqual(snapshot.request.output_tokens, 100)
+
+    def test_jsonl_speed_legacy_usage_arriving_after_tool_output_uses_model_end(self) -> None:
+        snapshot = self.speed_snapshot([
+            record("2026-05-28T00:00:00Z", "event_msg", {"type": "task_started"}),
+            record("2026-05-28T00:00:02Z", "response_item", {"type": "function_call", "arguments": "{}"}),
+            record("2026-05-28T00:00:20Z", "response_item", {"type": "function_call_output", "output": "result"}),
+            token_count("2026-05-28T00:00:21Z", 10, 0, 20, 0, 30, 30),
+        ])
+
+        self.assertEqual(snapshot.request.output_tokens_per_second, 10.0)
+
+    def test_jsonl_speed_running_output_can_use_recent_confirmed_sample(self) -> None:
+        snapshot = self.speed_snapshot([
+            record("2026-05-28T00:00:00Z", "event_msg", {"type": "task_started"}),
+            token_count("2026-05-28T00:00:04Z", 10, 0, 40, 0, 50, 50),
+            record("2026-05-28T00:00:08Z", "response_item", {
+                "type": "message", "role": "assistant",
+                "content": [{"type": "output_text", "text": "Current output"}],
+            }),
+        ])
+
+        self.assertEqual(snapshot.request.status, "running")
+        self.assertEqual(snapshot.request.output_tokens_per_second, 10.0)
+        self.assertTrue(snapshot.request.output_speed_estimated)
+
+    def test_jsonl_speed_does_not_inherit_speed_for_incomplete_or_invalid_usage(self) -> None:
+        for timestamp, usage in (
+            ("2026-05-28T00:00:04Z", {"output_tokens": 20, "total_tokens": 20}),
+            ("2026-05-28T00:00:02Z", {"input_tokens": 10, "output_tokens": 20, "total_tokens": 30}),
+            ("2026-05-28T00:20:00Z", {"input_tokens": 10, "output_tokens": 20, "total_tokens": 30}),
+        ):
+            with self.subTest(timestamp=timestamp, usage=usage):
+                snapshot = self.speed_snapshot([
+                    record("2026-05-28T00:00:00Z", "event_msg", {"type": "task_started"}),
+                    token_count("2026-05-28T00:00:02Z", 10, 0, 20, 0, 30, 30),
+                    record(timestamp, "event_msg", {"type": "token_count", "info": {
+                        "last_token_usage": usage, "total_token_usage": {"total_tokens": 60},
+                    }}),
+                ])
+
+                self.assertIsNone(snapshot.request.output_tokens_per_second)
+
     def test_latest_activity_keeps_command_visible_after_token_count(self) -> None:
         parser = JsonlSessionParser()
         records = [
@@ -1442,7 +1521,7 @@ class SseRequestStateMachineTests(unittest.TestCase):
             "session-a",
         )
 
-        self.assertEqual(machine.current.output_tokens_per_second, 20.0)
+        self.assertAlmostEqual(machine.current.output_tokens_per_second, 20 / 3)
         self.assertEqual(machine.current.started_at.timestamp(), 1_779_926_400)
 
     def test_live_output_speed_uses_otel_event_timestamp(self) -> None:
@@ -1508,13 +1587,13 @@ class SseRequestStateMachineTests(unittest.TestCase):
             "session-a",
         )
 
-        self.assertEqual(machine.current.output_tokens_per_second, 5.0)
+        self.assertEqual(machine.current.output_tokens_per_second, 2.5)
         self.assertEqual(
             machine.current.completed_at,
             parse_timestamp("2026-05-28T00:00:04Z"),
         )
 
-    def test_live_output_speed_uses_first_and_last_valid_content_chunks(self) -> None:
+    def test_live_output_speed_is_estimated_then_corrected_from_request_elapsed(self) -> None:
         machine = SseRequestStateMachine()
         started_at = parse_timestamp("2026-05-28T00:00:00Z")
         self.assertIsNotNone(started_at)
@@ -1529,14 +1608,22 @@ class SseRequestStateMachineTests(unittest.TestCase):
         first_chunk_at = started_at + timedelta(seconds=3)
         last_chunk_at = started_at + timedelta(seconds=7)
         event("response.output_text.delta", first_chunk_at, delta="abcd")
-        self.assertIsNone(machine.current.output_tokens_per_second)
+        self.assertEqual(machine.current.status, "running")
+        self.assertGreater(machine.current.output_tokens_per_second, 0)
+        self.assertAlmostEqual(
+            machine.current.output_tokens_per_second,
+            machine.current.output_tokens / 3,
+        )
         event(
             "response.function_call_arguments.delta",
             started_at + timedelta(seconds=5),
             delta="function args do not count as visible content",
         )
         event("response.output_text.delta", last_chunk_at, delta="abcdefgh")
-        self.assertIsNone(machine.current.output_tokens_per_second)
+        self.assertAlmostEqual(
+            machine.current.output_tokens_per_second,
+            machine.current.output_tokens / 7,
+        )
 
         event(
             "response.completed",
@@ -1550,10 +1637,10 @@ class SseRequestStateMachineTests(unittest.TestCase):
             },
         )
 
-        self.assertEqual(machine.current.output_tokens_per_second, 3.0)
+        self.assertEqual(machine.current.output_tokens_per_second, 1.5)
         self.assertEqual(machine.current.status, "confirmed")
 
-    def test_single_chunk_or_incomplete_usage_has_no_tps(self) -> None:
+    def test_single_chunk_with_complete_usage_is_measured_but_incomplete_usage_is_not(self) -> None:
         started_at = parse_timestamp("2026-05-28T00:00:00Z")
         self.assertIsNotNone(started_at)
         for output_deltas, usage in (
@@ -1581,9 +1668,12 @@ class SseRequestStateMachineTests(unittest.TestCase):
                     ),
                     timestamp=started_at + timedelta(seconds=4),
                 )
-                self.assertIsNone(machine.current.output_tokens_per_second)
+                if "input_tokens" in usage:
+                    self.assertEqual(machine.current.output_tokens_per_second, 1.0)
+                else:
+                    self.assertIsNone(machine.current.output_tokens_per_second)
 
-    def test_complete_usage_uses_output_tokens_over_content_chunk_span(self) -> None:
+    def test_complete_usage_uses_request_start_to_response_completion(self) -> None:
         started_at = parse_timestamp("2026-05-28T00:00:00Z")
         self.assertIsNotNone(started_at)
         machine = SseRequestStateMachine()
@@ -1617,7 +1707,62 @@ class SseRequestStateMachineTests(unittest.TestCase):
             timestamp=started_at + timedelta(seconds=7),
         )
 
-        self.assertEqual(machine.current.output_tokens_per_second, 6.0)
+        self.assertAlmostEqual(machine.current.output_tokens_per_second, 12 / 7)
+
+    def test_complete_usage_can_measure_without_recorded_content_chunks(self) -> None:
+        started_at = parse_timestamp("2026-05-28T00:00:00Z")
+        self.assertIsNotNone(started_at)
+        machine = SseRequestStateMachine()
+        machine.start_round(started_at, "gpt-5.5")
+        machine.consume_sse(
+            "SSE event: "
+            + json.dumps(
+                {
+                    "type": "response.completed",
+                    "response": {
+                        "usage": {
+                            "input_tokens": 10,
+                            "output_tokens": 10,
+                            "total_tokens": 20,
+                        }
+                    },
+                }
+            ),
+            timestamp=started_at + timedelta(seconds=2),
+        )
+
+        self.assertEqual(machine.current.output_tokens_per_second, 5.0)
+
+    def test_live_output_speed_uses_recent_completed_response_rate(self) -> None:
+        started_at = parse_timestamp("2026-05-28T00:00:00Z")
+        self.assertIsNotNone(started_at)
+        machine = SseRequestStateMachine()
+        machine.start_round(started_at, "gpt-5.5")
+        machine.consume_sse(
+            "SSE event: "
+            + json.dumps(
+                {
+                    "type": "response.completed",
+                    "response": {
+                        "usage": {
+                            "input_tokens": 10,
+                            "output_tokens": 100,
+                            "total_tokens": 110,
+                        }
+                    },
+                }
+            ),
+            timestamp=started_at + timedelta(seconds=10),
+        )
+
+        machine.start_round(started_at + timedelta(seconds=11), "gpt-5.5")
+        self.assertEqual(machine.current.output_tokens_per_second, 10.0)
+        machine.consume_sse(
+            'SSE event: {"type":"response.output_text.delta","delta":"abcd"}',
+            timestamp=started_at + timedelta(seconds=12),
+        )
+
+        self.assertEqual(machine.current.output_tokens_per_second, 10.0)
 
     def test_state_machine_estimates_delta_then_confirms_from_otel_counts(self) -> None:
         machine = SseRequestStateMachine()

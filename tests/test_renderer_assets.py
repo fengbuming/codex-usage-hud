@@ -120,16 +120,18 @@ def test_request_hud_renders_live_speed_in_collapsed_and_expanded_views() -> Non
     assert LAYOUT_MARKUP.count('data-field="outputSpeed" hidden') == 2
     assert 'data-notification-visible="false"' in LAYOUT_MARKUP
     assert "function renderOutputSpeed(root, payload)" in script
-    assert 'payload?.requestStatus === "confirmed"' in script
+    assert '["running", "confirmed"].includes(payload?.requestStatus) && mode === "estimated"' in script
+    assert 'payload?.requestStatus === "confirmed" && mode === "measured"' in script
     assert "outputTokensPerSecond" in script
     assert 'payload?.outputSpeedMode || "idle"' in script
     assert "— tok/s" in script
     assert 'data-speed-mode="measured"' in LAYOUT_STYLE
+    assert 'data-speed-mode="estimated"' in LAYOUT_STYLE
     assert "recent" not in LAYOUT_STYLE
-    assert "至少两个有效内容块且输出 usage 完整后计算" in script
+    assert "日志回退使用已确认 token 与响应记录时长" in script
     assert "collapsed.dataset.notificationVisible = String(visible)" in script
     assert 'data-notification-visible="true"' in LAYOUT_STYLE
-    assert "完整输出 usage ÷ 首个到最后有效内容块的时间" in script
+    assert "完整输出 usage ÷ 请求发出至 response.completed 的时间" in script
 
 
 def test_output_speed_includes_compact_accessible_vehicle_icons() -> None:

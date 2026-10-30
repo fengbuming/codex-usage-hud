@@ -415,6 +415,11 @@ def run_daemon(args: argparse.Namespace) -> int:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    helper_args = list(sys.argv[1:] if argv is None else argv)
+    if "--provider-proxy-helper" in helper_args:
+        from .provider_proxy_service import main as run_provider_proxy_helper
+
+        return run_provider_proxy_helper(helper_args)
     # PyInstaller frozen builds must call freeze_support() in __main__ before any
     # worker process is spawned; otherwise ``spawn`` re-executes this executable
     # and the search index's ProcessPoolExecutor deadlocks. _enable_frozen_process_pool

@@ -323,6 +323,94 @@ TEXT = r"""
           #${rootId} .codex-usage-hud-speed-icon svg {
             width: 100%;
             height: 100%;
+            overflow: visible;
+          }
+          #${rootId} .codex-usage-hud-speed-icon [data-speed-part] {
+            transform-box: fill-box;
+            transform-origin: center;
+          }
+          #${rootId} .codex-usage-hud-speed-icon :is([data-speed-part="wheel"], [data-speed-part="crank"], [data-speed-part^="leg-"]) {
+            transform-box: view-box;
+            transform-origin: 0 0;
+          }
+          #${rootId} .codex-usage-hud-speed-icon[data-speed-active="true"] [data-speed-part="wheel"],
+          #${rootId} .codex-usage-hud-speed-icon[data-speed-active="true"] [data-speed-part="crank"] {
+            animation: codex-usage-hud-speed-wheel .65s linear infinite;
+          }
+          #${rootId} .codex-usage-hud-speed-icon:is([data-speed-title="ebike"], [data-speed-title="motorcycle"]) {
+            --codex-speed-wheel-cycle: .45s;
+          }
+          #${rootId} .codex-usage-hud-speed-icon:is([data-speed-title="car"], [data-speed-title="sportsCar"], [data-speed-title="raceCar"]) {
+            --codex-speed-wheel-cycle: .3s;
+          }
+          #${rootId} .codex-usage-hud-speed-icon[data-speed-active="true"] [data-speed-part="wheel"] {
+            animation-duration: var(--codex-speed-wheel-cycle, .65s);
+          }
+          #${rootId} .codex-usage-hud-speed-icon[data-speed-active="true"] [data-speed-motion="walk"] > [data-speed-part="vehicle"] {
+            animation: codex-usage-hud-speed-bob .8s ease-in-out infinite;
+          }
+          #${rootId} .codex-usage-hud-speed-icon[data-speed-active="true"] [data-speed-part^="leg-"] {
+            animation: codex-usage-hud-speed-stride .8s ease-in-out infinite alternate;
+          }
+          #${rootId} .codex-usage-hud-speed-icon[data-speed-active="true"] [data-speed-part="leg-1"] {
+            animation-delay: -.8s;
+          }
+          #${rootId} .codex-usage-hud-speed-icon[data-speed-active="true"] [data-speed-motion="road"] > [data-speed-part="vehicle"] {
+            animation: codex-usage-hud-speed-bob .4s ease-in-out infinite;
+          }
+          #${rootId} .codex-usage-hud-speed-icon[data-speed-active="true"] [data-speed-motion="rail"] > [data-speed-part="vehicle"] {
+            animation: codex-usage-hud-speed-glide .85s ease-in-out infinite;
+          }
+          #${rootId} .codex-usage-hud-speed-icon[data-speed-active="true"] [data-speed-motion="flight"] > [data-speed-part="vehicle"] {
+            animation: codex-usage-hud-speed-flight 1.2s ease-in-out infinite;
+          }
+          #${rootId} .codex-usage-hud-speed-icon[data-speed-active="true"] [data-speed-motion="rocket"] > [data-speed-part="vehicle"] {
+            animation: codex-usage-hud-speed-launch .3s ease-in-out infinite;
+          }
+          #${rootId} .codex-usage-hud-speed-icon[data-speed-active="true"] :is([data-speed-part="flame"], [data-speed-part="flameCore"]) {
+            animation: codex-usage-hud-speed-flame .18s ease-in-out infinite alternate;
+          }
+          #${rootId} .codex-usage-hud-speed-icon[data-speed-active="true"] [data-speed-part="flameCore"] {
+            animation-delay: -.18s;
+          }
+          #${rootId} .codex-usage-hud-speed-icon[data-speed-active="true"] :is([data-speed-part="glow"], [data-speed-part="shock"]) {
+            animation: codex-usage-hud-speed-trail .6s ease-in-out infinite alternate;
+          }
+          @keyframes codex-usage-hud-speed-wheel {
+            to { transform: rotate(360deg); }
+          }
+          @keyframes codex-usage-hud-speed-stride {
+            from { transform: rotate(-18deg); }
+            to { transform: rotate(18deg); }
+          }
+          @keyframes codex-usage-hud-speed-bob {
+            0%, 100% { transform: translateY(0); }
+            50% { transform: translateY(-2px); }
+          }
+          @keyframes codex-usage-hud-speed-glide {
+            0%, 100% { transform: translate(-2px, 0); }
+            50% { transform: translate(2px, -1px); }
+          }
+          @keyframes codex-usage-hud-speed-flight {
+            0%, 100% { transform: translateY(2px) rotate(.8deg); }
+            50% { transform: translateY(-3px) rotate(-.8deg); }
+          }
+          @keyframes codex-usage-hud-speed-launch {
+            0%, 100% { transform: translate(-1px, 1px); }
+            50% { transform: translate(2px, -2px); }
+          }
+          @keyframes codex-usage-hud-speed-flame {
+            from { transform: scale(.8); opacity: .55; }
+            to { transform: scale(1.15); opacity: 1; }
+          }
+          @keyframes codex-usage-hud-speed-trail {
+            from { opacity: .35; }
+            to { opacity: 1; }
+          }
+          @media (prefers-reduced-motion: reduce) {
+            #${rootId} .codex-usage-hud-speed-icon [data-speed-part] {
+              animation: none !important;
+            }
           }
           #${rootId} .codex-usage-hud-output-speed[hidden] {
             display: none !important;
@@ -332,6 +420,9 @@ TEXT = r"""
           }
           #${rootId} .codex-usage-hud-output-speed[data-speed-mode="measured"] {
             color: var(--codex-usage-hud-info, #9ccbff);
+          }
+          #${rootId} .codex-usage-hud-output-speed[data-speed-mode="estimated"] {
+            color: #fbbf24;
           }
           #${rootId} .codex-usage-hud-token-badge {
             position: relative;

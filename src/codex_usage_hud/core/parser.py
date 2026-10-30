@@ -8,7 +8,7 @@ import re
 import sqlite3
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -753,6 +753,7 @@ class RequestTokens:
     error: str = ""
     output_tokens_per_second: float | None = None
     output_usage_complete: bool = False
+    output_speed_estimated: bool = False
 
 
 @dataclass
@@ -1481,6 +1482,8 @@ class JsonlSessionParser:
             jsonl_rounds,
             sse_tracker,
         )
+        if parsed.request.source == "jsonl":
+            self.apply_jsonl_output_speed(parsed, records, task_started_index)
         parsed.activity_tasks = self.build_task_history(
             records,
             parsed,
@@ -1488,6 +1491,124 @@ class JsonlSessionParser:
         )
         parsed.status = "parsed"
         return parsed
+
+    def apply_jsonl_output_speed(
+        self,
+        snapshot: ParsedSession,
+        records: Sequence[Mapping[str, Any]],
+        task_started_index: int | None,
+    ) -> None:
+        """Estimate speed when current Codex builds omit the legacy SSE logs.
+
+        JSONL has complete response usage, but no exact request-start/stream
+        timestamps. Bound each sample by model output and tool completion,
+        and keep its timing estimate separate from the confirmed token counts.
+        """
+        request = snapshot.request
+        if request.status not in {"running", "confirmed"}:
+            return
+        started_at = snapshot.task_started_at
+        output_at = None
+        tool_finished_at = None
+        last_cumulative = 0
+        last_usage_has_sample = False
+        samples: list[tuple[datetime, int, float]] = []
+        start_index = 0 if task_started_index is None else task_started_index + 1
+        for record in records[start_index:]:
+            timestamp = record.get("_dt")
+            payload = record.get("payload") or {}
+            if not isinstance(timestamp, datetime) or not isinstance(payload, Mapping):
+                continue
+            record_type = record.get("type")
+            payload_type = payload.get("type")
+            if record_type == "event_msg" and payload_type == "task_started":
+                started_at, output_at, tool_finished_at = timestamp, None, None
+                continue
+            if record_type == "response_item":
+                if payload_type in {"function_call_output", "custom_tool_call_output"}:
+                    tool_finished_at = timestamp
+                elif payload_type in {"function_call", "custom_tool_call", "reasoning"} or (
+                    payload_type == "message" and response_message_role(payload) == "assistant"
+                ):
+                    output_at = timestamp
+                continue
+            if record_type == "token_usage_record":
+                thread_id = str(payload.get("thread_id") or snapshot.session_id)
+                if thread_id != snapshot.session_id:
+                    continue
+                usage = payload.get("usage") or {}
+                cumulative = payload.get("thread_token_usage") or {}
+            elif record_type == "event_msg" and payload_type == "token_count":
+                info = payload.get("info") or {}
+                if not isinstance(info, Mapping):
+                    continue
+                usage = info.get("last_token_usage") or {}
+                cumulative = info.get("total_token_usage") or {}
+            else:
+                continue
+            if not isinstance(usage, Mapping) or not isinstance(cumulative, Mapping):
+                continue
+            cumulative_total = _as_int(cumulative.get("total_tokens"))
+            # Modern token_usage_record and legacy token_count mirror the same
+            # response. A mirror must not shorten the next timing interval.
+            if cumulative_total and cumulative_total <= last_cumulative:
+                continue
+            if cumulative_total:
+                last_cumulative = cumulative_total
+            last_usage_has_sample = False
+            ended_at = output_at or timestamp
+            sample_start = started_at
+            if tool_finished_at is not None and tool_finished_at < ended_at:
+                sample_start = (
+                    max(sample_start, tool_finished_at)
+                    if sample_start else tool_finished_at
+                )
+            output_tokens = _as_int(usage.get("output_tokens"))
+            if (
+                sample_start is not None
+                and usage.get("input_tokens") is not None
+                and output_tokens > 0
+            ):
+                elapsed = (ended_at - sample_start).total_seconds()
+                if 0 < elapsed <= SseRequestStateMachine.MAX_SPEED_DURATION_SECONDS:
+                    duration = max(
+                        elapsed, SseRequestStateMachine.MIN_SPEED_DURATION_SECONDS
+                    )
+                    samples.append((timestamp, output_tokens, duration))
+                    last_usage_has_sample = True
+            started_at, output_at = timestamp, None
+
+        anchor = request.updated_at or snapshot.last_event_time
+        if anchor is None:
+            return
+        cutoff = anchor - SseRequestStateMachine.RECENT_SPEED_WINDOW
+        recent = [sample for sample in samples if cutoff <= sample[0] <= anchor]
+        if request.status == "running":
+            recent = recent[-SseRequestStateMachine.RECENT_SPEED_COUNT:]
+        else:
+            # An incomplete last usage must not inherit a previous response's
+            # speed and appear to have a complete timing sample of its own.
+            recent = recent[-1:] if last_usage_has_sample else []
+        if recent:
+            request.output_tokens_per_second = (
+                sum(sample[1] for sample in recent)
+                / sum(sample[2] for sample in recent)
+            )
+        elif (
+            request.status == "running"
+            and started_at is not None
+            and snapshot.estimate.output_tokens > 0
+        ):
+            sample_start = (
+                max(started_at, tool_finished_at)
+                if tool_finished_at else started_at
+            )
+            elapsed = (anchor - sample_start).total_seconds()
+            if 0 < elapsed <= SseRequestStateMachine.MAX_SPEED_DURATION_SECONDS:
+                request.output_tokens_per_second = snapshot.estimate.output_tokens / max(
+                    elapsed, SseRequestStateMachine.MIN_SPEED_DURATION_SECONDS
+                )
+        request.output_speed_estimated = request.output_tokens_per_second is not None
 
     def load_records_lenient(self, path: Path) -> list[dict[str, Any]]:
         """Read JSONL records while tolerating partially written lines."""
@@ -3525,6 +3646,11 @@ class JsonlSessionParser:
 class SseRequestStateMachine:
     """Track live request usage from Codex SQLite OTel and SSE log rows."""
 
+    RECENT_SPEED_WINDOW = timedelta(minutes=10)
+    RECENT_SPEED_COUNT = 3
+    MIN_SPEED_DURATION_SECONDS = 0.5
+    MAX_SPEED_DURATION_SECONDS = 15 * 60
+
     def __init__(
         self,
         db_path: Path | None = None,
@@ -3541,9 +3667,6 @@ class SseRequestStateMachine:
         self.round_index = 0
         self.history: list[RequestRound] = []
         self.pending_sse_events: list[str] = []
-        self.output_chunk_count = 0
-        self.first_output_chunk_at: float | None = None
-        self.last_output_chunk_at: float | None = None
         self.current = RequestTokens(status="waiting", source="sse")
 
     def reset_session(
@@ -3556,7 +3679,6 @@ class SseRequestStateMachine:
         self.round_index = 0
         self.history = []
         self.pending_sse_events = []
-        self.reset_output_timing()
         self.current = RequestTokens(status="waiting", source="sse")
 
     def reset_task(self, task_started_at: datetime | None) -> None:
@@ -3567,7 +3689,6 @@ class SseRequestStateMachine:
         self.round_index = 0
         self.history = []
         self.pending_sse_events = []
-        self.reset_output_timing()
         self.current = RequestTokens(status="waiting", source="sse")
 
     def build(
@@ -3770,13 +3891,18 @@ class SseRequestStateMachine:
 
     def start_round(self, timestamp: datetime | None, model: str) -> None:
         self.archive_current()
-        self.reset_output_timing()
         self.round_index += 1
+        recent_speed = (
+            self.recent_measured_output_speed(timestamp)
+            if timestamp is not None
+            else None
+        )
         self.current = RequestTokens(
             status="running",
             round_index=self.round_index,
             model=model,
             output_tokens=0,
+            output_tokens_per_second=recent_speed,
             total_tokens=0,
             estimated=True,
             source="sse",
@@ -3792,39 +3918,69 @@ class SseRequestStateMachine:
         exact.cost_usd = self.calculate_request_cost(exact)
         exact.output_tokens_per_second = self.completed_output_speed(exact)
         self.current = exact
-        self.reset_output_timing()
-
-    def reset_output_timing(self) -> None:
-        self.output_chunk_count = 0
-        self.first_output_chunk_at = None
-        self.last_output_chunk_at = None
-
-    def record_output_chunk(self, timestamp: datetime) -> None:
-        timestamp_seconds = timestamp.timestamp()
-        if (
-            self.last_output_chunk_at is not None
-            and timestamp_seconds < self.last_output_chunk_at
-        ):
-            return
-        if self.first_output_chunk_at is None:
-            self.first_output_chunk_at = timestamp_seconds
-        self.last_output_chunk_at = timestamp_seconds
-        self.output_chunk_count += 1
 
     def completed_output_speed(self, request: RequestTokens) -> float | None:
-        """Compute TPS from complete usage and valid first-to-last output timing."""
+        """Measure TPS from request start through completion using final usage."""
         if (
             request.status != "confirmed"
             or not request.output_usage_complete
-            or request.input_tokens is None
             or request.output_tokens is None
             or request.output_tokens <= 0
-            or self.output_chunk_count < 2
-            or self.first_output_chunk_at is None
-            or self.last_output_chunk_at is None
         ):
             return None
-        elapsed = self.last_output_chunk_at - self.first_output_chunk_at
+        started_at = request.started_at
+        completed_at = request.completed_at or request.updated_at
+        if started_at is None or completed_at is None:
+            return None
+        elapsed = (completed_at - started_at).total_seconds()
+        if elapsed <= 0 or elapsed > self.MAX_SPEED_DURATION_SECONDS:
+            return None
+        return int(request.output_tokens) / max(
+            elapsed, self.MIN_SPEED_DURATION_SECONDS
+        )
+
+    def recent_measured_output_speed(self, timestamp: datetime) -> float | None:
+        """Pool up to three complete responses from the preceding ten minutes."""
+        cutoff = timestamp - self.RECENT_SPEED_WINDOW
+        output_tokens = 0
+        elapsed_seconds = 0.0
+        count = 0
+        for item in reversed(self.history):
+            if count >= self.RECENT_SPEED_COUNT:
+                break
+            if (
+                item.status != "confirmed"
+                or item.estimated
+                or item.input_tokens is None
+                or item.output_tokens is None
+                or item.output_tokens <= 0
+                or item.started_at is None
+                or item.completed_at is None
+                or item.completed_at < cutoff
+            ):
+                continue
+            elapsed = (item.completed_at - item.started_at).total_seconds()
+            if elapsed <= 0 or elapsed > self.MAX_SPEED_DURATION_SECONDS:
+                continue
+            output_tokens += int(item.output_tokens)
+            elapsed_seconds += max(elapsed, self.MIN_SPEED_DURATION_SECONDS)
+            count += 1
+        return output_tokens / elapsed_seconds if elapsed_seconds > 0 else None
+
+    @staticmethod
+    def estimated_output_speed(
+        request: RequestTokens, timestamp: datetime
+    ) -> float | None:
+        """Estimate live TPS from streamed token estimates over request elapsed time."""
+        if (
+            request.status != "running"
+            or not request.estimated
+            or request.output_tokens is None
+            or request.output_tokens <= 0
+            or request.started_at is None
+        ):
+            return None
+        elapsed = (timestamp - request.started_at).total_seconds()
         if elapsed <= 0:
             return None
         return int(request.output_tokens) / elapsed
@@ -3949,8 +4105,6 @@ class SseRequestStateMachine:
             if not delta:
                 return
             speed_timestamp = timestamp or datetime.now().astimezone()
-            if event_type == "response.output_text.delta":
-                self.record_output_chunk(speed_timestamp)
             delta_tokens = estimate_tokens(delta)
             output = (self.current.output_tokens or 0) + delta_tokens
             self.current.status = "running"
@@ -3959,6 +4113,10 @@ class SseRequestStateMachine:
             self.current.estimated = True
             self.current.source = "sse"
             self.current.updated_at = speed_timestamp
+            self.current.output_tokens_per_second = (
+                self.recent_measured_output_speed(speed_timestamp)
+                or self.estimated_output_speed(self.current, speed_timestamp)
+            )
             return
 
         if event_type == "response.completed":

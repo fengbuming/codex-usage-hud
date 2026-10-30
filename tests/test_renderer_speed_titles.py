@@ -65,12 +65,18 @@ const expectedThresholds = [0.5, 40, 60, 80, 120, 160, 240, 340, 480, 680, 1000,
 assert.equal(speedTitleSteps.length, 13);
 for (let index = 1; index <= expectedThresholds.length; index += 1) {
   assert.equal(speedTitleThreshold(index), expectedThresholds[index - 1]);
-  assert.match(speedTitleMarkup(index - 1), /<svg .*<\/svg>/);
+  assert.match(speedTitleMarkup(index), /<svg .*<\/svg>/);
+  assert.match(speedTitleMarkup(index), /data-speed-motion="(walk|road|rail|flight|rocket)"/);
 }
+assert.match(speedTitleMarkup(1), /data-speed-part="leg-0"/);
+assert.match(speedTitleMarkup(1), /data-speed-part="leg-1"/);
+assert.match(speedTitleMarkup(2), /translate\(26.63 60.23\).*data-speed-part="wheel"/);
+assert.match(speedTitleMarkup(13), /data-speed-part="flame"/);
 renderOutputSpeed(root, {requestStatus: "confirmed", outputSpeedMode: "measured", outputTokensPerSecond: 39.99});
 assert.equal(nodes[0].hidden, false);
 assert.equal(nodes[0].value.textContent, "≈40.0 tok/s");
 assert.equal(nodes[0].dataset.speedTitle, "待机");
+assert.equal(nodes[0].icon.dataset.speedActive, "false");
 assert.match(nodes[0].icon.title, /低于 0\.5 tok\/s 持续 3 秒/);
 renderOutputSpeed(root, {requestStatus: "confirmed", outputSpeedMode: "measured", outputTokensPerSecond: 40});
 advance(799);
@@ -79,10 +85,13 @@ advance(1);
 assert.equal(nodes[0].dataset.speedTier, "2");
 assert.equal(nodes[0].dataset.speedTitle, "自行车");
 assert.equal(nodes[1].dataset.speedTitle, "自行车");
+assert.equal(nodes[0].icon.dataset.speedActive, "true");
 assert.match(nodes[0].icon.innerHTML, /<circle/);
 assert.match(nodes[0].icon.style.color, /^#[0-9a-f]{6}$/i);
+const bicycleMarkup = nodes[0].icon.innerHTML;
 renderOutputSpeed(root, {requestStatus: "confirmed", outputSpeedMode: "measured", outputTokensPerSecond: 36});
 assert.equal(speedTitleCandidate(36), 2);
+assert.equal(nodes[0].icon.innerHTML, bicycleMarkup);
 renderOutputSpeed(root, {requestStatus: "confirmed", outputSpeedMode: "measured", outputTokensPerSecond: 35.99});
 advance(800);
 assert.equal(nodes[0].dataset.speedTier, "1");
@@ -91,10 +100,20 @@ advance(2999);
 assert.equal(nodes[0].dataset.speedTitle, "步行");
 advance(1);
 assert.equal(nodes[0].dataset.speedTitle, "待机");
+assert.equal(nodes[0].icon.dataset.speedActive, "false");
 renderOutputSpeed(root, {requestStatus: "running", outputSpeedMode: "estimated", outputTokensPerSecond: 2100});
-assert.equal(nodes[0].value.textContent, "— tok/s");
-assert.equal(nodes[0].dataset.speedTier, "0");
-assert.equal(nodes[0].icon.dataset.speedTitle, "walk");
+assert.equal(nodes[0].value.textContent, "≈2100 tok/s");
+assert.equal(nodes[0].dataset.speedMode, "estimated");
+advance(800);
+assert.equal(nodes[0].dataset.speedTier, "13");
+assert.equal(nodes[0].icon.dataset.speedTitle, "rocket");
+renderOutputSpeed(root, {requestStatus: "confirmed", outputSpeedMode: "estimated", outputTokensPerSecond: 45});
+assert.equal(nodes[0].value.textContent, "≈45.0 tok/s");
+advance(800);
+assert.equal(nodes[0].icon.dataset.speedTitle, "bicycle");
+renderOutputSpeed(root, {requestStatus: "waiting", outputSpeedMode: "idle"});
+assert.equal(nodes[0].icon.dataset.speedActive, "false");
+assert.equal(timers.size, 0);
 '''
     result = subprocess.run(
         ["node", "--input-type=commonjs"],

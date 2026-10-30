@@ -150,6 +150,44 @@ class RendererHudPayloadTests(unittest.TestCase):
             12.5,
         )
 
+    def test_payload_projects_estimated_output_speed_while_request_is_running(self) -> None:
+        snapshot = ParsedSession(status="parsed")
+        snapshot.request = RequestTokens(
+            status="running",
+            source="sse",
+            output_tokens=80,
+            estimated=True,
+            output_tokens_per_second=20.0,
+            updated_at=datetime.fromisoformat("2026-05-28T00:00:04+00:00"),
+            started_at=datetime.fromisoformat("2026-05-28T00:00:00+00:00"),
+        )
+
+        payload = payload_from_snapshot(snapshot).to_json()
+
+        self.assertEqual(payload["outputTokensPerSecond"], 20.0)
+        self.assertEqual(payload["outputSpeedMode"], "estimated")
+        self.assertEqual(
+            payload["payloadDomains"]["currentSession"]["outputSpeedMode"],
+            "estimated",
+        )
+
+    def test_payload_keeps_confirmed_usage_with_estimated_jsonl_speed(self) -> None:
+        snapshot = ParsedSession(status="parsed")
+        snapshot.request = RequestTokens(
+            status="confirmed",
+            source="jsonl",
+            estimated=False,
+            output_tokens=100,
+            output_tokens_per_second=25.0,
+            output_speed_estimated=True,
+        )
+
+        payload = payload_from_snapshot(snapshot).to_json()
+
+        self.assertEqual(payload["requestStatus"], "confirmed")
+        self.assertEqual(payload["outputTokensPerSecond"], 25.0)
+        self.assertEqual(payload["outputSpeedMode"], "estimated")
+
     def test_payload_does_not_substitute_historical_average_for_live_tps(self) -> None:
         snapshot = ParsedSession(status="parsed")
         snapshot.request = RequestTokens(status="running", source="jsonl")

@@ -86,18 +86,41 @@ TEXT = r"""
   }
 
   function speedTitleMarkup(index) {
-    const [key, label] = index === 0 ? ["walk", "待机"] : speedTitleSteps[index - 1];
+    const [key] = index === 0 ? ["walk"] : speedTitleSteps[index - 1];
     const art = speedTitleArt[key];
     const viewBox = art.viewBox.join(" ");
+    const motion = key === "walk" ? "walk"
+      : key === "rocket" ? "rocket"
+        : ["bulletTrain", "maglev"].includes(key) ? "rail"
+          : ["jetliner", "fighterJet", "hypersonic"].includes(key) ? "flight" : "road";
+    // Translate rotating parts to their real pivot in SVG user space. This
+    // avoids off-centre wheels when the art has a cropped/non-zero viewBox.
+    const pivotPart = (markup, role, [cx, cy]) => `<g transform="translate(${cx} ${cy})"><g data-speed-part="${role}"><g transform="translate(${-cx} ${-cy})">${markup}</g></g></g>`;
+    let wheelCenter = null;
+    let crankCenter = null;
+    let legIndex = 0;
     const parts = art.parts.map((part) => {
       const detail = part.role === "detail" || part.role === "rim" || part.role === "spoke";
       const strokeWidth = detail ? 0.9 : (part.role === "wheel" ? 1.25 : 1.45);
       const opacity = detail ? 0.72 : 1;
-      if (part.d) return `<path d="${part.d}" stroke-width="${strokeWidth}" opacity="${opacity}" vector-effect="non-scaling-stroke"/>`;
-      const [cx, cy, radius] = part.circle;
-      return `<circle cx="${cx}" cy="${cy}" r="${radius}" stroke-width="${strokeWidth}" opacity="${opacity}" vector-effect="non-scaling-stroke"/>`;
+      const attributes = `stroke-width="${strokeWidth}" opacity="${opacity}" vector-effect="non-scaling-stroke"`;
+      let markup;
+      if (part.d) markup = `<path d="${part.d}" ${attributes}/>`;
+      else {
+        const [cx, cy, radius] = part.circle;
+        if (part.role === "wheel") wheelCenter = [cx, cy];
+        if (part.role === "crank") crankCenter = [cx, cy];
+        markup = `<circle cx="${cx}" cy="${cy}" r="${radius}" ${attributes}/>`;
+      }
+      if (part.role === "spoke" && wheelCenter) return pivotPart(markup, "wheel", wheelCenter);
+      if (part.role === "crank" && part.d && crankCenter) return pivotPart(markup, "crank", crankCenter);
+      if (part.role === "leg") return pivotPart(markup, `leg-${legIndex++}`, part.origin);
+      if (["flame", "flameCore", "glow", "shock"].includes(part.role)) {
+        return `<g data-speed-part="${part.role}">${markup}</g>`;
+      }
+      return markup;
     }).join("");
-    return `<svg viewBox="${viewBox}" focusable="false" aria-hidden="true" xmlns="http://www.w3.org/2000/svg"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">${parts}</g></svg>`;
+    return `<svg viewBox="${viewBox}" data-speed-motion="${motion}" focusable="false" aria-hidden="true" xmlns="http://www.w3.org/2000/svg"><g data-speed-part="vehicle" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">${parts}</g></svg>`;
   }
 
   function paintSpeedTitle(value = currentSpeedValue) {
@@ -117,6 +140,7 @@ TEXT = r"""
         icon.dataset.speedTitle = key;
       }
       node.dataset.speedTier = String(displayedSpeedTitle);
+      icon.dataset.speedActive = String(displayedSpeedTitle > 0);
       node.dataset.speedTitle = label;
       node.dataset.speedThreshold = threshold === null ? "0.5" : String(threshold);
       icon.title = iconTitle;
@@ -369,8 +393,8 @@ TEXT = r"""
     currentSpeedNodes = Array.from(speedNodes);
     const value = Number(payload?.outputTokensPerSecond);
     const mode = String(payload?.outputSpeedMode || "idle");
-    const hasRate = payload?.requestStatus === "confirmed"
-      && mode === "measured"
+    const hasRate = ((["running", "confirmed"].includes(payload?.requestStatus) && mode === "estimated")
+      || (payload?.requestStatus === "confirmed" && mode === "measured"))
       && Number.isFinite(value)
       && value > 0;
     const formatted = value >= 100
@@ -385,11 +409,13 @@ TEXT = r"""
     });
     if (hasRate) updateSpeedTitle(value);
     else resetSpeedTitle();
-    const title = hasRate
-      ? "完整输出 usage ÷ 首个到最后有效内容块的时间；不含首包/首字延迟，受网络、合并发送、下游背压及不可见思考影响"
-      : (payload?.requestStatus === "running"
-        ? "至少两个有效内容块且输出 usage 完整后计算"
-        : "单块输出或 usage 不完整时显示短横线");
+    const title = hasRate && mode === "estimated"
+      ? "估算速度：依据当前输出和近期响应日志；日志回退使用已确认 token 与响应记录时长，排除可识别的工具等待。缺少流式时序时仅提供近似值"
+      : hasRate
+        ? "完整输出 usage ÷ 请求发出至 response.completed 的时间，包含首字等待；短于 0.5 秒按 0.5 秒"
+        : (payload?.requestStatus === "running"
+          ? "收到输出 token 后显示流式估算"
+          : "输出 usage 不完整时不显示实测速度");
     speedNodes.forEach((node) => {
       node.hidden = false;
       node.title = `${title} · ${node.dataset.speedTitle || "待机"} · ${node.dataset.speedThreshold || "0.5"} tok/s`;

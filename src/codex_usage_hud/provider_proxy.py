@@ -1,6 +1,7 @@
 """Loopback-only provider relay, with explicit direct/proxy routing.
 
-Routes carry no credentials and are restored to upstream URLs on clean shutdown.
+Routes carry no credentials. The shared relay runs independently of the HUD,
+so a HUD restart cannot close Codex's cached endpoints or active streams.
 The relay is idle until Codex sends a request; it has no polling worker.
 """
 
@@ -128,18 +129,22 @@ class ProviderProxyRelay:
             # the route used by existing sessions.
             for previous in metadata.get("previous_routes", []):
                 self.route({key: previous[key] for key in
-                            ("base_url", "enabled", "port", "token") if key in previous}, config_path)
-            if self.server is None:
-                self.server = ThreadingHTTPServer(("127.0.0.1", self.port), self._handler_type())
-                self.port = self.server.server_port
-                self.stop_reader, self.stop_writer = socket.socketpair()
-                self.thread = Thread(target=self._serve, name="provider-proxy-relay", daemon=True)
-                self.thread.start()
+                            ("base_url", "enabled", "port", "token", "model", "models") if key in previous}, config_path)
+            self._start()
             token = str(metadata.get("token") or secrets.token_urlsafe(24))
             metadata["token"] = token
             self.routes[token] = dict(metadata)
             self.config_paths.add(config_path)
             return f"http://127.0.0.1:{self.server.server_port}/{token}{upstream.path.rstrip('/')}"
+
+    def _start(self) -> None:
+        if self.server is not None:
+            return
+        self.server = ThreadingHTTPServer(("127.0.0.1", self.port), self._handler_type())
+        self.port = self.server.server_port
+        self.stop_reader, self.stop_writer = socket.socketpair()
+        self.thread = Thread(target=self._serve, name="provider-proxy-relay", daemon=True)
+        self.thread.start()
 
     def add_source_evidence_listener(
         self,
@@ -166,9 +171,14 @@ class ProviderProxyRelay:
         evidence = _source_evidence_from_request(headers, body)
         if evidence is None:
             return
+        self._deliver_source_evidence(*evidence)
+
+    def _deliver_source_evidence(self, thread_id: str, feature_key: str) -> None:
+        with self.lock:
+            listeners = tuple(self.source_evidence_listeners.values())
         for listener in listeners:
             try:
-                listener(*evidence)
+                listener(thread_id, feature_key)
             except Exception:
                 continue
 
@@ -375,5 +385,34 @@ class ProviderProxyRelay:
             self.config_paths.clear()
 
 
-# Stable endpoint across HUD restarts; never silently redirect to an occupied port.
-provider_proxy_relay = ProviderProxyRelay(port=57323)
+class DetachedProviderProxyRelay(ProviderProxyRelay):
+    """HUD-side configuration facade; closing it never owns the network relay."""
+
+    def __init__(self, port: int = 57323, *, state_path: Path | None = None) -> None:
+        super().__init__(port)
+        self.state_path = state_path
+        self._service = None
+
+    def route(self, metadata: dict, config_path: Path) -> str:
+        from .provider_proxy_service import ProviderProxyServiceClient
+
+        with self.lock:
+            if self._service is None:
+                self._service = ProviderProxyServiceClient(
+                    self.port, state_path=self.state_path,
+                    on_evidence=self._deliver_source_evidence,
+                )
+            endpoint = self._service.route(metadata, config_path)
+            self.config_paths.add(config_path)
+            return endpoint
+
+    def close(self) -> None:
+        with self.lock:
+            service, self._service = self._service, None
+            self.config_paths.clear()
+        if service is not None:
+            service.close()
+
+
+# Stable endpoint across HUD restarts; never redirect to an arbitrary free port.
+provider_proxy_relay = DetachedProviderProxyRelay()

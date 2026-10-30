@@ -11,7 +11,7 @@ import pytest
 
 from codex_usage_hud import codex_provider_config as config
 from codex_usage_hud import codex_cli_launcher as cli
-from codex_usage_hud.provider_proxy import ProviderProxyRelay, _rewrite_model, proxy_metadata
+from codex_usage_hud.provider_proxy import DetachedProviderProxyRelay, ProviderProxyRelay, _rewrite_model, proxy_metadata
 
 
 @pytest.fixture
@@ -19,6 +19,80 @@ def relay():
     instance = ProviderProxyRelay()
     yield instance
     instance.close()
+
+
+@pytest.fixture
+def detached_relay(tmp_path):
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    instance = DetachedProviderProxyRelay(port, state_path=tmp_path / "relay-state.json")
+    service = None
+    try:
+        yield instance
+    finally:
+        service = instance._service
+        instance.close()
+        if service is not None and service.process is not None:
+            service.process.terminate()
+            service.process.wait(timeout=10)
+
+
+def test_detached_relay_preserves_stream_and_endpoint_across_hud_close(detached_relay, upstream, tmp_path):
+    server, calls, first_frame, release = upstream
+    metadata = {"base_url": f"http://127.0.0.1:{server.server_port}/v1", "enabled": False}
+    endpoint = detached_relay.route(metadata, tmp_path / "config.toml")
+    service = detached_relay._service
+    worker_pid = service._call("health")["pid"]
+    target = urlsplit(endpoint)
+    client = http.client.HTTPConnection(target.hostname, target.port, timeout=3)
+    client.request("POST", target.path + "/responses", b'{"stream":true}')
+    response = client.getresponse()
+    assert first_frame.wait(1)
+    assert response.read(len(b"data: first\n\n")) == b"data: first\n\n"
+    detached_relay.close()
+    replacement = DetachedProviderProxyRelay(detached_relay.port, state_path=detached_relay.state_path)
+    try:
+        assert replacement.route(metadata, tmp_path / "config.toml") == endpoint
+        assert replacement._service._call("health")["pid"] == worker_pid
+        assert replacement._service.process is None
+        release.set()
+        assert response.read() == b""
+        assert response.status == 200
+        assert len(calls) == 1
+    finally:
+        client.close()
+        replacement.close()
+        service.process.terminate()
+        service.process.wait(timeout=10)
+
+
+def test_detached_relay_pushes_source_evidence_and_rejects_control_without_token(detached_relay, upstream, tmp_path):
+    server, _, _, release = upstream
+    received = []
+    evidence_ready = Event()
+
+    def evidence(thread_id, feature_key):
+        received.append((thread_id, feature_key))
+        evidence_ready.set()
+
+    detached_relay.add_source_evidence_listener(evidence)
+    endpoint = urlsplit(detached_relay.route({"base_url": f"http://127.0.0.1:{server.server_port}/v1"}, tmp_path / "config.toml"))
+    client = http.client.HTTPConnection(endpoint.hostname, endpoint.port, timeout=3)
+    body = json.dumps({"instructions": "Memory Writing Agent: Phase 2 (Consolidation)"})
+    client.request("POST", endpoint.path + "/responses", body, {
+        "x-codex-turn-metadata": json.dumps({"thread_id": "01a1870b-7d0e-7c81-a578-6625e4a23103"}),
+    })
+    response = client.getresponse()
+    assert evidence_ready.wait(2)
+    assert received == [("01a1870b-7d0e-7c81-a578-6625e4a23103", "memory_consolidation")]
+    release.set()
+    response.read()
+    client.close()
+    client = http.client.HTTPConnection(endpoint.hostname, endpoint.port, timeout=3)
+    client.request("POST", "/__codex_hud_proxy__/route", b'{}')
+    assert client.getresponse().status == 403
+    client.close()
 
 
 @pytest.fixture

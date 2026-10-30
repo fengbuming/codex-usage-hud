@@ -999,15 +999,15 @@ def _request_total_line(snapshot: ParsedSession) -> str:
 def _output_speed_projection(snapshot: ParsedSession) -> tuple[float | None, str]:
     request = snapshot.request
     live_rate = request.output_tokens_per_second
-    if (
-        request.status != "confirmed"
-        or not request.output_usage_complete
-        or live_rate is None
-        or not math.isfinite(float(live_rate))
-        or live_rate <= 0
-    ):
+    if live_rate is None or not math.isfinite(float(live_rate)) or live_rate <= 0:
         return None, "idle"
-    return float(live_rate), "measured"
+    if request.status in {"running", "confirmed"} and request.output_speed_estimated:
+        return float(live_rate), "estimated"
+    if request.status == "running" and request.estimated:
+        return float(live_rate), "estimated"
+    if request.status == "confirmed" and request.output_usage_complete:
+        return float(live_rate), "measured"
+    return None, "idle"
 
 
 def _round_is_running(item: RequestRound) -> bool:
