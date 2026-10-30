@@ -11,6 +11,34 @@ TEXT = r"""
     return parent;
   }
 
+  function progressBadgeIntrinsicPad(rail) {
+    const fullText = String(rail?.dataset?.overflowBadge || "").trim();
+    if (!fullText) return 0;
+    const badge = rail?.querySelector?.(":scope > .codex-usage-hud-progress-badge");
+    if (!badge) return 0;
+    const copy = badge.querySelector?.(":scope > .codex-usage-hud-progress-badge-copy");
+    const previousText = copy?.textContent;
+    const previousDisplay = badge.style.display;
+    const previousWidth = badge.style.width;
+    // Measure full copy independently of both the rail width and its current
+    // hidden/compact state. Restore all presentation before yielding to paint.
+    try {
+      if (copy) copy.textContent = fullText;
+      badge.style.display = "inline-flex";
+      badge.style.width = "max-content";
+      const width = Math.ceil(Math.max(
+        badge.scrollWidth || 0,
+        badge.getBoundingClientRect?.().width || 0,
+      ));
+      const right = Number.parseFloat(getComputedStyle(badge).right || "0") || 0;
+      return width > 0 ? Math.max(52, width + right + 10) : 0;
+    } finally {
+      badge.style.display = previousDisplay;
+      badge.style.width = previousWidth;
+      if (copy) copy.textContent = previousText;
+    }
+  }
+
   function measureProgressRailWidth(rail) {
     const probe = rail?.querySelector?.(":scope > .codex-usage-hud-progress-size-probe");
     if (!probe) return 0;
@@ -18,8 +46,9 @@ TEXT = r"""
     const copies = Array.from(probe.children || []);
     if (copies.length) {
       const style = getComputedStyle(probe);
+      const badgePad = progressBadgeIntrinsicPad(rail);
       const padding = (Number.parseFloat(style.paddingLeft) || 0)
-        + (Number.parseFloat(style.paddingRight) || 0);
+        + (badgePad || Number.parseFloat(style.paddingRight) || 0);
       const gap = Number.parseFloat(style.columnGap || style.gap) || 0;
       const textWidth = copies.reduce((sum, copy) => (
         sum + Math.max(copy.scrollWidth || 0, copy.getBoundingClientRect().width)
@@ -30,7 +59,10 @@ TEXT = r"""
       probe.scrollWidth || 0,
       probe.getBoundingClientRect?.().width || 0,
     );
-    return Math.max(0, Math.ceil(measured + 2));
+    const style = getComputedStyle(probe);
+    const currentPadding = Number.parseFloat(style.paddingRight) || 0;
+    const badgePad = progressBadgeIntrinsicPad(rail);
+    return Math.max(0, Math.ceil(measured + (badgePad ? badgePad - currentPadding : 0) + 2));
   }
 
   function progressRailContentClipped(rail) {

@@ -367,11 +367,9 @@ assert.equal(strip.dataset.overflow, 'true');
     )
 
 
-def test_auto_width_measures_badges_from_full_slot_before_shrinking() -> None:
+@pytest.mark.parametrize("sync", [False, True], ids=["budget-update", "layout-update"])
+def test_badge_visibility_does_not_change_auto_width_or_expand_to_slot(sync: bool) -> None:
     run_behavior(r'''
-// A narrow previous panel can make refreshProgressRailLabel hide long badges.
-// The automatic pass must establish the full native slot first so the badge
-// measurement sees the complete three-tab content.
 const ctx = {lifecycle: {active: () => true}};
 const runtimeIsCurrent = () => true;
 const noop = () => {};
@@ -381,57 +379,70 @@ const refreshLayoutObservers = noop, startBootstrapObserver = noop;
 const desktopChromeMissing = () => false;
 const desiredHeight = () => 36;
 document.getElementById = () => ({querySelector: () => panel});
-railWidths = [160, 120, 120]; items = rails();
 slot = {left: 100, right: 951, width: 851};
 panel.rect = {left: 451, top: 15, width: 500, height: 36};
-let badgeRefreshWidths = [];
-budgetDomain.refreshProgressRailLabel = () => {
-  badgeRefreshWidths.push(panel.rect?.width || 0);
-  if ((panel.rect?.width || 0) >= slot.width - 1) {
-    railWidths = [160, 300, 300]; items = rails();
-  }
-};
-const refreshAllMarquees = () => {
-  items.forEach(rail => budgetDomain.refreshProgressRailLabel(rail));
-  budgetDomain.refreshCollapsedProgressStrip(strip);
-};
+const badgeCopies = [];
+const badges = [];
+const probes = [];
+let badgePadding = '28px';
+items = [160, 170, 170].map((textWidth, index) => {
+  const copy = {textContent: '+$3.13'};
+  const badge = {
+    style: {display: 'none'},
+    querySelector: () => copy,
+    getBoundingClientRect: () => ({
+      width: badge.style.display === 'none' ? 0
+        : badge.style.width !== 'max-content' ? 40
+        : copy.textContent === '+21% / +$3.13' ? 90 : 50,
+    }),
+  };
+  const probe = {
+    children: [{scrollWidth: textWidth - 12, getBoundingClientRect: () => ({width: textWidth - 12})}],
+  };
+  badgeCopies.push(copy); badges.push(badge); probes.push(probe);
+  return {
+    dataset: index ? {overflowBadge: '+21% / +$3.13'} : {},
+    style: style(),
+    querySelector: selector => selector.includes('size-probe') ? probe
+      : selector.includes('progress-badge') ? badge : null,
+  };
+});
+global.getComputedStyle = node => node === collapsed
+  ? {paddingLeft: '8px', paddingRight: '7px', columnGap: '6px'}
+  : badges.includes(node)
+    ? {display: node.style.display || 'inline-flex', right: '5px'}
+    : probes.includes(node)
+      ? {paddingLeft: '10px', paddingRight: node === probes[0] ? '28px' : badgePadding, columnGap: '8px'}
+      : {columnGap: '7px'};
+panel.querySelectorAll = () => items;
+budgetDomain.refreshProgressRailLabel = noop;
+const refreshAllMarquees = () => budgetDomain.refreshCollapsedProgressStrip(strip);
+const appliedWidths = [];
 function applyRect(_panel, left, top, width, height) {
+  appliedWidths.push(width);
   panel.rect = {left, top, width, height};
   available = Math.max(1, width - 51);
 }
-syncPosition(['top']);
-assert.equal(badgeRefreshWidths[0], slot.width);
-assert.equal(panel.rect.width, 825);
-assert.equal(panel.rect.left, 126);
-assert.equal(panel.rect.left + panel.rect.width, slot.right);
-assert.equal(budgetDomain.measureCollapsedProgressStrip(strip).clipped, false);
-''', sync=True)
-
-
-def test_budget_update_remeasures_badges_after_previous_auto_width() -> None:
-    run_behavior(r'''
-railWidths = [160, 120, 120]; items = rails();
-slot = {left: 100, right: 951, width: 851};
-panel.rect = {left: 451, top: 15, width: 500, height: 36};
-panel.querySelectorAll = selector => selector.includes('progress-rail') ? items : [];
-let badgeRefreshWidths = [];
-budgetDomain.refreshProgressRailLabel = () => {
-  badgeRefreshWidths.push(panel.rect?.width || 0);
-  if ((panel.rect?.width || 0) >= slot.width - 1) {
-    railWidths = [160, 300, 300]; items = rails();
-  }
-};
-function applyRect(_panel, left, top, width, height) {
-  panel.rect = {left, top, width, height};
-  available = Math.max(1, width - 51);
+const update = () => UPDATE;
+update();
+const settled = {...panel.rect};
+assert.equal(settled.width, 803);
+assert.equal(settled.left + settled.width, slot.right);
+assert.ok(appliedWidths.every(width => width === 803), JSON.stringify(appliedWidths));
+// The intrinsic width must remain identical when the badge switches between
+// hidden, compact, and full copy. Repeated updates never touch the slot width.
+for (const display of ['none', '', 'none', '']) {
+  badgePadding = display ? '28px' : '96px';
+  badges.slice(1).forEach(badge => {badge.style.display = display});
+  badgeCopies.slice(1).forEach(copy => {copy.textContent = display ? '+$3.13' : '+21% / +$3.13'});
+  const previousText = badgeCopies.map(copy => copy.textContent);
+  for (let pass = 0; pass < 10; pass++) update();
+  assert.deepEqual(panel.rect, settled);
+  assert.deepEqual(badgeCopies.map(copy => copy.textContent), previousText);
+  assert.ok(badges.slice(1).every(badge => badge.style.display === display));
 }
-refreshTopContentFit();
-assert.equal(badgeRefreshWidths[0], slot.width);
-assert.equal(panel.rect.width, 825);
-assert.equal(panel.rect.left, 126);
-assert.equal(panel.rect.left + panel.rect.width, slot.right);
-assert.equal(budgetDomain.measureCollapsedProgressStrip(strip).clipped, false);
-''')
+assert.ok(appliedWidths.every(width => width === 803), JSON.stringify(appliedWidths));
+'''.replace("UPDATE", "syncPosition(['top'])" if sync else "refreshTopContentFit()"), sync=sync)
 
 
 def test_rendered_complete_labels_do_not_start_marquee_from_conservative_probe() -> None:
