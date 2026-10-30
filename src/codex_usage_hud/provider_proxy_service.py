@@ -22,6 +22,13 @@ CONTROL_PATH = "/__codex_hud_proxy__/"
 CONTROL_HEADER = "X-Codex-Hud-Proxy-Control"
 PROTOCOL_VERSION = 1
 
+# A HUD launched from the Windows desktop can itself be placed in a
+# kill-on-close Job Object.  The provider relay is deliberately a separate
+# lifetime: Codex must keep sending requests after the HUD is stopped.  Ask
+# Windows to break the helper out of that job in addition to detaching its
+# console and process group.
+_CREATE_BREAKAWAY_FROM_JOB = 0x01000000
+
 
 def _save_state(path: Path, state: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -81,7 +88,11 @@ def helper_command(state_path: Path, port: int, *, wait_for_port: float = 0) -> 
 def launch_helper(state_path: Path, port: int, *, wait_for_port: float = 0) -> subprocess.Popen:
     options = {"stdin": subprocess.DEVNULL, "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL, "close_fds": True}
     if os.name == "nt":
-        options["creationflags"] = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+        options["creationflags"] = (
+            subprocess.DETACHED_PROCESS
+            | subprocess.CREATE_NEW_PROCESS_GROUP
+            | _CREATE_BREAKAWAY_FROM_JOB
+        )
     else:
         options["start_new_session"] = True
     return subprocess.Popen(helper_command(state_path, port, wait_for_port=wait_for_port), **options)

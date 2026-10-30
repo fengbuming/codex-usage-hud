@@ -28,6 +28,37 @@ def test_renderer_session_ports_have_a_direct_owner_and_legacy_alias() -> None:
         RendererSessionPorts.from_mapping({})
 
 
+def test_startup_update_replacement_wait_uses_last_successful_cdp_port() -> None:
+    manager = SimpleNamespace(
+        last_snapshot=SimpleNamespace(primary_pid=10704),
+        codex_is_running=MagicMock(return_value=False),
+        wait_for_codex_replacement=MagicMock(return_value=True),
+    )
+    assert renderer_runtime._wait_for_startup_update_replacement(manager)
+
+    manager.codex_is_running.assert_called_once_with()
+    manager.wait_for_codex_replacement.assert_called_once_with(
+        10704,
+        timeout_seconds=renderer_runtime.RENDERER_STARTUP_UPDATE_REPLACEMENT_WAIT_SECONDS,
+    )
+
+
+def test_startup_update_replacement_wait_skips_first_time_plain_desktop() -> None:
+    manager = SimpleNamespace(
+        last_snapshot=SimpleNamespace(primary_pid=10704),
+        codex_is_running=MagicMock(return_value=True),
+        wait_for_codex_replacement=MagicMock(return_value=True),
+    )
+    with patch(
+        "codex_usage_hud.renderer_runtime._renderer_startup_owner.read_persisted_cdp_port",
+        return_value=None,
+    ):
+        assert not renderer_runtime._wait_for_startup_update_replacement(manager)
+
+    manager.codex_is_running.assert_called_once_with()
+    manager.wait_for_codex_replacement.assert_not_called()
+
+
 def _closing_resource(
     name: str,
     order: list[str],

@@ -5,13 +5,20 @@ import socket
 import ssl
 from threading import Event, Thread
 from urllib.parse import urlsplit
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from codex_usage_hud import codex_provider_config as config
 from codex_usage_hud import codex_cli_launcher as cli
-from codex_usage_hud.provider_proxy import DetachedProviderProxyRelay, ProviderProxyRelay, _rewrite_model, proxy_metadata
+from codex_usage_hud import provider_proxy_service
+from codex_usage_hud.provider_proxy import (
+    DetachedProviderProxyRelay,
+    ProviderProxyRelay,
+    _rewrite_model,
+    proxy_metadata,
+    proxy_route_required,
+)
 
 
 @pytest.fixture
@@ -93,6 +100,184 @@ def test_detached_relay_pushes_source_evidence_and_rejects_control_without_token
     client.request("POST", "/__codex_hud_proxy__/route", b'{}')
     assert client.getresponse().status == 403
     client.close()
+
+
+def test_windows_proxy_helper_requests_breakaway_from_hud_job(monkeypatch, tmp_path):
+    popen = MagicMock()
+    monkeypatch.setattr(provider_proxy_service.os, "name", "nt")
+    monkeypatch.setattr(provider_proxy_service.subprocess, "Popen", popen)
+
+    provider_proxy_service.launch_helper(tmp_path / "relay-state.json", 57323)
+
+    flags = popen.call_args.kwargs["creationflags"]
+    assert flags & provider_proxy_service._CREATE_BREAKAWAY_FROM_JOB
+
+
+@pytest.mark.parametrize(
+    "metadata,required",
+    [
+        ({"enabled": False, "model": "", "models": []}, False),
+        ({"enabled": True, "model": "", "models": []}, True),
+        ({"enabled": False, "model": "custom-model", "models": []}, True),
+        ({"enabled": False, "model": "", "models": ["custom-model"]}, True),
+    ],
+)
+def test_proxy_route_required_only_for_proxy_or_model_rewrite(metadata, required):
+    assert proxy_route_required(metadata) is required
+
+
+def test_activate_migrates_direct_provider_but_warms_existing_route(tmp_path):
+    path = tmp_path / "config.toml"
+    path.write_text(
+        'model_provider = "demo"\n'
+        "[model_providers.demo]\n"
+        'name = "Demo"\n'
+        'base_url = "http://127.0.0.1:57323/old-token/v1"\n'
+        'env_key = "DEMO_KEY"\n'
+        '# codex-hud-proxy: {"base_url":"https://example.test/v1",'
+        '"enabled":false,"port":7897,"token":"old-token",'
+        '"model":"","models":[]}\n',
+        encoding="utf-8",
+    )
+    relay = ProviderProxyRelay()
+    with patch.object(relay, "route", return_value="http://127.0.0.1:57323/old-token/v1") as route:
+        relay.activate(path)
+
+    text = path.read_text(encoding="utf-8")
+    assert 'base_url = "https://example.test/v1"' in text
+    assert 'base_url = "http://127.0.0.1:57323/old-token/v1"' not in text
+    route.assert_called_once()
+
+
+def test_direct_provider_save_switch_clone_and_activation_need_no_helper(tmp_path):
+    path = tmp_path / "config.toml"
+    path.write_text(
+        'model_provider = "demo"\n'
+        '[model_providers.other]\nbase_url = "https://other.test/v1"\n'
+        '[model_providers.demo]\nbase_url = "https://example.test/v1"\n'
+        'env_key = "DEMO_KEY"\nrequest_timeout_ms = 321\n',
+        encoding="utf-8",
+    )
+    relay = ProviderProxyRelay()
+    with (
+        patch.object(config, "provider_proxy_relay", relay),
+        patch.object(config, "_user_environment_value", return_value="test-only"),
+        patch.object(config, "_set_user_environment_value"),
+        patch.object(relay, "route", side_effect=AssertionError("direct provider started a relay")) as route,
+    ):
+        update = {"provider_id": "demo", "base_url": "https://example.test/v1",
+                  "env_key": "DEMO_KEY", "use_proxy": False, "proxy_port": 7897}
+        config.save_provider_configs(update, config_path=path)
+        committed = path.read_bytes()
+        config.save_provider_configs(update, config_path=path)
+        assert path.read_bytes() == committed
+        config.set_default_codex_provider("other", config_path=path)
+        config.set_default_codex_provider("demo", config_path=path)
+        cloned = config.clone_provider_with_bearer_key("demo", "replacement", config_path=path)
+        relay.activate(path)
+        route.assert_not_called()
+
+    parsed = config._parse_toml_mapping(path.read_text(encoding="utf-8"))
+    assert parsed["model_provider"] == cloned["newProviderId"]
+    for provider in ("demo", cloned["newProviderId"]):
+        assert parsed["model_providers"][provider]["base_url"] == "https://example.test/v1"
+        assert parsed["model_providers"][provider]["request_timeout_ms"] == 321
+        assert not proxy_metadata(config.read_provider_definitions(path)[provider].section_text).get("token")
+
+
+@pytest.mark.parametrize("operation", ["activate", "save", "switch"])
+def test_direct_migration_finishes_when_another_provider_cannot_start_helper(tmp_path, operation):
+    path = tmp_path / "config.toml"
+    text = 'model_provider = "demo"\n'
+    for provider, enabled in (("proxied", True), ("demo", False)):
+        metadata = {"base_url": f"https://{provider}.test/v1", "enabled": enabled,
+                    "port": 7897, "model": "", "models": [], "token": provider}
+        text += (f'[model_providers.{provider}]\n'
+                 f'base_url = "http://127.0.0.1:57323/{provider}/v1"\n'
+                 f'experimental_bearer_token = "test-only"\n'
+                 f'# codex-hud-proxy: {json.dumps(metadata)}\n')
+    path.write_text(text, encoding="utf-8")
+    relay = ProviderProxyRelay()
+    with (
+        patch.object(relay, "route", side_effect=RuntimeError("helper unavailable")),
+        patch.object(config, "provider_proxy_relay", relay),
+    ):
+        if operation == "activate":
+            with pytest.raises(RuntimeError, match="helper unavailable"):
+                relay.activate(path)
+        elif operation == "save":
+            config.save_provider_configs({"provider_id": "demo", "base_url": "https://demo.test/v1",
+                                          "use_proxy": False}, config_path=path)
+        else:
+            config.set_default_codex_provider("demo", config_path=path)
+        parsed = config._parse_toml_mapping(path.read_text(encoding="utf-8"))
+        assert parsed["model_providers"]["demo"]["base_url"] == "https://demo.test/v1"
+        assert parsed["model_providers"]["proxied"]["base_url"] == "http://127.0.0.1:57323/proxied/v1"
+    assert proxy_metadata(config.read_provider_definitions(path)["demo"].section_text)["token"] == "demo"
+
+
+def test_migrated_default_sends_requests_after_detached_helper_is_stopped(detached_relay, upstream, tmp_path):
+    server, calls, _, release = upstream
+    release.set()
+    path = tmp_path / "config.toml"
+    metadata = {"base_url": f"http://127.0.0.1:{server.server_port}/v1", "enabled": False,
+                "port": 7897, "model": "", "models": []}
+    cached_url = detached_relay.route(metadata, path)
+    service = detached_relay._service
+    path.write_text(
+        f'model_provider = "demo"\n[model_providers.demo]\nbase_url = "{cached_url}"\n'
+        f'# codex-hud-proxy: {json.dumps(metadata)}\n', encoding="utf-8",
+    )
+    try:
+        detached_relay.activate(path)
+        direct_url = config._parse_toml_mapping(path.read_text())["model_providers"]["demo"]["base_url"]
+        assert direct_url == metadata["base_url"]
+        assert metadata["token"] in json.loads(detached_relay.state_path.read_text())["routes"]
+
+        def send(url):
+            target = urlsplit(url)
+            client = http.client.HTTPConnection(target.hostname, target.port, timeout=3)
+            try:
+                client.request("POST", target.path + "/responses", b'{"model":"native"}',
+                               {"Authorization": "Bearer test-only"})
+                response = client.getresponse()
+                assert response.status == 200
+                assert b"data: first" in response.read()
+            finally:
+                client.close()
+
+        send(cached_url)
+        detached_relay.close()
+        service.process.terminate()
+        service.process.wait(timeout=10)
+        send(direct_url)
+        assert calls == [("/v1/responses", "Bearer test-only", b'{"model":"native"}')] * 2
+    finally:
+        detached_relay.close()
+        if service.process.poll() is None:
+            service.process.terminate()
+            service.process.wait(timeout=10)
+
+
+@pytest.mark.parametrize("required_by", ["proxy", "model"])
+def test_disabling_relay_preserves_cached_route_and_does_not_create_new_token(relay, tmp_path, required_by):
+    path = tmp_path / "config.toml"
+    path.write_text('model_provider = "demo"\n[model_providers.demo]\n'
+                    'base_url = "https://example.test/v1"\n'
+                    'experimental_bearer_token = "test-only"\n', encoding="utf-8")
+    with patch.object(config, "provider_proxy_relay", relay):
+        update = {"provider_id": "demo", "base_url": "https://example.test/v1",
+                  "use_proxy": required_by == "proxy", "desktop_model": "custom" if required_by == "model" else ""}
+        config.save_provider_configs(update, config_path=path)
+        prior = proxy_metadata(config.read_provider_definitions(path)["demo"].section_text)
+        config.save_provider_configs({**update, "use_proxy": False, "desktop_model": "", "desktop_models": []}, config_path=path)
+        direct = proxy_metadata(config.read_provider_definitions(path)["demo"].section_text)
+        assert not direct.get("token")
+        assert direct["previous_routes"][0]["token"] == prior["token"]
+        assert relay.routes[prior["token"]]["enabled"] == prior["enabled"]
+        assert relay.routes[prior["token"]]["model"] == prior["model"]
+        parsed = config._parse_toml_mapping(path.read_text())
+        assert parsed["model_providers"]["demo"]["base_url"] == "https://example.test/v1"
 
 
 @pytest.fixture
@@ -482,7 +667,7 @@ def test_saved_routes_survive_fresh_relay_restart_and_failed_save(tmp_path, upst
             config, "_user_environment_value", return_value="test-only"
         ):
             update = {"provider_id": "demo", "base_url": base, "env_key": "DEMO_KEY",
-                      "use_proxy": False, "proxy_port": 7897}
+                      "use_proxy": False, "proxy_port": 7897, "desktop_model": "custom-model"}
             def endpoint():
                 return config._parse_toml_mapping(path.read_text())["model_providers"]["demo"]["base_url"]
             config.save_provider_configs(update, config_path=path)

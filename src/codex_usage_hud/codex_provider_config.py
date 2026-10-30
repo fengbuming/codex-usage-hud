@@ -15,7 +15,12 @@ from urllib.error import URLError, HTTPError
 from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
-from .provider_proxy import proxy_metadata, with_proxy_metadata, provider_proxy_relay, updated_proxy_metadata
+from .provider_proxy import (
+    proxy_metadata,
+    provider_proxy_relay,
+    updated_proxy_metadata,
+    with_proxy_metadata,
+)
 
 # ``ctypes.windll`` is absent on POSIX. Keep a patchable sentinel so tests
 # simulating the Windows notification path reach the function under test.
@@ -1055,30 +1060,24 @@ def save_provider_configs(
                 "preferenceChanged": tuple(desktop_models) != tuple(previous_models),
             })
 
-        if "use_proxy" in update:
+        existing_proxy = proxy_metadata(_provider_section_text(original_text, provider_id))
+        if "use_proxy" in update or existing_proxy:
             section = _section_range(candidate_text, provider_id)
             newline = _preferred_newline(candidate_text)
+            proxy_options = (
+                {"enabled": update["use_proxy"] is True, "port": update.get("proxy_port", 7897)}
+                if "use_proxy" in update else {}
+            )
             metadata = updated_proxy_metadata(
-                proxy_metadata(existing.section_text) if existing else {},
-                base_url=base_url, enabled=update["use_proxy"] is True,
-                port=update.get("proxy_port", 7897),
-                model=model_for_route,
-                models=models_for_route,
+                existing_proxy, base_url=base_url,
+                model=model_for_route, models=models_for_route, **proxy_options,
             )
-            relay_url = provider_proxy_relay.route(metadata, path)
-            body = _set_quoted_value(section[2], "base_url", relay_url, newline)
-            candidate_text = _replace_section_body(
-                candidate_text, provider_id, with_proxy_metadata(body, metadata, newline)
+            body = _set_quoted_value(
+                section[2],
+                "base_url",
+                provider_proxy_relay.config_base_url(metadata, path),
+                newline,
             )
-        elif existing and proxy_metadata(existing.section_text):
-            section = _section_range(candidate_text, provider_id)
-            metadata = updated_proxy_metadata(
-                proxy_metadata(existing.section_text), base_url=base_url,
-                model=model_for_route,
-                models=models_for_route,
-            )
-            newline = _preferred_newline(candidate_text)
-            body = _set_quoted_value(section[2], "base_url", provider_proxy_relay.route(metadata, path), newline)
             candidate_text = _replace_section_body(
                 candidate_text, provider_id, with_proxy_metadata(body, metadata, newline)
             )
@@ -1294,6 +1293,20 @@ def set_default_codex_provider(
             candidate_text = _replace_section_body(
                 candidate_text, requested, _with_bearer_key(section[2], hot_key, newline)
             )
+    definition = read_provider_definitions(path).get(normalized)
+    metadata = proxy_metadata(_provider_section_text(original_text, requested))
+    if definition is not None and metadata:
+        metadata = updated_proxy_metadata(
+            metadata, base_url=definition.base_url,
+            model=definition.desktop_model, models=list(definition.desktop_models),
+        )
+        section = _section_range(candidate_text, requested)
+        body = _set_quoted_value(
+            section[2], "base_url", provider_proxy_relay.config_base_url(metadata, path), newline,
+        )
+        candidate_text = _replace_section_body(
+            candidate_text, requested, with_proxy_metadata(body, metadata, newline),
+        )
     candidate_text, model_configuration = _apply_default_desktop_model(
         candidate_text, normalized, _provider_desktop_model(_provider_section_text(candidate_text, requested)),
     )
@@ -1420,8 +1433,10 @@ def clone_provider_with_bearer_key(
     if metadata:
         metadata.pop("token", None)
         metadata.pop("previous_routes", None)
+        metadata.update({"model": _provider_desktop_model(source_body),
+                         "models": list(_provider_desktop_models(source_body))})
         new_body = _set_quoted_value(
-            new_body, "base_url", provider_proxy_relay.route(metadata, path), newline
+            new_body, "base_url", provider_proxy_relay.config_base_url(metadata, path), newline
         )
         new_body = with_proxy_metadata(new_body, metadata, newline)
     candidate_text = _add_provider_section_text(original_text, new_id, new_body)

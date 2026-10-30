@@ -86,6 +86,12 @@ _LOGGER = logging.getLogger(__name__)
 
 RENDERER_STARTUP_NOTICE_TITLE = "正在启动 Renderer"
 RENDERER_STARTUP_NOTICE_MESSAGE = "HUD 正在检查 Codex 的 CDP 连接，请稍候。"
+# A Codex update can close the old Desktop process after the daemon has
+# already classified the initial HUD attach.  Keep that handoff window open
+# long enough for the replacement process to appear, while retaining the
+# existing manual restart card for a normal non-CDP Desktop launch.
+RENDERER_STARTUP_UPDATE_REPLACEMENT_WAIT_SECONDS = 30.0
+RENDERER_STARTUP_UPDATE_PROBE_SECONDS = 5.0
 
 
 def _ensure_loading_feedback_started(
@@ -204,6 +210,74 @@ def _restart_codex_for_renderer() -> bool:
     )
 
 
+def _wait_for_startup_update_replacement(
+    daemon_manager: CodexDaemonManager | None,
+) -> bool:
+    """Wait for a Codex replacement during the initial no-CDP handoff.
+
+    ``update-restarted`` was originally only reachable after a renderer
+    session had attached and its daemon tick noticed the old PID disappear.
+    During an update the old CDP endpoint can disappear while the first HUD
+    attach is still being classified, which used to fall into the manual
+    restart card instead.  The daemon's exit monitor distinguishes that
+    replacement from a first-time plain Desktop launch, which keeps the
+    established explicit-restart behavior.
+    """
+    if daemon_manager is None:
+        return False
+    replacement_wait = getattr(daemon_manager, "wait_for_codex_replacement", None)
+    if not callable(replacement_wait):
+        return False
+    previous_snapshot = getattr(daemon_manager, "last_snapshot", None)
+    previous_pid = getattr(previous_snapshot, "primary_pid", None)
+    if previous_pid is None:
+        return False
+    # The daemon's exit monitor is the strong signal.  A normal existing
+    # Desktop without CDP remains alive and keeps the established manual
+    # restart path immediate; an update that already closed the old process
+    # proceeds to the bounded replacement wait below.
+    process_running = getattr(daemon_manager, "codex_is_running", None)
+    replacement_timeout = RENDERER_STARTUP_UPDATE_REPLACEMENT_WAIT_SECONDS
+    if callable(process_running):
+        try:
+            if bool(process_running()):
+                # A prior HUD run leaves a known CDP port behind.  Give an
+                # update that is closing the old process a short probe window
+                # before showing the manual card; ordinary first-time plain
+                # launches still go straight to that card.
+                if _renderer_startup_owner.read_persisted_cdp_port() is None:
+                    return False
+                replacement_timeout = RENDERER_STARTUP_UPDATE_PROBE_SECONDS
+        except (OSError, RuntimeError, TypeError, ValueError):
+            return False
+    elif _renderer_startup_owner.read_persisted_cdp_port() is None:
+        return False
+    _LOGGER.info(
+        "renderer_startup_waiting_for_codex_update_replacement old_pid=%s "
+        "timeout_seconds=%s",
+        previous_pid,
+        replacement_timeout,
+    )
+    try:
+        replaced = bool(
+            replacement_wait(
+                previous_pid,
+                timeout_seconds=replacement_timeout,
+            )
+        )
+    except (OSError, RuntimeError, TypeError, ValueError) as exc:
+        _LOGGER.info(
+            "renderer_startup_update_replacement_wait_failed error=%s", exc
+        )
+        return False
+    if replaced:
+        _runtime_diagnostics_owner.append_renderer_diagnostic(
+            "renderer_startup_update_replacement_observed",
+            old_pid=previous_pid,
+        )
+    return replaced
+
+
 class SystemRuntimeClock:
     def monotonic(self) -> float:
         return time.monotonic()
@@ -277,6 +351,29 @@ def run_renderer_hud_session(args: argparse.Namespace, *, lock_already_held: boo
                     local_loading.close()
                 ports._append_renderer_diagnostic('renderer_cdp_launch_failed', reason=str(exc), source='startup-classification')
                 return ports.RENDERER_HUD_UNAVAILABLE
+            if (
+                startup_plan.scenario == ports.RENDERER_STARTUP_RESTART_REQUIRED
+                and _wait_for_startup_update_replacement(daemon_manager)
+            ):
+                # Reclassify against the replacement process.  A plain
+                # replacement is intentionally handled by the existing
+                # automatic CDP relaunch path; a replacement that already
+                # declares CDP can be attached directly.
+                try:
+                    startup_plan = ports._renderer_startup_plan(
+                        launched_codex=False,
+                        observed_codex_launch=True,
+                        update_restarted=True,
+                    )
+                except (OSError, RuntimeError) as exc:
+                    if local_loading is not None:
+                        local_loading.close()
+                    ports._append_renderer_diagnostic(
+                        'renderer_cdp_launch_failed',
+                        reason=str(exc),
+                        source='startup-update-reclassification',
+                    )
+                    return ports.RENDERER_HUD_UNAVAILABLE
             if startup_plan.scenario == ports.RENDERER_STARTUP_RELAUNCH_OBSERVED or (
                 startup_plan.scenario == ports.RENDERER_STARTUP_UPDATE_RESTARTED
                 and startup_plan.port is None

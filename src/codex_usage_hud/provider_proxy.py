@@ -11,18 +11,20 @@ from collections.abc import Callable, Mapping
 import http.client
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import logging
 from pathlib import Path
 import re
 import secrets
 import select
 import socket
 from threading import RLock, Thread
-from urllib.parse import urlsplit
+from urllib.parse import SplitResult, urlsplit
 
 MARKER = "# codex-hud-proxy: "
 _METADATA = re.compile(r"(?m)^# codex-hud-proxy: (.+)\r?$")
 _HOP_HEADERS = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
                 "te", "trailer", "transfer-encoding", "upgrade"}
+_LOGGER = logging.getLogger(__name__)
 
 
 def _rewrite_model(body: bytes | None, target_model: object, allowed_models: object = None) -> bytes | None:
@@ -101,6 +103,34 @@ def updated_proxy_metadata(metadata: dict, **changes) -> dict:
     return updated
 
 
+def proxy_route_required(metadata: Mapping[str, object]) -> bool:
+    """Return whether new requests need the loopback relay.
+
+    A provider without an upstream HTTP proxy and without a Desktop model
+    rewrite can use its upstream URL directly. Existing loopback tokens are
+    still warmed during activation so already-created sessions keep working.
+    """
+    if bool(metadata.get("enabled")):
+        return True
+    if str(metadata.get("model") or "").strip():
+        return True
+    models = metadata.get("models")
+    return isinstance(models, list) and any(str(item or "").strip() for item in models)
+
+
+def _validated_proxy_upstream(metadata: Mapping[str, object]) -> SplitResult:
+    upstream = urlsplit(str(metadata.get("base_url") or ""))
+    if upstream.scheme not in {"http", "https"} or not upstream.hostname or upstream.username:
+        raise ValueError("使用代理配置时 Base URL 必须是有效的 HTTP / HTTPS 地址。")
+    try:
+        port = int(metadata.get("port", 7897))
+    except (TypeError, ValueError):
+        raise ValueError("代理端口必须为 1–65535。") from None
+    if not 1 <= port <= 65535:
+        raise ValueError("代理端口必须为 1–65535。")
+    return upstream
+
+
 class ProviderProxyRelay:
     def __init__(self, port: int = 0) -> None:
         self.port = port
@@ -114,15 +144,7 @@ class ProviderProxyRelay:
         self.stop_writer = None
 
     def route(self, metadata: dict, config_path: Path) -> str:
-        upstream = urlsplit(str(metadata.get("base_url") or ""))
-        if upstream.scheme not in {"http", "https"} or not upstream.hostname or upstream.username:
-            raise ValueError("使用代理配置时 Base URL 必须是有效的 HTTP / HTTPS 地址。")
-        try:
-            port = int(metadata.get("port", 7897))
-        except (TypeError, ValueError):
-            raise ValueError("代理端口必须为 1–65535。") from None
-        if not 1 <= port <= 65535:
-            raise ValueError("代理端口必须为 1–65535。")
+        upstream = _validated_proxy_upstream(metadata)
         with self.lock:
             # Restore old immutable endpoints as well as the current one. Only
             # committed metadata survives a restart; failed saves cannot alter
@@ -136,6 +158,24 @@ class ProviderProxyRelay:
             self.routes[token] = dict(metadata)
             self.config_paths.add(config_path)
             return f"http://127.0.0.1:{self.server.server_port}/{token}{upstream.path.rstrip('/')}"
+
+    def config_base_url(self, metadata: dict, config_path: Path) -> str:
+        """Select the persisted URL and retain any existing relay endpoints."""
+        _validated_proxy_upstream(metadata)
+        if proxy_route_required(metadata):
+            return self.route(metadata, config_path)
+        # Direct providers never need a new loopback endpoint. Warm only
+        # already-committed tokens; helper availability must not prevent
+        # restoring an independent upstream URL for new sessions.
+        for route in [*metadata.get("previous_routes", []), metadata]:
+            if not route.get("token"):
+                continue
+            try:
+                self.route({key: value for key, value in route.items()
+                            if key != "previous_routes"}, config_path)
+            except (OSError, RuntimeError, ValueError, http.client.HTTPException) as exc:
+                _LOGGER.warning("provider_previous_route_warm_failed error=%s", type(exc).__name__)
+        return str(metadata["base_url"])
 
     def _start(self) -> None:
         if self.server is not None:
@@ -344,19 +384,29 @@ class ProviderProxyRelay:
             return
         original = config._read_text_exact(path)
         candidate = original
+        activation_error: Exception | None = None
         for provider, definition in config.read_provider_definitions(path).items():
-            metadata = proxy_metadata(definition.section_text)
+            metadata = proxy_metadata(config._provider_section_text(original, provider))
             if not metadata:
                 continue
-            metadata = {
-                **metadata,
-                "model": definition.desktop_model,
-                "models": list(definition.desktop_models),
-            }
+            metadata = updated_proxy_metadata(
+                metadata, base_url=definition.base_url,
+                model=definition.desktop_model, models=list(definition.desktop_models),
+            )
             section = config._section_range(candidate, provider)
             if section is None:
                 continue
-            base_url = self.route(metadata, path) if activate else str(metadata["base_url"])
+            if activate:
+                try:
+                    base_url = self.config_base_url(metadata, path)
+                except (OSError, RuntimeError, ValueError, http.client.HTTPException) as exc:
+                    # Finish direct-provider migration even if an unrelated
+                    # provider still requires an unavailable helper.
+                    if activation_error is None:
+                        activation_error = exc
+                    continue
+            else:
+                base_url = str(metadata["base_url"])
             newline = config._preferred_newline(candidate)
             body = config._set_quoted_value(section[2], "base_url", base_url, newline)
             body = with_proxy_metadata(body, metadata, newline)
@@ -364,6 +414,8 @@ class ProviderProxyRelay:
         if candidate != original:
             config._validate_toml(candidate)
             config._write_text_atomically(path, candidate, original)
+        if activation_error is not None:
+            raise activation_error
 
     def close(self) -> None:
         try:

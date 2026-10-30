@@ -289,6 +289,20 @@ def _ensure_runtime_error_diagnostics(context: object) -> None:
 
 def stop_running_hud(path: Path | None = None) -> str:
     def cleanup() -> None:
+        # Make the provider relay independent before terminating the HUD.  A
+        # previous HUD version may have left a loopback URL behind without a
+        # live detached helper; warming it here closes that stop-time gap.
+        if path is None:
+            try:
+                from .codex_provider_config import default_codex_config_path
+                from .provider_proxy import provider_proxy_relay
+
+                provider_proxy_relay.activate(default_codex_config_path())
+            except (OSError, RuntimeError, ValueError) as exc:
+                _append_renderer_diagnostic(
+                    "provider_proxy_stop_warm_failed",
+                    reason=str(exc),
+                )
         try:
             remove_renderer_hud_from_pages(port=_read_persisted_renderer_cdp_port())
         except Exception:
@@ -399,6 +413,20 @@ def run_tk_hud_session(args: argparse.Namespace, **kwargs: object) -> int:
 
 
 def run_daemon(args: argparse.Namespace) -> int:
+    # Provider routes are intentionally owned by a detached relay.  Warm the
+    # relay before the HUD enters its main loop so a stale loopback route from
+    # a previous HUD session is usable immediately, and remains usable after
+    # this HUD process is stopped.
+    try:
+        from .codex_provider_config import default_codex_config_path
+        from .provider_proxy import provider_proxy_relay
+
+        provider_proxy_relay.activate(default_codex_config_path())
+    except (OSError, RuntimeError, ValueError) as exc:
+        _append_renderer_diagnostic(
+            "provider_proxy_start_failed",
+            reason=str(exc),
+        )
     services = _daemon_runtime_owner.DaemonServices(
         manager_factory=CodexDaemonManager, lock_factory=instance_lock.HudInstanceLock,
         configure_logging=configure_daemon_logging,

@@ -40,6 +40,10 @@ codex-hud --check-update
 codex-hud --update
 ```
 
+Providers without a local proxy or custom Desktop model keep their real upstream URL in `config.toml`. Once Codex reads that configuration, requests work even when neither the HUD nor its relay has been started since boot. Saving, selecting a default, and cloning providers all follow this rule.
+
+Providers requiring a proxy or model rewriting, and cached loopback endpoints from existing sessions, use the independent relay. The HUD starts it automatically; `--stop` leaves the relay and old routes running. New direct configurations need no relay, and existing direct providers can migrate back to their upstream URL even if the relay is unavailable.
+
 ## Sponsors
 
 [Want to be listed below?](https://github.com/fengbuming/codex-usage-hud/issues)

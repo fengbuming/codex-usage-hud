@@ -45,6 +45,10 @@ codex-hud --update
 
 Windows 下从 Codex 内置终端等受 Job 生命周期管理的环境启动时，HUD 会通过桌面 Explorer 启动独立常驻进程，并确认其不受“启动者退出时一并终止”的限制。启动参数和环境通过本机认证管道传递，不写入临时文件。`--once`、`--stop` 等一次性命令仍在当前进程执行。若桌面 Shell 不可用，会明确提示改从外部终端或桌面快捷方式启动。
 
+未启用本机代理、也未配置 Desktop 自定义模型的供应商，`config.toml` 中会保留真实上游地址。Codex 读取该配置后，即使本次开机从未启动 HUD 或 relay，也可以直接发送请求。保存、设为默认和克隆供应商都遵循这一规则。
+
+需要本机代理或模型改写的供应商，以及已有会话缓存的 loopback 地址，继续使用独立 relay。HUD 会自动启动它；`--stop` 保留 relay 和旧路由，避免中断这些会话。新建直连配置无需启动 relay；迁移旧配置时，即使 relay 不可用，也会恢复直连地址。
+
 ## 赞助商
 
 [想显示在下方？](https://github.com/fengbuming/codex-usage-hud/issues)
