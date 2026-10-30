@@ -17,6 +17,7 @@ import re
 import secrets
 import select
 import socket
+from socketserver import TCPServer
 from threading import RLock, Thread
 from urllib.parse import SplitResult, urlsplit
 
@@ -25,6 +26,16 @@ _METADATA = re.compile(r"(?m)^# codex-hud-proxy: (.+)\r?$")
 _HOP_HEADERS = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
                 "te", "trailer", "transfer-encoding", "upgrade"}
 _LOGGER = logging.getLogger(__name__)
+
+
+class LoopbackHTTPServer(ThreadingHTTPServer):
+    def server_bind(self) -> None:
+        # HTTPServer.server_bind calls getfqdn, which can block startup on
+        # hosts with slow/broken reverse DNS (including macOS runners).
+        # These servers bind numeric loopback addresses and need no lookup.
+        TCPServer.server_bind(self)
+        self.server_name = "localhost"
+        self.server_port = self.server_address[1]
 
 
 def _rewrite_model(body: bytes | None, target_model: object, allowed_models: object = None) -> bytes | None:
@@ -180,7 +191,7 @@ class ProviderProxyRelay:
     def _start(self) -> None:
         if self.server is not None:
             return
-        self.server = ThreadingHTTPServer(("127.0.0.1", self.port), self._handler_type())
+        self.server = LoopbackHTTPServer(("127.0.0.1", self.port), self._handler_type())
         self.port = self.server.server_port
         self.stop_reader, self.stop_writer = socket.socketpair()
         self.thread = Thread(target=self._serve, name="provider-proxy-relay", daemon=True)
@@ -324,7 +335,8 @@ class ProviderProxyRelay:
                         body = b"".join(chunks)
                     elif self.headers.get("Content-Length"):
                         body = read_exact(int(self.headers["Content-Length"]))
-                    if target.endswith("/responses") or target.split("?", 1)[0].endswith("/responses"):
+                    request_path = urlsplit(target).path.rstrip("/")
+                    if request_path.endswith(("/responses", "/responses/compact")):
                         relay._report_source_evidence(self.headers, body)
                         body = _rewrite_model(body, route.get("model"), route.get("models"))
                     connection.request(self.command, target or "/", body=body, headers=headers)

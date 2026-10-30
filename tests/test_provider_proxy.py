@@ -109,7 +109,7 @@ def test_detached_relay_pushes_source_evidence_and_rejects_control_without_token
 
 def test_windows_proxy_helper_requests_breakaway_from_hud_job(monkeypatch, tmp_path):
     popen = MagicMock()
-    monkeypatch.setattr(provider_proxy_service, "os", SimpleNamespace(name="nt"))
+    monkeypatch.setattr(provider_proxy_service, "os", SimpleNamespace(name="nt", chmod=MagicMock()))
     monkeypatch.setattr(provider_proxy_service.subprocess, "DETACHED_PROCESS", 0x00000008, raising=False)
     monkeypatch.setattr(provider_proxy_service.subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200, raising=False)
     monkeypatch.setattr(provider_proxy_service.subprocess, "Popen", popen)
@@ -118,6 +118,59 @@ def test_windows_proxy_helper_requests_breakaway_from_hud_job(monkeypatch, tmp_p
 
     flags = popen.call_args.kwargs["creationflags"]
     assert flags & provider_proxy_service._CREATE_BREAKAWAY_FROM_JOB
+
+
+def test_loopback_server_binding_never_resolves_hostnames(monkeypatch):
+    def unexpected_lookup(*_args):
+        raise AssertionError("numeric loopback must not wait for DNS")
+
+    monkeypatch.setattr(socket, "getfqdn", unexpected_lookup)
+    with provider_proxy_service.LoopbackHTTPServer(("127.0.0.1", 0), BaseHTTPRequestHandler) as server:
+        assert server.server_name == "localhost"
+        assert server.server_port > 0
+
+
+def test_source_helper_uses_lightweight_module_entry_and_retains_startup_errors(tmp_path, monkeypatch):
+    state = tmp_path / "state.json"
+    monkeypatch.setattr(provider_proxy_service.sys, "frozen", False, raising=False)
+
+    def launch(command, **options):
+        assert command[1:3] == ["-m", "codex_usage_hud.provider_proxy_service"]
+        options["stderr"].write(b"test startup failure\n")
+        return MagicMock()
+
+    monkeypatch.setattr(provider_proxy_service.subprocess, "Popen", launch)
+    provider_proxy_service.launch_helper(state, 57323)
+    assert state.with_suffix(".startup.log").read_bytes() == b"test startup failure\n"
+
+
+def test_reused_callback_is_registered_again_after_helper_restart(detached_relay, upstream, tmp_path):
+    server, _calls, _first_frame, release = upstream
+    release.set()
+    received = Event()
+    detached_relay.add_source_evidence_listener(lambda *_args: received.set())
+    metadata = {"base_url": f"http://127.0.0.1:{server.server_port}/v1"}
+    endpoint = urlsplit(detached_relay.route(metadata, tmp_path / "config.toml"))
+    service = detached_relay._service
+    callback = service._callback_server
+    old_process = service.process
+    old_process.terminate()
+    old_process.wait(timeout=10)
+    detached_relay.route(metadata, tmp_path / "config.toml")
+    assert service._callback_server is callback
+    assert service.process.pid != old_process.pid
+    client = http.client.HTTPConnection(endpoint.hostname, endpoint.port, timeout=3)
+    try:
+        client.request("POST", endpoint.path + "/responses", json.dumps({
+            "instructions": "Memory Writing Agent: Phase 2 (Consolidation)",
+        }), {"x-codex-turn-metadata": json.dumps({
+            "thread_id": "01a1870b-7d0e-7c81-a578-6625e4a23103",
+        })})
+        response = client.getresponse()
+        response.read()
+        assert received.wait(2)
+    finally:
+        client.close()
 
 
 @pytest.mark.parametrize(
@@ -474,7 +527,12 @@ def test_rewrite_model_changes_unknown_fallback_but_preserves_configured_models(
     assert _rewrite_model(b"not-json", "deepseek-v4.1-flash-uncensored") == b"not-json"
 
 
-def test_relay_rewrites_unknown_model_in_responses_request(relay, upstream, tmp_path):
+@pytest.mark.parametrize("request_path", ["/responses", "/responses/compact", "/responses/compact?mode=auto"])
+@pytest.mark.parametrize("model,expected", [
+    ("gpt-6.1-sol", "deepseek-v4.1-flash-uncensored"),
+    ("deepseek-v4.1-flash", "deepseek-v4.1-flash"),
+])
+def test_relay_rewrites_unknown_model_in_responses_request(relay, upstream, tmp_path, request_path, model, expected):
     server, calls, _, release = upstream
     release.set()
     endpoint = urlsplit(relay.route({
@@ -484,12 +542,12 @@ def test_relay_rewrites_unknown_model_in_responses_request(relay, upstream, tmp_
         "models": ["deepseek-v4.1-flash-uncensored", "deepseek-v4.1-flash"],
     }, tmp_path / "config.toml"))
     client = http.client.HTTPConnection(endpoint.hostname, endpoint.port, timeout=3)
-    client.request("POST", endpoint.path + "/responses", b'{"model":"gpt-6.1-sol","stream":true}')
+    client.request("POST", endpoint.path + request_path, json.dumps({"model": model, "stream": True}))
     response = client.getresponse()
     assert response.status == 200
     response.read()
     client.close()
-    assert calls[-1][2] == b'{"model":"deepseek-v4.1-flash-uncensored","stream":true}'
+    assert json.loads(calls[-1][2]) == {"model": expected, "stream": True}
 def test_websocket_handshake_and_bidirectional_frames(relay, upstream, tmp_path):
     server = upstream[0]
     endpoint = urlsplit(relay.route({"base_url": f"http://127.0.0.1:{server.server_port}/v1",

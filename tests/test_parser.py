@@ -1456,6 +1456,53 @@ class JsonlSessionParserTests(unittest.TestCase):
 
 
 class SseRequestStateMachineTests(unittest.TestCase):
+    def test_missing_foreign_otel_completion_cannot_override_attributed_counts(self) -> None:
+        machine = SseRequestStateMachine()
+        machine.start_round(parse_timestamp("2026-05-28T00:00:00Z"), "gpt-5.5")
+        machine.pending_sse_events.append('SSE event: {"type":"response.completed",'
+                                          '"response":{"usage":{"input_tokens":10,"output_tokens":999}}}')
+        machine.consume_otel(1, 'event.name="codex.sse_event" event.kind=response.completed '
+                             'conversation.id="session-a" input_token_count=10 output_token_count=20 '
+                             'event.timestamp=2026-05-28T00:00:04Z', "session-a")
+        self.assertEqual(machine.current.output_tokens, 20)
+        self.assertEqual(machine.current.output_tokens_per_second, 5)
+
+    def test_completed_events_from_other_sessions_do_not_supply_current_usage(self) -> None:
+        for with_current_sse in (False, True):
+            with self.subTest(with_current_sse=with_current_sse):
+                rows = []
+
+                def add(target, body):
+                    rows.append({"id": len(rows) + 1, "ts": 1779926400 + len(rows),
+                                 "target": target, "feedback_log_body": body})
+
+                def otel(kind, session, output=None):
+                    counts = "" if output is None else f"input_token_count=10 output_token_count={output}"
+                    add("codex_otel.log_only", f'event.name="codex.sse_event" event.kind={kind} conversation.id={session} {counts}')
+
+                def completed(output):
+                    add("codex_api::sse::responses", "SSE event: " + json.dumps({
+                        "type": "response.completed", "response": {
+                            "id": f"resp-{output}", "usage": {
+                                "input_tokens": 10, "output_tokens": output,
+                                "total_tokens": 10 + output,
+                            },
+                        },
+                    }))
+
+                otel("response.created", "session-a")
+                completed(999)
+                otel("response.completed", "session-b", 999)
+                if with_current_sse:
+                    completed(20)
+                otel("response.completed", "session-a", 20)
+                machine = SseRequestStateMachine()
+                machine.consume_log_rows(rows, "session-a")
+                self.assertEqual(machine.current.output_tokens, 20)
+                self.assertEqual(machine.current.total_tokens, 30)
+                self.assertEqual(machine.current.status, "confirmed")
+                self.assertEqual(machine.pending_sse_events, [])
+
     def test_live_output_speed_falls_back_to_sqlite_row_timestamps(self) -> None:
         machine = SseRequestStateMachine()
         machine.consume_log_rows(

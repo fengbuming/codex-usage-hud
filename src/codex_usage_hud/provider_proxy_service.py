@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import argparse
 import http.client
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler
 import json
 import os
 from pathlib import Path
@@ -17,6 +17,7 @@ from threading import RLock, Thread
 import time
 
 from .runtime_paths import runtime_file_path
+from .provider_proxy import LoopbackHTTPServer
 
 CONTROL_PATH = "/__codex_hud_proxy__/"
 CONTROL_HEADER = "X-Codex-Hud-Proxy-Control"
@@ -78,7 +79,7 @@ def _load_or_create_state(path: Path, port: int) -> dict:
 def helper_command(state_path: Path, port: int, *, wait_for_port: float = 0) -> list[str]:
     command = [sys.executable]
     if not getattr(sys, "frozen", False):
-        command += ["-m", "codex_usage_hud"]
+        command += ["-m", "codex_usage_hud.provider_proxy_service"]
     return command + [
         "--provider-proxy-helper", "--provider-proxy-state-file", str(state_path),
         "--provider-proxy-port", str(port), "--provider-proxy-wait", str(wait_for_port),
@@ -95,7 +96,12 @@ def launch_helper(state_path: Path, port: int, *, wait_for_port: float = 0) -> s
         )
     else:
         options["start_new_session"] = True
-    return subprocess.Popen(helper_command(state_path, port, wait_for_port=wait_for_port), **options)
+    log_path = state_path.with_suffix(".startup.log")
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    with log_path.open("wb") as log:
+        os.chmod(log_path, 0o600)
+        options["stderr"] = log
+        return subprocess.Popen(helper_command(state_path, port, wait_for_port=wait_for_port), **options)
 
 
 class ProviderProxyServiceClient:
@@ -156,7 +162,18 @@ class ProviderProxyServiceClient:
                 if self.process.poll() is not None:
                     break
                 time.sleep(.05)
-            raise RuntimeError("独立 provider 代理未能启动；保留原有 provider 配置。")
+            exit_code = self.process.poll()
+            if exit_code is None:
+                self.process.terminate()
+                try:
+                    self.process.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    self.process.kill()
+                    self.process.wait(timeout=2)
+            raise RuntimeError(
+                "独立 provider 代理未能启动；保留原有 provider 配置。"
+                f" exit_code={exit_code}; 启动日志：{self.state_path.with_suffix('.startup.log')}"
+            )
 
     def route(self, metadata: dict, config_path: Path) -> str:
         self.ensure()
@@ -165,7 +182,14 @@ class ProviderProxyServiceClient:
         return result["endpoint"]
 
     def _subscribe(self) -> None:
-        if self.on_evidence is None or self._callback_server is not None:
+        if self.on_evidence is None:
+            return
+        if self._callback_server is not None:
+            # The callback listener outlives the helper. Re-register it after
+            # every health check so a replacement also receives the address.
+            self._call("subscribe", {
+                "token": self._subscription, "port": self._callback_server.server_port,
+            })
             return
         client = self
 
@@ -188,7 +212,7 @@ class ProviderProxyServiceClient:
                 except (ValueError, KeyError):
                     self.send_error(400)
 
-        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        server = LoopbackHTTPServer(("127.0.0.1", 0), Handler)
         reader, writer = socket.socketpair()
 
         def serve():
@@ -332,8 +356,9 @@ def run_helper(state_path: Path, port: int, *, wait_for_port: float = 0) -> int:
         try:
             relay._start()
             break
-        except OSError:
+        except OSError as exc:
             if time.monotonic() >= deadline:
+                print(f"Provider relay bind failed: {type(exc).__name__}: {exc}", file=sys.stderr)
                 return 1
             time.sleep(.05)
     relay.thread.join()
@@ -348,3 +373,7 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--provider-proxy-wait", type=float, default=0)
     args = parser.parse_args(argv)
     return run_helper(args.provider_proxy_state_file, args.provider_proxy_port, wait_for_port=args.provider_proxy_wait)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))

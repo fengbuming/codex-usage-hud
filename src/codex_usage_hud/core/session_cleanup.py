@@ -1664,13 +1664,34 @@ class SessionCleanupManager:
 
     def _pinned_provider_tree_ids(self) -> set[str]:
         records, parents, _states, _unsafe, _unresolved = self._load_state()
+        # Desktop versions can keep sidebar pins in the global state even
+        # after adding is_pinned to threads (without migrating its values).
+        state_path = self.state_db_path.parent / ".codex-global-state.json"
+        sidebar_pins: set[str] = set()
+        try:
+            sidebar_state = json.loads(state_path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            sidebar_state = {}
+        except (OSError, ValueError) as exc:
+            raise SessionCleanupError("无法读取 Codex 置顶状态，未执行供应商历史清理。") from exc
+        if not isinstance(sidebar_state, dict):
+            raise SessionCleanupError("Codex 置顶状态格式无效，未执行供应商历史清理。")
+        raw_pins = sidebar_state.get("pinned-thread-ids", [])
+        if not isinstance(raw_pins, list):
+            raise SessionCleanupError("Codex 置顶列表格式无效，未执行供应商历史清理。")
+        sidebar_pins.update(
+            session_id for value in raw_pins
+            if (session_id := _canonical_uuid(value))
+        )
         children: dict[str, set[str]] = defaultdict(set)
         for child, parent_ids in parents.items():
             for parent in parent_ids:
                 children[parent].add(child)
                 children[child].add(parent)
         protected: set[str] = set()
-        pending = [session_id for session_id, record in records.items() if record.pinned]
+        pending = list(sidebar_pins | {
+            session_id for session_id, record in records.items() if record.pinned
+        })
         while pending:
             session_id = pending.pop()
             if session_id in protected:

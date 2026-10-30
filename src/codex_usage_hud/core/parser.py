@@ -3833,15 +3833,37 @@ class SseRequestStateMachine:
         kind = self.extract_text(body, r"\bevent\.kind=([^\s]+)")
         timestamp = self.extract_timestamp(body) or row_timestamp
         model = extract_log_field(body, "slug") or extract_log_field(body, "model")
-        is_current_session = f"conversation.id={session_id}" in body
+        is_current_session = extract_log_field(body, "conversation.id") == session_id
 
         if kind in {
             "response.output_text.delta",
             "response.function_call_arguments.delta",
+            "response.completed",
         }:
+            # Raw SSE rows are shared by every conversation. Consume the
+            # paired event even when its OTel row belongs to another session.
             pending = self.pop_pending_sse_event(kind)
-            if is_current_session and pending:
+            if not is_current_session:
+                return
+            exact = (
+                self.request_from_otel_counts(body, timestamp, model)
+                if kind == "response.completed" else None
+            )
+            if pending and exact is not None:
+                event = self.parse_sse_event(pending)
+                raw = self.request_from_sse_completed(event) if event else None
+                if raw is None or (
+                    raw.input_tokens != exact.input_tokens
+                    or raw.output_tokens != exact.output_tokens
+                ):
+                    # Missing/interleaved log pairs must not override the
+                    # counts explicitly attributed to the current session.
+                    pending = None
+            if pending:
                 self.consume_sse(pending, timestamp=timestamp)
+            if kind == "response.completed" and self.current.status != "confirmed":
+                if exact is not None:
+                    self.finish_round(exact)
             return
 
         if not is_current_session:
@@ -3855,16 +3877,6 @@ class SseRequestStateMachine:
             self.current.status = "running"
             self.current.updated_at = timestamp
             return
-
-        if kind == "response.completed":
-            pending = self.pop_pending_sse_event(kind)
-            if pending:
-                self.consume_sse(pending, timestamp=timestamp)
-            if self.current.status == "confirmed":
-                return
-            exact = self.request_from_otel_counts(body, timestamp, model)
-            if exact is not None:
-                self.finish_round(exact)
 
     @staticmethod
     def sqlite_timestamp(value: Any, nanoseconds: Any = 0) -> datetime | None:

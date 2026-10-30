@@ -879,6 +879,34 @@ class SessionCleanupManagerTests(unittest.TestCase):
         self.assertTrue(rollouts[ROOT_ID].exists())
         self.assertTrue(rollouts[CHILD_ID].exists())
 
+    def test_provider_delete_preserves_global_sidebar_pins_with_empty_db_flags(self) -> None:
+        for force in (False, True):
+            with self.subTest(force=force):
+                temporary, root, state, _index, rollouts, manager = self._fixture()
+                self.addCleanup(temporary.cleanup)
+                with closing(sqlite3.connect(state)) as connection, connection:
+                    connection.execute("ALTER TABLE threads ADD COLUMN is_pinned INTEGER DEFAULT 0")
+                (root / ".codex-global-state.json").write_text(
+                    json.dumps({"pinned-thread-ids": [CHILD_ID]}), encoding="utf-8"
+                )
+                lifecycle = MagicMock(return_value={"verified": True})
+                result = manager.delete_provider_history(
+                    "openai-custom", force=force, desktop_lifecycle=lifecycle
+                )["operation"]
+                self.assertEqual(result["deletedCount"], 0)
+                self.assertGreater(result["skippedPinnedCount"], 0)
+                lifecycle.assert_not_called()
+                self.assertTrue(rollouts[ROOT_ID].exists())
+                self.assertTrue(rollouts[CHILD_ID].exists())
+
+    def test_provider_delete_refuses_unreadable_sidebar_pin_state(self) -> None:
+        temporary, root, _state, _index, rollouts, manager = self._fixture()
+        self.addCleanup(temporary.cleanup)
+        (root / ".codex-global-state.json").write_text("{", encoding="utf-8")
+        with self.assertRaisesRegex(SessionCleanupError, "置顶状态"):
+            manager.delete_provider_history("openai-custom", force=True)
+        self.assertTrue(all(path.exists() for path in rollouts.values()))
+
     def test_forced_provider_delete_covers_current_running_and_orphan_records(
         self,
     ) -> None:
