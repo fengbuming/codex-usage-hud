@@ -4,6 +4,7 @@ import json
 import socket
 import ssl
 from threading import Event, Thread
+from types import SimpleNamespace
 from urllib.parse import urlsplit
 from unittest.mock import MagicMock, patch
 
@@ -29,7 +30,11 @@ def relay():
 
 
 @pytest.fixture
-def detached_relay(tmp_path):
+def detached_relay(tmp_path, monkeypatch):
+    # Hosted Windows runners forbid breaking out of their Job Object. These
+    # tests cover relay.close() lifetime; launch flags are checked separately.
+    if provider_proxy_service.os.name == "nt":
+        monkeypatch.setattr(provider_proxy_service, "_CREATE_BREAKAWAY_FROM_JOB", 0)
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
         port = probe.getsockname()[1]
@@ -104,7 +109,9 @@ def test_detached_relay_pushes_source_evidence_and_rejects_control_without_token
 
 def test_windows_proxy_helper_requests_breakaway_from_hud_job(monkeypatch, tmp_path):
     popen = MagicMock()
-    monkeypatch.setattr(provider_proxy_service.os, "name", "nt")
+    monkeypatch.setattr(provider_proxy_service, "os", SimpleNamespace(name="nt"))
+    monkeypatch.setattr(provider_proxy_service.subprocess, "DETACHED_PROCESS", 0x00000008, raising=False)
+    monkeypatch.setattr(provider_proxy_service.subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200, raising=False)
     monkeypatch.setattr(provider_proxy_service.subprocess, "Popen", popen)
 
     provider_proxy_service.launch_helper(tmp_path / "relay-state.json", 57323)
