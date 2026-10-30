@@ -32,10 +32,13 @@ TEXT = r"""
           let anchor = name === "top"
             ? topAnchor(height, widthOverride)
             : requestAnchor(height, widthOverride);
-          if (name === "top" && !expanded && (!state.manual || forceAutoFit)
-            && typeof fitTopContentRect === "function") {
-            anchor = fitTopContentRect(panel, anchor);
-          }
+          // Let automatic top geometry start from the complete title-bar slot.
+          // Badge layout is width-sensitive: measuring while the panel still
+          // has its previous narrow width can hide long badges, after which
+          // content fitting never sees their intrinsic width. The first
+          // applyRect below establishes the slot width; refreshAllMarquees then
+          // measures badges at that width before refreshTopContentFit shrinks
+          // the panel back to the settled content width.
           let { left, top, width } = anchor;
           if (state.manual && !forceAutoFit) {
             const relativeRequest = name === "request"
@@ -77,11 +80,36 @@ TEXT = r"""
         if (wasExpanded && !forceCollapsed) return;
         if (wasExpanded) panel.dataset.expanded = "false";
         try {
+          const state = typeof getPanelState === "function" ? getPanelState("top") : null;
+          const autoFit = !wasExpanded
+            && !state?.manual
+            && typeof topAnchor === "function"
+            && typeof applyRect === "function";
+          // Budget-only updates arrive while the previous automatic width is
+          // still applied. Establish the complete title-bar slot before
+          // refreshing badge visibility so a long badge cannot be hidden by
+          // the old narrow width and disappear from the intrinsic measurement.
+          if (refreshProgress && autoFit) {
+            const rect = panel.getBoundingClientRect?.();
+            const anchor = topAnchor(rect?.height || PANEL.top.collapsedHeight);
+            if (rect && anchor && (
+              Math.abs((rect.left || 0) - anchor.left) > 1
+              || Math.abs((rect.width || 0) - anchor.width) > 1
+            )) {
+              applyRect(panel, anchor.left, rect.top, anchor.width, rect.height);
+            }
+          }
           const strip = panel.querySelector('[data-field="topCollapsedProgress"]');
+          if (refreshProgress) {
+            const refreshRail = budgetDomain.refreshProgressRailLabel;
+            if (typeof refreshRail === "function") {
+              panel.querySelectorAll?.(".codex-usage-hud-progress-rail")?.forEach(refreshRail);
+            }
+            budgetDomain.refreshCollapsedProgressStrip(strip);
+          }
           const layout = budgetDomain.measureCollapsedProgressStrip(strip);
           if (layout?.clipped) panel.dataset.topContentScroll = "true";
           else delete panel.dataset.topContentScroll;
-          if (refreshProgress) budgetDomain.refreshCollapsedProgressStrip(strip);
           const resetOverflowSnapshot = () => {
             if (!strip) return null;
             delete strip.dataset.overflow;
@@ -96,7 +124,6 @@ TEXT = r"""
             else delete panel.dataset.topContentScroll;
           }
           if (wasExpanded) return;
-          const state = typeof getPanelState === "function" ? getPanelState("top") : null;
           if (
             !state?.manual
             && typeof fitTopContentRect === "function"

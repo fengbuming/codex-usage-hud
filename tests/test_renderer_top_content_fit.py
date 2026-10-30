@@ -367,6 +367,73 @@ assert.equal(strip.dataset.overflow, 'true');
     )
 
 
+def test_auto_width_measures_badges_from_full_slot_before_shrinking() -> None:
+    run_behavior(r'''
+// A narrow previous panel can make refreshProgressRailLabel hide long badges.
+// The automatic pass must establish the full native slot first so the badge
+// measurement sees the complete three-tab content.
+const ctx = {lifecycle: {active: () => true}};
+const runtimeIsCurrent = () => true;
+const noop = () => {};
+const positionStartupBubble = noop, positionRestReminderBubble = noop;
+const applyPanelStates = noop, applyRuntimeErrorsPanelState = noop;
+const refreshLayoutObservers = noop, startBootstrapObserver = noop;
+const desktopChromeMissing = () => false;
+const desiredHeight = () => 36;
+document.getElementById = () => ({querySelector: () => panel});
+railWidths = [160, 120, 120]; items = rails();
+slot = {left: 100, right: 951, width: 851};
+panel.rect = {left: 451, top: 15, width: 500, height: 36};
+let badgeRefreshWidths = [];
+budgetDomain.refreshProgressRailLabel = () => {
+  badgeRefreshWidths.push(panel.rect?.width || 0);
+  if ((panel.rect?.width || 0) >= slot.width - 1) {
+    railWidths = [160, 300, 300]; items = rails();
+  }
+};
+const refreshAllMarquees = () => {
+  items.forEach(rail => budgetDomain.refreshProgressRailLabel(rail));
+  budgetDomain.refreshCollapsedProgressStrip(strip);
+};
+function applyRect(_panel, left, top, width, height) {
+  panel.rect = {left, top, width, height};
+  available = Math.max(1, width - 51);
+}
+syncPosition(['top']);
+assert.equal(badgeRefreshWidths[0], slot.width);
+assert.equal(panel.rect.width, 825);
+assert.equal(panel.rect.left, 126);
+assert.equal(panel.rect.left + panel.rect.width, slot.right);
+assert.equal(budgetDomain.measureCollapsedProgressStrip(strip).clipped, false);
+''', sync=True)
+
+
+def test_budget_update_remeasures_badges_after_previous_auto_width() -> None:
+    run_behavior(r'''
+railWidths = [160, 120, 120]; items = rails();
+slot = {left: 100, right: 951, width: 851};
+panel.rect = {left: 451, top: 15, width: 500, height: 36};
+panel.querySelectorAll = selector => selector.includes('progress-rail') ? items : [];
+let badgeRefreshWidths = [];
+budgetDomain.refreshProgressRailLabel = () => {
+  badgeRefreshWidths.push(panel.rect?.width || 0);
+  if ((panel.rect?.width || 0) >= slot.width - 1) {
+    railWidths = [160, 300, 300]; items = rails();
+  }
+};
+function applyRect(_panel, left, top, width, height) {
+  panel.rect = {left, top, width, height};
+  available = Math.max(1, width - 51);
+}
+refreshTopContentFit();
+assert.equal(badgeRefreshWidths[0], slot.width);
+assert.equal(panel.rect.width, 825);
+assert.equal(panel.rect.left, 126);
+assert.equal(panel.rect.left + panel.rect.width, slot.right);
+assert.equal(budgetDomain.measureCollapsedProgressStrip(strip).clipped, false);
+''')
+
+
 def test_rendered_complete_labels_do_not_start_marquee_from_conservative_probe() -> None:
     run_behavior(r'''
 const copy = width => ({

@@ -332,7 +332,10 @@ TEXT = r"""
           const layout = progress && typeof budgetDomain !== "undefined"
             ? budgetDomain.measureCollapsedProgressStrip(progress)
             : null;
-          const measuredProgressWidth = Number(layout?.required || 0);
+          // The collapsed strip gives both tail tabs equal grid columns. Use
+          // the equal-column fit width here too, so native-title reveal and
+          // automatic restore settle on the same three-tab geometry.
+          const measuredProgressWidth = Number(layout?.fitRequired || layout?.required || 0);
           const intrinsicMainWidth = measuredProgressWidth > 0
             ? measuredProgressWidth
             : Math.max(Number(progress?.scrollWidth || 0), 1);

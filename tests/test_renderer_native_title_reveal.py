@@ -87,10 +87,10 @@ const panel = {
 const header = {isConnected: true, shown: true, querySelectorAll: () => [title]};
 const conversationHeaderElement = () => header;
 global.getComputedStyle = () => ({display: 'block', visibility: 'visible', opacity: '1', overflowX: 'hidden', overflowY: 'hidden'});
-let collapsedMeasureCount = 0;
+let collapsedMeasureCount = 0, fitRequired = 0;
 global.budgetDomain = {measureCollapsedProgressStrip: () => {
   if (panel.dataset.expanded !== 'true') collapsedMeasureCount++;
-  return {required: 560};
+  return {required: 560, fitRequired: fitRequired || undefined};
 }};
 const contentFitRefreshes = [];
 function refreshTopContentFit(options) { contentFitRefreshes.push(options); }
@@ -215,8 +215,20 @@ const revealLeft = () => Number.parseFloat(panel.style.left);
         assert.equal(document.listeners.get('pointermove').length, 0);
         assert.equal(nativeTitleRevealObserver.nodes.length, 0);
         """,
+        """
+        // Reveal should use the equal-tail-column fit width used by the
+        // automatic collapsed layout, rather than the unequal intrinsic sum.
+        fitRequired = 700;
+        panelRect = rect(120, 8, 941, 42);
+        panel.style.width = '821px';
+        textRects = [rect(25, 14, 200, 31)];
+        move(40); advance(150); assert.equal(revealed(), true);
+        assert.equal(panel.style.left, '223px');
+        assert.equal(panel.style.width, '718px');
+        move(600); advance(150); assert.equal(revealed(), false);
+        """,
     ],
-    ids=["short-title", "native-clipping", "hover-and-restore", "cancel-and-drag", "overlays-and-focus", "restore-remeasure-cancel", "invalidation-and-teardown", "content-fit-right-anchor", "expanded-content-fit-right-anchor"],
+    ids=["short-title", "native-clipping", "hover-and-restore", "cancel-and-drag", "overlays-and-focus", "restore-remeasure-cancel", "invalidation-and-teardown", "content-fit-right-anchor", "expanded-content-fit-right-anchor", "fit-width-matches-collapsed-layout"],
 )
 def test_native_title_reveal_behavior(scenario: str) -> None:
     controller = GESTURES[GESTURES.index("      let nativeTitleRevealGeometry;"):]
