@@ -401,7 +401,7 @@ TEXT = r"""
       ? String(Math.round(value))
       : value >= 10 ? value.toFixed(1) : value.toFixed(2);
     const text = hasRate
-      ? `≈${formatted} tok/s`
+      ? `${formatted} tok/s`
       : "— tok/s";
     currentSpeedNodes.forEach((node) => {
       const valueNode = node.querySelector('[data-field="outputSpeedValue"]');

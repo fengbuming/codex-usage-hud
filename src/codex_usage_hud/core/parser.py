@@ -896,6 +896,8 @@ class WorkStatusItem:
     activity_steps: tuple[Mapping[str, object], ...] = ()
     kind: str = "session"
     event_id: str = ""
+    output_tokens_per_second: float | None = None
+    output_speed_mode: str = "idle"
 
 
 @dataclass

@@ -10,7 +10,6 @@ from __future__ import annotations
 import copy
 from datetime import datetime
 import json
-import math
 from pathlib import Path
 import time
 from typing import Any
@@ -27,6 +26,7 @@ from .core.parser import (
     seconds_between,
 )
 from .core.runtime_errors import RuntimeErrorEvent
+from .output_speed import output_speed_projection
 from .platforms.active_session import is_new_session_source, is_pending_session_source
 from .platforms.codex_theme import CodexThemeSnapshot
 from . import renderer_catalog
@@ -1000,17 +1000,7 @@ def _request_total_line(snapshot: ParsedSession) -> str:
 
 
 def _output_speed_projection(snapshot: ParsedSession) -> tuple[float | None, str]:
-    request = snapshot.request
-    live_rate = request.output_tokens_per_second
-    if live_rate is None or not math.isfinite(float(live_rate)) or live_rate <= 0:
-        return None, "idle"
-    if request.status in {"running", "confirmed"} and request.output_speed_estimated:
-        return float(live_rate), "estimated"
-    if request.status == "running" and request.estimated:
-        return float(live_rate), "estimated"
-    if request.status == "confirmed" and request.output_usage_complete:
-        return float(live_rate), "measured"
-    return None, "idle"
+    return output_speed_projection(snapshot.request)
 
 
 def _round_is_running(item: RequestRound) -> bool:

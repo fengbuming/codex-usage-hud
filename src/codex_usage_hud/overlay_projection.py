@@ -54,6 +54,8 @@ def work_item_to_overlay_dict(item: WorkStatusItem) -> dict[str, object]:
         "tokensText": item.tokens_text,
         "costText": item.cost_text,
         "cacheHitText": item.cache_hit_text,
+        "outputTokensPerSecond": getattr(item, "output_tokens_per_second", None),
+        "outputSpeedMode": getattr(item, "output_speed_mode", "idle"),
         "workdirName": item.workdir_name,
         "source": item.source,
         "workdir": item.workdir,

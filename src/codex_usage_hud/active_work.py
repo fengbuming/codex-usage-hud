@@ -14,6 +14,7 @@ import threading
 from typing import Any, TYPE_CHECKING
 
 from .core import ParsedSession, WorkStatusItem
+from .output_speed import output_speed_projection
 from .overlay_projection import (
     _select_runtime_work_overlay_items,
     _work_overlay_item_limit_for_context,
@@ -885,6 +886,11 @@ def _work_item_from_snapshot(
         progress_parts.append(source or snapshot.selection_source)
     progress = " | ".join(progress_parts)
     item_id = session_id or _session_path_key(snapshot.session_path) or display_title
+    output_speed, output_speed_mode = (
+        output_speed_projection(snapshot.request)
+        if status_value in {"running", "active", "tool"}
+        else (None, "idle")
+    )
     return WorkStatusItem(
         id=str(item_id),
         title=_compact_work_text(display_title, 56),
@@ -933,6 +939,8 @@ def _work_item_from_snapshot(
             getattr(snapshot, "renderer_collapsed_disclosure_ambiguous", False)
         ),
         activity_steps=_activity_step_payloads(snapshot),
+        output_tokens_per_second=output_speed,
+        output_speed_mode=output_speed_mode,
     )
 
 

@@ -51,9 +51,9 @@ WORK_OVERLAY_STATE_READ_FAILURE_GRACE_SECONDS = 1.2
 WORK_OVERLAY_STATE_READ_RETRY_MS = 80
 WORK_OVERLAY_HELPER_HEARTBEAT_MS = 5_000
 WORK_OVERLAY_ELAPSED_TEXT_TIMER_MS = 1_000
-# The only new animation allowed on the bubble: the braille spinner glyph on
-# live feed rows. Seconds reuse the 1s elapsed tick; set False for a static
-# glyph (or no glyph) with zero extra timer work.
+# The braille spinner glyph on live feed rows. Seconds reuse the 1s elapsed
+# tick; the speed-driven tide has its own visible-active-card animation clock.
+# Set False for a static glyph (or no glyph) with zero extra spinner timer work.
 WORK_OVERLAY_FEED_SPINNER_ENABLED = True
 WORK_OVERLAY_FEED_SPINNER_TIMER_MS = 120
 WORK_OVERLAY_WORKDIR_FOOTER_WIDTH = 170

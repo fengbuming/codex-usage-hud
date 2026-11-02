@@ -28,6 +28,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ...output_speed import format_output_speed, positive_output_speed
+from .qt_energy_tide import EnergyTideCard
 from .constants import (
     WORK_OVERLAY_BODY_MAX_LINES,
     WORK_OVERLAY_CARD_SPACING,
@@ -844,7 +846,7 @@ class OverlayRenderingMixin:
         self._completed_check_anchors.append((record["check_anchor"], dict(item)))
 
     def _build_item_card(self, item: Mapping[str, object]) -> None:
-        card = QFrame(self._shell)
+        card = EnergyTideCard(self._shell)
         card.setAttribute(widget_attrs.WA_TransparentForMouseEvents, True)
         card.setFixedWidth(WORK_OVERLAY_WIDTH)
         card.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
@@ -1088,6 +1090,7 @@ class OverlayRenderingMixin:
             "rest_actions_row": rest_actions_row,
             "rest_actions_layout": rest_row_layout,
             "status_label": status_label,
+            "speed_label": header_meta,
             "secondary_action_label": secondary_action_label,
             "primary_action_label": primary_action_label,
             "rest_action_labels": [
@@ -1218,18 +1221,25 @@ class OverlayRenderingMixin:
         close_anchor.setVisible(not rest_reminder)
 
         header_meta = record.get("header_meta")
+        speed_enabled = (
+            status in {"running", "active", "tool"}
+            and not (system_action or system_notice or background_usage or rest_reminder)
+            and item.get("outputSpeedMode") in {"estimated", "measured"}
+        )
+        output_speed = (
+            positive_output_speed(item.get("outputTokensPerSecond"))
+            if speed_enabled else None
+        )
         if rest_reminder:
             header_meta_text = str(item.get("headerMeta") or "").strip()
         else:
-            incoming_model_name = _compact_work_text(item.get("modelName"), 48)
-            if incoming_model_name:
-                record["stable_model_name"] = incoming_model_name
-            header_meta_text = str(record.get("stable_model_name") or "").strip()
+            header_meta_text = format_output_speed(output_speed)
         if isinstance(header_meta, QLabel) and header_meta_text:
             header_meta.setText(header_meta_text)
+            header_meta.setFont(QFont("Microsoft YaHei UI", 7 if rest_reminder else 8, QFont.Weight.DemiBold))
             header_meta.setStyleSheet(
                 "QLabel {"
-                f"color: {theme['muted']};"
+                f"color: {theme['muted'] if rest_reminder else accent};"
                 "border: none;"
                 "background: transparent;"
                 "padding: 0;"
@@ -1237,7 +1247,11 @@ class OverlayRenderingMixin:
             )
             header_meta.adjustSize()
             header_meta.setFixedWidth(header_meta.sizeHint().width())
-            header_meta.setToolTip(header_meta_text if not rest_reminder else "")
+            header_meta.setToolTip(
+                "估算速度：依据已确认 token 与响应记录时长，缺少流式时序时为近似值"
+                if output_speed and item.get("outputSpeedMode") == "estimated"
+                else "输出 token ÷ 请求耗时，包含首字等待" if output_speed else ""
+            )
             header_meta.setVisible(True)
         elif isinstance(header_meta, QLabel):
             header_meta.setText("")
@@ -1427,6 +1441,8 @@ class OverlayRenderingMixin:
         if rest_reminder and rest_hint_text:
             status_text = ""
         footer_container = record["footer_container"]
+        if isinstance(card, EnergyTideCard):
+            card.set_output_speed(output_speed, enabled=speed_enabled, color=accent)
         footer_container.setVisible(bool(status_text or workdir_footer_text))
 
         status_label = record["status_label"]

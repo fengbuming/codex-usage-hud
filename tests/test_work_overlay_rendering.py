@@ -160,6 +160,8 @@ class WorkOverlayRenderingTests(unittest.TestCase):
             "current": True,
             "elapsedText": "Worked 42s",
             "modelName": "gpt-5.6",
+            "outputTokensPerSecond": 89.5,
+            "outputSpeedMode": "estimated",
             "lastText": output,
             "activitySteps": (),
         }
@@ -189,14 +191,17 @@ class WorkOverlayRenderingTests(unittest.TestCase):
             footer.y() - body_host.geometry().bottom() - 1,
         )
         self.assertNotIn("Worked", header.text())
-        self.assertEqual(header_meta.text(), "gpt-5.6")
+        self.assertEqual(header_meta.text(), "89.5 tok/s")
         self.assertEqual(header_meta.geometry().center().y(), close_anchor.geometry().center().y())
         self.assertIn("border-left: 2px solid #339cff", card.styleSheet())
         self.assertNotIn("#ad7bf9", card.styleSheet())
 
         rendering._update_item_card(record, {**item, "modelName": ""})
-        self.assertEqual(header_meta.text(), "gpt-5.6")
+        self.assertEqual(header_meta.text(), "89.5 tok/s")
         self.assertTrue(header_meta.isVisible())
+        rendering._update_item_card(record, {**item, "outputTokensPerSecond": None})
+        self.assertEqual(header_meta.text(), "")
+        self.assertTrue(header_meta.isHidden())
 
     def test_execution_body_reserves_two_output_rows_and_one_execution_row(self) -> None:
         rendering = self._rendering()
@@ -412,3 +417,96 @@ class WorkOverlayRenderingTests(unittest.TestCase):
         assert item is not None
         self.assertGreater(len(item.last_text), 180)
         self.assertIn(marker, item.last_text)
+
+    def test_tide_speed_replaces_header_model_and_stops_when_waiting_or_hidden(self) -> None:
+        from codex_usage_hud.ui.work_overlay.qt_energy_tide import EnergyTideCard
+
+        rendering = self._rendering()
+        item = {
+            "id": "speed-session", "title": "Speed", "status": "running",
+            "statusText": "Inspecting the preview chain", "lastText": "Working",
+            "workdir": "scan_project", "outputTokensPerSecond": 89.5,
+            "outputSpeedMode": "estimated",
+            "modelName": "gpt-6.1-sol", "roundIndex": 2,
+        }
+        rendering._build_item_card(item)
+        self.shell.show()
+        self._app.processEvents()
+        record = rendering._item_widgets[-1]
+        card, speed, shimmer = record["card"], record["speed_label"], record["status_label"]
+        self.assertIsInstance(card, EnergyTideCard)
+        card.layout().activate()
+        record["footer_container"].layout().activate()
+        self.assertEqual(speed.text(), "89.5 tok/s")
+        self.assertIs(speed, record["header_meta"])
+        self.assertIs(speed.parentWidget(), card)
+        self.assertLess(speed.y(), record["footer_container"].y())
+        self.assertEqual(record["round_badge"].parentWidget(), record["footer_container"])
+        self.assertEqual(record["round_badge"].text(), "2")
+        self.assertGreaterEqual(record["close_anchor"].y(), 0)
+        self.assertEqual(record["close_anchor"].size().width(), 22)
+        self.assertTrue(shimmer._shimmer_enabled)
+        self.assertTrue(card._tide_timer.isActive())
+        same_timer = card._tide_timer.timerId()
+        low_heat = card._target_heat
+        rendering._update_item_card(record, {**item, "outputTokensPerSecond": 180})
+        self.assertEqual(speed.text(), "180 tok/s")
+        self.assertGreater(card._target_heat, low_heat)
+        self.assertEqual(card._tide_timer.timerId(), same_timer)
+        # The local elapsed/activity tick must not replace or duplicate the speed label.
+        rendering._refresh_activity_step_label(record, item)
+        self.assertEqual(speed.text(), "180 tok/s")
+        card.hide()
+        self.assertFalse(card._tide_timer.isActive())
+        card.show()
+        self.assertTrue(card._tide_timer.isActive())
+        rendering._update_item_card(record, {**item, "status": "waiting_user"})
+        self.assertTrue(speed.isHidden())
+        self.assertFalse(card._tide_timer.isActive())
+        self.assertEqual(card._heat, 0.0)
+
+    def test_low_speed_tide_is_visible_and_moves_on_real_timer_ticks(self) -> None:
+        from PySide6.QtTest import QTest
+        from codex_usage_hud.ui.work_overlay.qt_energy_tide import EnergyTideCard
+
+        card = EnergyTideCard(self.shell)
+        card.resize(430, 110)
+        card.setStyleSheet("QFrame { background: #10161D; border: 1px solid #263241; border-radius: 10px; }")
+        self.shell.show()
+        card.show()
+        self._app.processEvents()
+        idle = card.grab().toImage()
+        card.set_output_speed(2.98, enabled=True)
+        QTest.qWait(300)
+        first = card.grab().toImage()
+        QTest.qWait(250)
+        second = card.grab().toImage()
+        visible = moving = 0
+        for y in range(84, 107):
+            for x in range(20, 410):
+                base, a, b = idle.pixelColor(x, y), first.pixelColor(x, y), second.pixelColor(x, y)
+                if max(abs(a.red() - base.red()), abs(a.green() - base.green()), abs(a.blue() - base.blue())) >= 12:
+                    visible += 1
+                if a != b:
+                    moving += 1
+        self.assertGreater(visible, 300)
+        self.assertGreater(moving, 300)
+
+    def test_tide_zero_speed_settles_without_a_recurring_timer(self) -> None:
+        from codex_usage_hud.ui.work_overlay.qt_energy_tide import EnergyTideCard
+
+        card = EnergyTideCard(self.shell)
+        card.resize(430, 110)
+        card.set_output_speed(89.5, enabled=True)
+        self.assertFalse(card._tide_timer.isActive())
+        self.shell.show()
+        card.show()
+        self._app.processEvents()
+        self.assertTrue(card._tide_timer.isActive())
+        card._heat = card._target_heat
+        card.set_output_speed(None, enabled=True)
+        for _ in range(30):
+            card._last_frame = time.monotonic() - 0.08
+            card._advance_tide()
+        self.assertEqual(card._heat, 0.0)
+        self.assertFalse(card._tide_timer.isActive())
