@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import re
+import socket
 import subprocess
 import sys
 import threading
@@ -25,10 +26,14 @@ LATEST_RELEASE_API_URL = (
 )
 UPDATE_USER_AGENT = "codex-usage-hud-updater"
 DEFAULT_UPDATE_TIMEOUT_SECONDS = 8.0
-DEFAULT_UPDATE_DOWNLOAD_TIMEOUT_SECONDS = 60.0
+DEFAULT_UPDATE_DOWNLOAD_TIMEOUT_SECONDS = 8.0
 DEFAULT_AUTO_UPDATE_CHECK_INTERVAL_SECONDS = 6 * 60 * 60
 DEFAULT_AUTO_UPDATE_RETRY_SECONDS = 15 * 60
 DEFAULT_UPDATE_CHUNK_BYTES = 256 * 1024
+DEFAULT_UPDATE_LOW_SPEED_BYTES_PER_SECOND = 32 * 1024
+DEFAULT_UPDATE_LOW_SPEED_GRACE_SECONDS = 8.0
+UPDATE_PROXY_ENV = "CODEX_USAGE_HUD_UPDATE_PROXY"
+DEFAULT_UPDATE_PROXY_URL = "http://127.0.0.1:7897"
 # GitHub remains the source of release metadata and file digests. These only
 # provide alternate transport for the exact, already-verified release asset.
 DEFAULT_UPDATE_MIRROR_URL_TEMPLATES = (
@@ -232,7 +237,7 @@ def _json_request(url: str, *, timeout_seconds: float) -> Mapping[str, Any]:
             "User-Agent": UPDATE_USER_AGENT,
         },
     )
-    with urlopen(request, timeout=max(1.0, float(timeout_seconds))) as response:
+    with _update_opener()(request, timeout=max(1.0, float(timeout_seconds))) as response:
         payload = json.loads(response.read().decode("utf-8"))
     if not isinstance(payload, Mapping):
         raise ValueError("release payload is not a JSON object")
@@ -330,6 +335,43 @@ def verify_update_asset(path: Path, asset: UpdateAsset) -> None:
 
 def _partial_download_path(target: Path) -> Path:
     return target.with_name(f"{target.name}.part")
+
+
+def _update_opener() -> Callable[..., Any]:
+    """Build an opener using an explicit updater proxy when configured."""
+    proxy = str(os.environ.get(UPDATE_PROXY_ENV) or "").strip()
+    if not proxy:
+        try:
+            with socket.create_connection(("127.0.0.1", 7897), timeout=0.15):
+                proxy = DEFAULT_UPDATE_PROXY_URL
+        except OSError:
+            proxy = ""
+    if not proxy:
+        return urlopen
+    from urllib.request import ProxyHandler, build_opener
+
+    return build_opener(ProxyHandler({"http": proxy, "https": proxy})).open
+
+
+def _iter_download_chunks(
+    response: Any,
+    chunk_size: int,
+):
+    """Yield chunks and abort a source that stays below the useful speed floor."""
+    window_started = time.monotonic()
+    window_bytes = 0
+    while True:
+        chunk = response.read(chunk_size)
+        if not chunk:
+            return
+        yield chunk
+        window_bytes += len(chunk)
+        elapsed = time.monotonic() - window_started
+        if elapsed >= DEFAULT_UPDATE_LOW_SPEED_GRACE_SECONDS:
+            if window_bytes / elapsed < DEFAULT_UPDATE_LOW_SPEED_BYTES_PER_SECOND:
+                raise TimeoutError("update source is too slow")
+            window_started = time.monotonic()
+            window_bytes = 0
 
 
 def _remove_file(path: Path) -> None:
@@ -531,7 +573,7 @@ def download_update_asset(
         if _existing_file_bytes(partial, asset.size) >= asset.size > 0:
             _remove_file(partial)
 
-    open_request = opener or urlopen
+    open_request = opener or _update_opener()
     errors: list[str] = []
     for source_url in update_download_urls(asset):
         try:
@@ -554,7 +596,7 @@ def download_update_asset(
                 )
                 downloaded = offset
                 with partial.open("ab" if append else "wb") as handle:
-                    while chunk := response.read(1024 * 1024):
+                    for chunk in _iter_download_chunks(response, 1024 * 1024):
                         handle.write(chunk)
                         downloaded += len(chunk)
             expected_size = asset.size or total_bytes
@@ -616,7 +658,7 @@ class AutoUpdateManager:
         self.check_timeout_seconds = max(1.0, float(check_timeout_seconds))
         self.download_timeout_seconds = max(1.0, float(download_timeout_seconds))
         self._check_func = check_func or check_for_update
-        self._download_opener = download_opener or urlopen
+        self._download_opener = download_opener or _update_opener()
         self._launch_func = launch_func or launch_installer
         self._monotonic = monotonic or time.monotonic
         self._on_state_change = on_state_change
@@ -1036,6 +1078,8 @@ class AutoUpdateManager:
                             fallback_size=asset.size,
                         )
                         downloaded = offset
+                        speed_window_started = time.monotonic()
+                        speed_window_bytes = 0
                         with partial.open("ab" if append else "wb") as handle:
                             while True:
                                 if self._stop_event.is_set():
@@ -1068,6 +1112,13 @@ class AutoUpdateManager:
                                     break
                                 handle.write(chunk)
                                 downloaded += len(chunk)
+                                speed_window_bytes += len(chunk)
+                                speed_elapsed = time.monotonic() - speed_window_started
+                                if speed_elapsed >= DEFAULT_UPDATE_LOW_SPEED_GRACE_SECONDS:
+                                    if speed_window_bytes / speed_elapsed < DEFAULT_UPDATE_LOW_SPEED_BYTES_PER_SECOND:
+                                        raise TimeoutError("update source is too slow")
+                                    speed_window_started = time.monotonic()
+                                    speed_window_bytes = 0
                                 with self._lock:
                                     self._status = AutoUpdateState(
                                         phase="downloading",
@@ -1204,8 +1255,12 @@ __all__ = [
     "DEFAULT_AUTO_UPDATE_CHECK_INTERVAL_SECONDS",
     "DEFAULT_AUTO_UPDATE_RETRY_SECONDS",
     "DEFAULT_UPDATE_DOWNLOAD_TIMEOUT_SECONDS",
+    "DEFAULT_UPDATE_LOW_SPEED_BYTES_PER_SECOND",
+    "DEFAULT_UPDATE_LOW_SPEED_GRACE_SECONDS",
     "DEFAULT_UPDATE_MIRROR_URL_TEMPLATES",
     "DEFAULT_UPDATE_CHECK_MIRROR_URL_TEMPLATES",
+    "DEFAULT_UPDATE_PROXY_URL",
+    "UPDATE_PROXY_ENV",
     "INSTALLER_SUFFIX",
     "LATEST_RELEASE_API_URL",
     "RELEASES_URL",

@@ -113,6 +113,8 @@ codex-hud --update
 
 更新检查始终以 GitHub Release API 为准。下载先尝试官方地址；若 GitHub 安装包线路在中国大陆不可达，会自动依次尝试备用下载线路，并继续支持断点续传。无论实际从哪条线路取得文件，HUD 都会核对 GitHub 发布的文件名、大小和 SHA-256；校验失败的文件不会启动安装器。
 
+下载会自动使用本机 `127.0.0.1:7897` HTTP 代理（可用环境变量 `CODEX_USAGE_HUD_UPDATE_PROXY` 指定其他代理），慢速线路超过阈值也会自动切换。
+
 发布时请将构建产出的安装包和同名 `.sha256` 文件一起上传到 GitHub Release，详见 [更新分发与安全](docs/UPDATE_DELIVERY.md)。
 
 当前发行策略：

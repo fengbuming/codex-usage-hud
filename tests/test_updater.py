@@ -432,6 +432,34 @@ class AutoUpdateManagerTests(unittest.TestCase):
             self.assertEqual(requests[0], asset.url)
             self.assertIn("ghproxy.net", requests[1])
 
+    def test_download_update_asset_switches_source_when_first_source_is_too_slow(self) -> None:
+        from unittest.mock import patch
+
+        payload = b"slow source then fast source"
+        requests: list[str] = []
+        asset = UpdateAsset(
+            name="codex-usage-hud-v1.0.1-windows-x64-setup.exe",
+            url="https://github.example/releases/setup.exe",
+            size=len(payload),
+            sha256=hashlib.sha256(payload).hexdigest(),
+        )
+        info = UpdateInfo(current_version="1.0.0", latest_version="v1.0.1", available=True, asset=asset)
+
+        def fake_open(request, timeout: float):
+            del timeout
+            requests.append(request.full_url)
+            if len(requests) == 1:
+                return _FakeResponse([payload[:1]], headers={"Content-Length": "1"}, delay_seconds=0.02)
+            return _FakeResponse([payload], headers={"Content-Length": str(len(payload))})
+
+        with tempfile.TemporaryDirectory() as temp_dir, patch(
+            "codex_usage_hud.updater.DEFAULT_UPDATE_LOW_SPEED_GRACE_SECONDS", 0.01
+        ), patch("codex_usage_hud.updater.DEFAULT_UPDATE_LOW_SPEED_BYTES_PER_SECOND", 10_000):
+            installer = download_update_asset(info, destination_dir=Path(temp_dir), opener=fake_open)
+            self.assertEqual(installer.read_bytes(), payload)
+        self.assertGreaterEqual(len(requests), 2)
+        self.assertIn("ghproxy.net", requests[1])
+
     def test_check_worker_handles_unexpected_exception_without_leaving_checking_phase(self) -> None:
         """check_func 若抛出未捕获异常，_check_worker 必须兜底更新为 error
         状态并释放 check_thread，否则 phase 永远卡在 checking、loading 弹窗
