@@ -26,7 +26,7 @@ from .core.parser import (
     seconds_between,
 )
 from .core.runtime_errors import RuntimeErrorEvent
-from .output_speed import output_speed_projection
+from .output_speed import format_session_output_speed, output_speed_projection
 from .platforms.active_session import is_new_session_source, is_pending_session_source
 from .platforms.codex_theme import CodexThemeSnapshot
 from . import renderer_catalog
@@ -655,7 +655,12 @@ def _top_session_usage_summary(snapshot: ParsedSession, session_cost: float | No
         display_tokens_fn=_display_tokens,
         usage_money=_format_usage_money,
         top_cache_hit_rate_label=_top_session_cache_hit_rate_label,
+        session_speed_label=_session_output_speed_label,
     )
+
+
+def _session_output_speed_label(snapshot: ParsedSession) -> str:
+    return format_session_output_speed(snapshot)
 
 
 def _top_cache_progress_label(snapshot: ParsedSession) -> str:
@@ -1465,7 +1470,7 @@ def _top_session_parts(snapshot: ParsedSession) -> dict[str, str]:
     else:
         session_average = "均值 n/a"
     parts = {
-        "sessionMix": _top_cache_progress_label(snapshot),
+        "sessionMix": f"均速 {_session_output_speed_label(snapshot)}",
         "sessionAverage": session_average,
         "sessionComposition": _top_session_composition(snapshot),
         "heavyRoundsSummary": "Top 3",

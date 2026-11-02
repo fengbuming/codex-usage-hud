@@ -898,6 +898,7 @@ class WorkStatusItem:
     event_id: str = ""
     output_tokens_per_second: float | None = None
     output_speed_mode: str = "idle"
+    session_output_tokens_per_second: float | None = None
 
 
 @dataclass
@@ -1008,6 +1009,7 @@ class ParsedSession:
     request: RequestTokens = field(default_factory=RequestTokens)
     request_history: list[RequestRound] = field(default_factory=list)
     session_request_history: list[RequestRound] = field(default_factory=list)
+    session_output_tokens_per_second: float | None = None
     activity_tasks: list[TaskHistory] = field(default_factory=list)
     activity: Activity = field(default_factory=Activity)
     activity_steps: list[ActivityStep] = field(default_factory=list)
@@ -1484,8 +1486,7 @@ class JsonlSessionParser:
             jsonl_rounds,
             sse_tracker,
         )
-        if parsed.request.source == "jsonl":
-            self.apply_jsonl_output_speed(parsed, records, task_started_index)
+        self.apply_output_speed(parsed, records)
         parsed.activity_tasks = self.build_task_history(
             records,
             parsed,
@@ -1494,28 +1495,27 @@ class JsonlSessionParser:
         parsed.status = "parsed"
         return parsed
 
-    def apply_jsonl_output_speed(
+    def apply_output_speed(
         self,
         snapshot: ParsedSession,
         records: Sequence[Mapping[str, Any]],
-        task_started_index: int | None,
     ) -> None:
-        """Estimate speed when current Codex builds omit the legacy SSE logs.
+        """Pool session speed and estimate JSONL request speed without SSE logs.
 
         JSONL has complete response usage, but no exact request-start/stream
         timestamps. Bound each sample by model output and tool completion,
         and keep its timing estimate separate from the confirmed token counts.
         """
         request = snapshot.request
-        if request.status not in {"running", "confirmed"}:
-            return
-        started_at = snapshot.task_started_at
+        snapshot.session_output_tokens_per_second = None
+        started_at = None
         output_at = None
         tool_finished_at = None
         last_cumulative = 0
         last_usage_has_sample = False
         samples: list[tuple[datetime, int, float]] = []
-        start_index = 0 if task_started_index is None else task_started_index + 1
+        session_samples: list[tuple[datetime, int, float]] = []
+        start_index = self._history_replay_usage_start(records) or 0
         for record in records[start_index:]:
             timestamp = record.get("_dt")
             payload = record.get("payload") or {}
@@ -1525,6 +1525,9 @@ class JsonlSessionParser:
             payload_type = payload.get("type")
             if record_type == "event_msg" and payload_type == "task_started":
                 started_at, output_at, tool_finished_at = timestamp, None, None
+                samples = []
+                last_cumulative = 0
+                last_usage_has_sample = False
                 continue
             if record_type == "response_item":
                 if payload_type in {"function_call_output", "custom_tool_call_output"}:
@@ -1577,11 +1580,65 @@ class JsonlSessionParser:
                         elapsed, SseRequestStateMachine.MIN_SPEED_DURATION_SECONDS
                     )
                     samples.append((timestamp, output_tokens, duration))
+                    session_samples.append((timestamp, output_tokens, duration))
                     last_usage_has_sample = True
             started_at, output_at = timestamp, None
 
         anchor = request.updated_at or snapshot.last_event_time
         if anchor is None:
+            return
+        # Reuse the same response timing bounds for the session average. Reset
+        # at each task marker above so time between user turns never counts.
+        if request.source != "jsonl":
+            live_start = request.started_at
+            live_output = int(request.output_tokens or 0)
+            if (
+                request.status == "confirmed"
+                and request.output_usage_complete
+                and live_start is not None
+                and live_output > 0
+            ):
+                elapsed = (anchor - live_start).total_seconds()
+                if 0 < elapsed <= SseRequestStateMachine.MAX_SPEED_DURATION_SECONDS:
+                    exact_sample = (
+                        anchor, live_output,
+                        max(elapsed, SseRequestStateMachine.MIN_SPEED_DURATION_SECONDS),
+                    )
+                    if (
+                        session_samples
+                        and session_samples[-1][1] == live_output
+                        and live_start <= session_samples[-1][0]
+                        and abs((session_samples[-1][0] - anchor).total_seconds()) <= 2
+                    ):
+                        session_samples[-1] = exact_sample
+                    elif not session_samples or session_samples[-1][0] <= live_start:
+                        session_samples.append(exact_sample)
+        else:
+            live_start = (
+                max(started_at, tool_finished_at)
+                if started_at and tool_finished_at else started_at
+            )
+            live_output = snapshot.estimate.output_tokens
+        if (
+            request.status == "running"
+            and snapshot.task_completed_at is None
+            and snapshot.task_aborted_at is None
+            and live_start is not None
+            and live_output > 0
+            and (not session_samples or live_start >= session_samples[-1][0])
+        ):
+            elapsed = (anchor - live_start).total_seconds()
+            if 0 < elapsed <= SseRequestStateMachine.MAX_SPEED_DURATION_SECONDS:
+                session_samples.append((
+                    anchor, live_output,
+                    max(elapsed, SseRequestStateMachine.MIN_SPEED_DURATION_SECONDS),
+                ))
+        if session_samples:
+            snapshot.session_output_tokens_per_second = (
+                sum(sample[1] for sample in session_samples)
+                / sum(sample[2] for sample in session_samples)
+            )
+        if request.source != "jsonl" or request.status not in {"running", "confirmed"}:
             return
         cutoff = anchor - SseRequestStateMachine.RECENT_SPEED_WINDOW
         recent = [sample for sample in samples if cutoff <= sample[0] <= anchor]

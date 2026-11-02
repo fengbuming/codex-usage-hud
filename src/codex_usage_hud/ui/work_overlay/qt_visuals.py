@@ -26,6 +26,8 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import QSizePolicy, QWidget
 
+from ...output_speed import format_output_speed, positive_output_speed
+from .qt_completed_liquid import COMPLETED_LIQUID_REVEAL_SECONDS, paint_completed_liquid
 from .constants import (
     WORK_OVERLAY_COMPLETED_BADGE_ANIMATION_MS,
     WORK_OVERLAY_COMPLETED_BADGE_ROW_HEIGHT,
@@ -671,6 +673,9 @@ class CompletedBadgeWidget(QWidget):
         self._theme_tokens = _resolved_overlay_theme(theme_tokens)
         self._started_at = time.monotonic()
         self._progress = 0.0 if animate_intro else 1.0
+        self._session_speed = positive_output_speed(item.get("sessionOutputTokensPerSecond"))
+        self._liquid_started_at: float | None = None
+        self._liquid_elapsed = 0.0 if animate_intro else COMPLETED_LIQUID_REVEAL_SECONDS
         self._switch_pending = False
         self._switch_pending_started_at = 0.0
         self._switch_pending_completed = False
@@ -684,12 +689,50 @@ class CompletedBadgeWidget(QWidget):
             WORK_OVERLAY_COMPLETED_BADGE_SIZE,
             WORK_OVERLAY_COMPLETED_BADGE_ROW_HEIGHT,
         )
-        if animate_intro:
-            self._timer.start(16)
+        self.setAccessibleName(self._speed_accessible_name())
 
     def set_item(self, item: Mapping[str, object]) -> None:
+        next_speed = positive_output_speed(item.get("sessionOutputTokensPerSecond"))
+        task_changed = any(
+            item.get(key) != self._item.get(key)
+            for key in ("id", "taskStartedAt", "taskIndex")
+        )
+        if next_speed is not None and (self._session_speed is None or task_changed):
+            self._liquid_started_at = None
+            self._liquid_elapsed = 0.0
+        elif next_speed is None:
+            self._liquid_started_at = None
+            self._liquid_elapsed = 0.0
+        self._session_speed = next_speed
         self._item = dict(item)
+        self.setAccessibleName(self._speed_accessible_name())
+        self._sync_animation_timer()
         self.update()
+
+    def _speed_accessible_name(self) -> str:
+        speed = format_output_speed(self._session_speed) or "— tok/s"
+        return f"{self._item.get('title') or 'Codex 工作'}，已完成，最终均速 {speed}"
+
+    def _sync_animation_timer(self) -> None:
+        active = self.isVisible() and (
+            self._progress < 1.0 or self._switch_pending
+            or self._session_speed is not None
+        )
+        if active and self._session_speed is not None and self._liquid_started_at is None:
+            self._liquid_started_at = time.monotonic() - self._liquid_elapsed
+        if active and not self._timer.isActive():
+            self._timer.start(33)
+        elif not active:
+            self._timer.stop()
+
+    def showEvent(self, event: object) -> None:
+        super().showEvent(event)
+        self._advance()
+
+    def hideEvent(self, event: object) -> None:
+        self._timer.stop()
+        self._liquid_started_at = None
+        super().hideEvent(event)
 
     def set_theme_tokens(
         self,
@@ -722,10 +765,7 @@ class CompletedBadgeWidget(QWidget):
         self._switch_pending_started_at = started_at if pending else 0.0
         self._switch_pending_completed = completed if pending else False
         self._switch_pending_completed_at = completed_at if pending and completed else 0.0
-        if pending and not self._timer.isActive():
-            self._timer.start(24)
-        elif not pending and self._progress >= 1.0:
-            self._timer.stop()
+        self._sync_animation_timer()
         self.update()
 
     def sizeHint(self) -> QSize:
@@ -735,12 +775,15 @@ class CompletedBadgeWidget(QWidget):
         )
 
     def _advance(self) -> None:
-        elapsed_ms = (time.monotonic() - self._started_at) * 1000.0
+        now = time.monotonic()
+        elapsed_ms = (now - self._started_at) * 1000.0
         if self._progress < 1.0:
             self._progress = min(1.0, elapsed_ms / WORK_OVERLAY_COMPLETED_BADGE_ANIMATION_MS)
-        if self._progress >= 1.0 and not self._switch_pending:
-            self._timer.stop()
-        self.update()
+        self._sync_animation_timer()
+        if self._liquid_started_at is not None and self.isVisible():
+            self._liquid_elapsed = max(0.0, now - self._liquid_started_at)
+        if self.isVisible():
+            self.update()
 
     def paintEvent(self, event: object) -> None:
         del event
@@ -814,17 +857,24 @@ class CompletedBadgeWidget(QWidget):
         painter.setOpacity(content_alpha / 255.0)
         center = QPointF(end_rect.center())
 
+        paint_completed_liquid(
+            painter, end_rect, self._session_speed,
+            elapsed=self._liquid_elapsed,
+            light=QColor(palette["fillMid"]).lightnessF() > 0.5,
+        )
+
         outer_pen = QPen(QColor(palette["ring"]), 2.0)
         painter.setPen(outer_pen)
         painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.drawEllipse(end_rect.adjusted(4.0, 4.0, -4.0, -4.0))
 
-        dashed_color = QColor(palette["dashedRing"])
-        dashed_color.setAlpha(145)
-        dashed_pen = QPen(dashed_color, 1.1)
-        dashed_pen.setStyle(Qt.PenStyle.DashLine)
-        painter.setPen(dashed_pen)
-        painter.drawEllipse(end_rect.adjusted(17.0, 17.0, -17.0, -17.0))
+        if self._session_speed is None:
+            dashed_color = QColor(palette["dashedRing"])
+            dashed_color.setAlpha(145)
+            dashed_pen = QPen(dashed_color, 1.1)
+            dashed_pen.setStyle(Qt.PenStyle.DashLine)
+            painter.setPen(dashed_pen)
+            painter.drawEllipse(end_rect.adjusted(17.0, 17.0, -17.0, -17.0))
 
         title = str(self._item.get("title") or "Codex 工作").strip()
         profile = _profile_display_name(self._item)
@@ -858,34 +908,52 @@ class CompletedBadgeWidget(QWidget):
                 compact_spacing=True,
             )
 
-        check_font = QFont("Segoe UI Symbol", 38, QFont.Weight.Bold)
+        check_font = QFont("Segoe UI Symbol", 28, QFont.Weight.Bold)
         painter.setFont(check_font)
         painter.setPen(QColor(palette["checkText"]))
         painter.drawText(
-            QRectF(center.x() - 34.0, center.y() - 66.0, 68.0, 56.0),
+            QRectF(center.x() - 34.0, center.y() - 61.0, 68.0, 40.0),
             alignment.AlignCenter,
             "✓",
         )
 
-        elapsed = str(self._item.get("elapsedText") or "已处理 --").strip()
-        painter.setFont(QFont("Microsoft YaHei UI", 8, QFont.Weight.Bold))
-        painter.setPen(QColor(palette["elapsedText"]))
+        painter.setFont(QFont("Consolas", 12, QFont.Weight.Bold))
+        painter.setPen(QColor(palette["titleText"]))
         painter.drawText(
-            QRectF(center.x() - 54.0, center.y() - 10.0, 108.0, 18.0),
+            QRectF(center.x() - 72.0, center.y() - 17.0, 144.0, 24.0),
             alignment.AlignCenter,
-            _compact_work_text(elapsed, 18),
+            format_output_speed(self._session_speed) or "— tok/s",
         )
+        elapsed = str(self._item.get("elapsedText") or "已处理 --").strip()
+        elapsed_rect = QRectF(center.x() - 66.0, center.y() + 7.0, 132.0, 14.0)
+        caption_font = QFont("Microsoft YaHei UI", 7)
+        caption = self._arc_limited_text(
+            f"最终均速 · {_compact_work_text(elapsed, 18)}", caption_font, elapsed_rect.width() - 4.0,
+        )
+        metrics = QFontMetrics(caption_font)
+        caption_path = QPainterPath()
+        caption_path.addText(
+            QPointF(
+                elapsed_rect.center().x() - metrics.horizontalAdvance(caption) / 2.0,
+                elapsed_rect.center().y() + (metrics.ascent() - metrics.descent()) / 2.0,
+            ),
+            caption_font, caption,
+        )
+        # A glyph halo keeps the liquid surface from striking through the text
+        # without putting a rectangular label over the glass sphere.
+        painter.strokePath(caption_path, QPen(QColor(palette["fillMid"]), 2.0))
+        painter.fillPath(caption_path, QColor(palette["elapsedText"]))
 
         stats = [
             ("Tokens", str(self._item.get("tokensText") or "0").strip() or "0"),
             ("Cost", str(self._item.get("costText") or "$0").strip() or "$0"),
             ("Cache", str(self._item.get("cacheHitText") or "--").strip() or "--"),
         ]
-        box_width = 44.0
-        box_height = 25.0
-        spacing = 5.0
+        box_width = 40.0
+        box_height = 23.0
+        spacing = 4.0
         start_x = center.x() - ((box_width * 3.0 + spacing * 2.0) / 2.0)
-        y = center.y() + 14.0
+        y = center.y() + 24.0
         for index, (label, value) in enumerate(stats):
             box = QRectF(start_x + index * (box_width + spacing), y, box_width, box_height)
             stat_border = QColor(palette["statBoxBorder"])
@@ -904,9 +972,9 @@ class CompletedBadgeWidget(QWidget):
 
         if profile:
             painter.setPen(QColor(palette["workdirText"]))
-            painter.setFont(QFont("Microsoft YaHei UI", 7, QFont.Weight.DemiBold))
+            painter.setFont(QFont("Microsoft YaHei UI", 6, QFont.Weight.DemiBold))
             painter.drawText(
-                QRectF(center.x() - 60.0, center.y() + 41.0, 120.0, 14.0),
+                QRectF(center.x() - 60.0, center.y() + 50.0, 120.0, 12.0),
                 alignment.AlignCenter,
                 f"[{profile}]",
             )

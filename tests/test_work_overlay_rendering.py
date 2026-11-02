@@ -10,7 +10,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -469,6 +469,103 @@ class WorkOverlayRenderingTests(unittest.TestCase):
         self.assertTrue(icon.isHidden())
         self.assertFalse(icon._animation_timer.isActive())
         self.assertFalse(icon._settle_timer.isActive())
+
+    def test_completed_liquid_loops_past_completion_and_pauses_when_hidden(self) -> None:
+        from codex_usage_hud.ui.work_overlay.qt_visuals import CompletedBadgeWidget
+
+        clock = [1000.0]
+        item = {"id": "finished", "title": "Finished", "sessionOutputTokensPerSecond": 89.5}
+        with patch("codex_usage_hud.ui.work_overlay.qt_visuals.time.monotonic", side_effect=lambda: clock[0]):
+            badge = CompletedBadgeWidget(item, self.shell, animate_intro=False)
+            self.shell.show()
+            badge.show()
+            self._app.processEvents()
+            self.assertTrue(badge._timer.isActive())
+            started = badge._liquid_started_at
+            badge.set_item(dict(item))
+            self.assertEqual(badge._liquid_started_at, started)
+            clock[0] += 0.8
+            badge._advance()
+            moving = badge.grab().toImage()
+            badge.hide()
+            self.assertFalse(badge._timer.isActive())
+            paused_elapsed = badge._liquid_elapsed
+            clock[0] += 4.0
+            badge.show()
+            self._app.processEvents()
+            self.assertTrue(badge._timer.isActive())
+            self.assertAlmostEqual(badge._liquid_elapsed, paused_elapsed)
+            clock[0] += 10.0
+            badge._advance()
+            self.assertTrue(badge._timer.isActive())
+            self.assertGreater(badge._liquid_elapsed, 10.0)
+            self.assertNotEqual(moving, badge.grab().toImage())
+            self.assertIn("89.5 tok/s", badge.accessibleName())
+            badge.set_switch_pending(True, clock[0])
+            self.assertTrue(badge._timer.isActive())
+            badge.set_switch_pending(False, 0.0)
+            self.assertTrue(badge._timer.isActive())
+            badge.set_item({"id": "finished", "title": "Finished"})
+            self.assertFalse(badge._timer.isActive())
+
+    def test_completed_liquid_handles_late_usage_without_replaying_updates(self) -> None:
+        from codex_usage_hud.ui.work_overlay.qt_visuals import CompletedBadgeWidget
+
+        item = {"id": "late-usage", "title": "Late usage"}
+        badge = CompletedBadgeWidget(item, self.shell, animate_intro=False)
+        self.shell.show()
+        badge.show()
+        self._app.processEvents()
+        self.assertFalse(badge._timer.isActive())
+        self.assertIn("— tok/s", badge.accessibleName())
+        item["sessionOutputTokensPerSecond"] = 40.0
+        badge.set_item(item)
+        self.assertTrue(badge._timer.isActive())
+        started = badge._liquid_started_at
+        badge.set_switch_pending(False, 0.0)
+        badge.set_item(dict(item))
+        self.assertTrue(badge._timer.isActive())
+        self.assertEqual(badge._liquid_started_at, started)
+
+    def test_completed_liquid_retains_bounds_and_distinguishes_final_speed(self) -> None:
+        from codex_usage_hud.ui.work_overlay.qt_visuals import CompletedBadgeWidget
+
+        badge = CompletedBadgeWidget(
+            {"id": "bounds", "sessionOutputTokensPerSecond": 20.0},
+            self.shell, animate_intro=False,
+        )
+        low = badge.grab().toImage()
+        badge.set_item({"id": "bounds", "sessionOutputTokensPerSecond": 400.0})
+        high = badge.grab().toImage()
+        self.assertEqual(low.size(), high.size())
+        self.assertEqual(low.pixelColor(0, 0).alpha(), 0)
+        self.assertEqual(high.pixelColor(0, 0).alpha(), 0)
+        self.assertNotEqual(low.pixelColor(18, 84), high.pixelColor(18, 84))
+
+    def test_completed_liquid_rebuild_keeps_animating_without_intro(self) -> None:
+        from PySide6.QtTest import QTest
+
+        rendering = self._rendering()
+        rendering._settled_completed_intro_ids = set()
+        rendering._completed_hover_anchors = []
+        rendering._completed_check_anchors = []
+        rendering._workdir_external_link_for_item = lambda _item: ""
+        item = {
+            "id": "same-session", "taskStartedAt": "2026-11-02T00:00:00Z",
+            "taskIndex": 1, "sessionOutputTokensPerSecond": 89.5,
+        }
+        rendering._build_completed_badge(item)
+        rendering._build_completed_badge(dict(item))
+        badge = rendering._item_widgets[-1]["badge"]
+        self.assertEqual(badge._progress, 1.0)
+        self.shell.show()
+        badge.show()
+        self._app.processEvents()
+        self.assertTrue(badge._timer.isActive())
+        before = badge.grab().toImage()
+        QTest.qWait(140)
+        self.assertTrue(badge._timer.isActive())
+        self.assertNotEqual(before, badge.grab().toImage())
 
     def test_footer_vehicle_animates_shared_art_and_stops_when_hidden(self) -> None:
         from PySide6.QtTest import QTest

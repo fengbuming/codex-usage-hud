@@ -124,6 +124,8 @@ class JsonlSessionParserTests(unittest.TestCase):
         self.assertFalse(snapshot.request.estimated)
         self.assertTrue(snapshot.request.output_speed_estimated)
         self.assertEqual(snapshot.request.output_tokens_per_second, 25.0)
+        # Pool both responses, excluding tool wait and the mirrored usage.
+        self.assertEqual(snapshot.session_output_tokens_per_second, 20.0)
         self.assertEqual(len(snapshot.request_history), 2)
         self.assertEqual(snapshot.request.output_tokens, 100)
 
@@ -167,6 +169,53 @@ class JsonlSessionParserTests(unittest.TestCase):
                 ])
 
                 self.assertIsNone(snapshot.request.output_tokens_per_second)
+
+    def test_session_speed_pools_all_tasks_without_time_between_user_turns(self) -> None:
+        records = [
+            record("2026-05-28T00:00:00Z", "event_msg", {"type": "task_started"}),
+            token_count("2026-05-28T00:00:04Z", 10, 0, 40, 0, 50, 50),
+            record("2026-05-28T00:00:05Z", "event_msg", {"type": "task_complete"}),
+            record("2026-05-28T01:00:00Z", "event_msg", {"type": "task_started"}),
+            token_count("2026-05-28T01:00:06Z", 10, 0, 120, 0, 130, 180),
+            record("2026-05-28T01:00:07Z", "event_msg", {"type": "task_complete"}),
+        ]
+
+        snapshot = self.speed_snapshot(records)
+
+        self.assertEqual(snapshot.request.output_tokens_per_second, 20.0)
+        self.assertEqual(snapshot.session_output_tokens_per_second, 16.0)
+        snapshot.refreshed_at += timedelta(hours=5)
+        snapshot = JsonlSessionParser().parse_records(
+            records, session_id="session-a", snapshot=snapshot,
+        )
+        self.assertEqual(snapshot.session_output_tokens_per_second, 16.0)
+
+    def test_session_speed_updates_with_live_output_then_final_usage(self) -> None:
+        records = [
+            record("2026-05-28T00:00:00Z", "event_msg", {"type": "task_started"}),
+            token_count("2026-05-28T00:00:04Z", 10, 0, 40, 0, 50, 50),
+            record("2026-05-28T00:00:12Z", "response_item", {
+                "type": "function_call_output", "output": "tool result",
+            }),
+            record("2026-05-28T00:00:16Z", "response_item", {
+                "type": "message", "role": "assistant",
+                "content": [{"type": "output_text", "text": "a" * 80}],
+            }),
+        ]
+
+        live = self.speed_snapshot(records)
+
+        self.assertEqual(live.request.status, "running")
+        self.assertEqual(live.estimate.output_tokens, 20)
+        self.assertEqual(live.session_output_tokens_per_second, 7.5)
+        records += [
+            token_count("2026-05-28T00:00:17Z", 10, 0, 60, 0, 70, 120),
+            record("2026-05-28T00:00:18Z", "event_msg", {"type": "task_complete"}),
+        ]
+
+        final = self.speed_snapshot(records)
+
+        self.assertEqual(final.session_output_tokens_per_second, 12.5)
 
     def test_latest_activity_keeps_command_visible_after_token_count(self) -> None:
         parser = JsonlSessionParser()

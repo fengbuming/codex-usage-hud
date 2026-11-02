@@ -14,7 +14,7 @@ import threading
 from typing import Any, TYPE_CHECKING
 
 from .core import ParsedSession, WorkStatusItem
-from .output_speed import output_speed_projection
+from .output_speed import output_speed_projection, positive_output_speed
 from .overlay_projection import (
     _select_runtime_work_overlay_items,
     _work_overlay_item_limit_for_context,
@@ -941,6 +941,9 @@ def _work_item_from_snapshot(
         activity_steps=_activity_step_payloads(snapshot),
         output_tokens_per_second=output_speed,
         output_speed_mode=output_speed_mode,
+        session_output_tokens_per_second=positive_output_speed(
+            snapshot.session_output_tokens_per_second
+        ),
     )
 
 

@@ -7,7 +7,7 @@ from decimal import Decimal, ROUND_HALF_UP
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from .core.parser import RequestTokens
+    from .core.parser import ParsedSession, RequestTokens
 
 
 def positive_output_speed(value: object) -> float | None:
@@ -31,6 +31,11 @@ def output_speed_projection(request: RequestTokens) -> tuple[float | None, str]:
     if request.status == "confirmed" and request.output_usage_complete:
         return rate, "measured"
     return None, "idle"
+
+
+def format_session_output_speed(snapshot: ParsedSession) -> str:
+    """Format the session's pooled response samples without a ~ marker."""
+    return format_output_speed(snapshot.session_output_tokens_per_second) or "— tok/s"
 
 
 def format_output_speed(value: object) -> str:

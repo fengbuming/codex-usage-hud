@@ -188,6 +188,32 @@ class RendererHudPayloadTests(unittest.TestCase):
         self.assertEqual(payload["outputTokensPerSecond"], 25.0)
         self.assertEqual(payload["outputSpeedMode"], "estimated")
 
+    def test_top_hud_shows_session_average_speed_in_both_states(self) -> None:
+        snapshot = ParsedSession(
+            session_id="speed-session", status="parsed",
+            session_output_tokens_per_second=16.0,
+            confirmed=ConfirmedTokens(cumulative_input=100, cumulative_cached=60),
+        )
+        snapshot.request = RequestTokens(
+            status="running", estimated=True, output_tokens_per_second=80.0,
+            input_tokens=100, cached_tokens=60,
+        )
+
+        payload = payload_from_snapshot(snapshot).to_json()
+
+        label = payload["topProgress"]["collapsed"][0]["label"]
+        self.assertIn("/60%/16.0 tok/s", label)
+        self.assertNotIn("~", label)
+        self.assertEqual(payload["topDetails"]["sessionMix"], "均速 16.0 tok/s")
+        self.assertEqual(payload["outputTokensPerSecond"], 80.0)
+        self.assertIn("16.0 tok/s", payload["payloadDomains"]["currentSession"]["topLine"])
+        self.assertIn("16.0 tok/s", payload["payloadDomains"]["sessionSwitch"]["topLine"])
+        snapshot.request.status = "confirmed"
+        self.assertEqual(
+            payload_from_snapshot(snapshot).to_json()["topDetails"]["sessionMix"],
+            "均速 16.0 tok/s",
+        )
+
     def test_payload_does_not_substitute_historical_average_for_live_tps(self) -> None:
         snapshot = ParsedSession(status="parsed")
         snapshot.request = RequestTokens(status="running", source="jsonl")
@@ -368,7 +394,7 @@ class RendererHudPayloadTests(unittest.TestCase):
         self.assertTrue(top_line.startswith("本会话 14k/"))
         self.assertIn("本会话 14k/$0.123/", top_line)
         self.assertNotIn("$0.136", top_line)
-        self.assertIn("/~61% | 今日", top_line)
+        self.assertIn("/61%/— tok/s | 今日", top_line)
         self.assertIn("今日 50k/$0.500", top_line)
         self.assertIn("本周 200k/$1.50", top_line)
         top_progress = payload["topProgress"]
@@ -376,11 +402,11 @@ class RendererHudPayloadTests(unittest.TestCase):
         collapsed_progress = top_progress["collapsed"]
         self.assertEqual([item["tone"] for item in collapsed_progress], ["session", "day", "week"])
         self.assertTrue(collapsed_progress[0]["label"].startswith("本会话 14k/"))
-        self.assertIn("/~61%", collapsed_progress[0]["label"])
+        self.assertIn("/61%/— tok/s", collapsed_progress[0]["label"])
         self.assertNotIn("rightText", collapsed_progress[0])
         self.assertEqual(collapsed_progress[1]["rightText"], "总 $100.00")
         self.assertEqual(collapsed_progress[2]["rightText"], "总 $400.00")
-        self.assertEqual(top_progress["cache"]["label"], "缓存命中 ~61%")
+        self.assertEqual(top_progress["cache"]["label"], "缓存命中 61%")
         self.assertEqual(top_progress["budget"][0]["label"], "今日 50k/$0.500")
         self.assertEqual(top_progress["budget"][0]["rightText"], "总 $100.00")
         self.assertNotIn("overflowRatio", top_progress["budget"][0])
@@ -908,7 +934,7 @@ class RendererHudPayloadTests(unittest.TestCase):
         self.assertEqual(top_details["taskOrdinal"], "第3次需求")
         self.assertEqual(top_details["taskOrdinalSession"], "")
         self.assertEqual(top_details["taskOrdinalActivity"], "第3次需求")
-        self.assertEqual(top_details["sessionMix"], "缓存命中 ~61%")
+        self.assertEqual(top_details["sessionMix"], "均速 — tok/s")
         self.assertEqual(top_details["sessionAverage"], "均值 n/a")
         self.assertIn("↑↻ $", top_details["sessionComposition"])
         self.assertNotIn("=", top_details["sessionComposition"])

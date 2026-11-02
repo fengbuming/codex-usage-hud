@@ -226,10 +226,9 @@ def top_session_cache_hit_rate_label(
     *,
     cache_hit_rate_label: Callable[[ParsedSession], str],
 ) -> str:
-    label = cache_hit_rate_label(snapshot)
-    if label.startswith("◎"):
-        return label[1:]
-    return label
+    # The top HUD presents the value as a live dashboard metric; keep the
+    # request-level estimated marker out of this compact session summary.
+    return cache_hit_rate_label(snapshot).removeprefix("◎").removeprefix("~")
 
 
 def top_cache_progress_label(
@@ -237,9 +236,9 @@ def top_cache_progress_label(
     *,
     cache_hit_rate_label: Callable[[ParsedSession], str],
 ) -> str:
-    label = cache_hit_rate_label(snapshot)
-    if label.startswith("◎"):
-        label = label[1:]
+    label = top_session_cache_hit_rate_label(
+        snapshot, cache_hit_rate_label=cache_hit_rate_label,
+    )
     return f"缓存命中 {label}"
 
 
@@ -252,6 +251,7 @@ def top_session_usage_summary(
     display_tokens_fn: DisplayTokensFn,
     usage_money: UsageMoneyFn,
     top_cache_hit_rate_label: Callable[[ParsedSession], str],
+    session_speed_label: Callable[[ParsedSession], str],
 ) -> str:
     if is_new_session(snapshot):
         return "新会话 等待首个会话事件"
@@ -275,7 +275,11 @@ def top_session_usage_summary(
     else:
         total_tokens = thread_tokens
         total_cost = thread_cost if thread_cost is not None else family_cost
-    return f"本会话 {usage_money(total_tokens, total_cost)}/{top_cache_hit_rate_label(snapshot)}"
+    return (
+        f"本会话 {usage_money(total_tokens, total_cost)}"
+        f"/{top_cache_hit_rate_label(snapshot)}"
+        f"/{session_speed_label(snapshot)}"
+    )
 
 
 __all__ = [

@@ -56,6 +56,7 @@ def work_item_to_overlay_dict(item: WorkStatusItem) -> dict[str, object]:
         "cacheHitText": item.cache_hit_text,
         "outputTokensPerSecond": getattr(item, "output_tokens_per_second", None),
         "outputSpeedMode": getattr(item, "output_speed_mode", "idle"),
+        "sessionOutputTokensPerSecond": getattr(item, "session_output_tokens_per_second", None),
         "workdirName": item.workdir_name,
         "source": item.source,
         "workdir": item.workdir,
@@ -311,6 +312,11 @@ def _merge_stable_item_metadata(
         or cached_task_index == current_task_index
     ) and (cached_task is None or current_task is None or cached_task == current_task)
     if same_task:
+        if (
+            getattr(current, "session_output_tokens_per_second", None) is None
+            and getattr(cached, "session_output_tokens_per_second", None) is not None
+        ):
+            updates["session_output_tokens_per_second"] = cached.session_output_tokens_per_second
         updates["round_index"] = max(
             0,
             int(getattr(cached, "round_index", 0) or 0),

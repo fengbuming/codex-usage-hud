@@ -1,11 +1,16 @@
 from datetime import datetime, timedelta, timezone
+from dataclasses import replace
 
 import pytest
 
 from codex_usage_hud.active_work import _work_item_from_snapshot
 from codex_usage_hud.core import Activity, ParsedSession, RequestTokens
-from codex_usage_hud.output_speed import format_output_speed, output_speed_projection
-from codex_usage_hud.overlay_projection import work_item_to_overlay_dict
+from codex_usage_hud.output_speed import (
+    format_output_speed,
+    format_session_output_speed,
+    output_speed_projection,
+)
+from codex_usage_hud.overlay_projection import _merge_stable_item_metadata, work_item_to_overlay_dict
 from codex_usage_hud.renderer_payload_builder import _output_speed_projection
 
 
@@ -39,6 +44,7 @@ def test_jsonl_speed_reaches_the_matching_bubble_and_clears_on_completion():
     now = datetime.now(timezone.utc)
     snapshot = ParsedSession(
         session_id="speed-session", session_title="Speed",
+        session_output_tokens_per_second=25.0,
         session_started_at=now - timedelta(minutes=1),
         task_started_at=now - timedelta(seconds=30),
         activity=Activity(kind="agent", detail="working", timestamp=now),
@@ -60,3 +66,40 @@ def test_jsonl_speed_reaches_the_matching_bubble_and_clears_on_completion():
     assert completed is not None
     assert completed.output_tokens_per_second is None
     assert completed.output_speed_mode == "idle"
+    # Completion clears live request speed but preserves the whole-session mean.
+    completed_payload = work_item_to_overlay_dict(completed)
+    assert completed_payload["sessionOutputTokensPerSecond"] == 25.0
+    assert completed_payload["outputTokensPerSecond"] is None
+
+
+@pytest.mark.parametrize("new_task", [False, True])
+def test_partial_completed_speed_is_preserved_only_for_the_matching_task(new_task):
+    now = datetime.now(timezone.utc)
+    snapshot = ParsedSession(
+        session_id="average", task_started_at=now - timedelta(seconds=20),
+        task_completed_at=now, session_output_tokens_per_second=89.5,
+    )
+    cached = _work_item_from_snapshot(snapshot, current=True, now=now)
+    assert cached is not None
+    partial = replace(
+        cached, session_output_tokens_per_second=None,
+        task_started_at=now if new_task else cached.task_started_at,
+    )
+
+    merged = _merge_stable_item_metadata(cached, partial)
+
+    assert merged.session_output_tokens_per_second == (None if new_task else 89.5)
+
+
+@pytest.mark.parametrize("rate, expected", [
+    (5, "5.00 tok/s"), (25, "25.0 tok/s"), (None, "— tok/s"),
+])
+def test_session_speed_formats_pooled_samples_without_approximation(rate, expected):
+    snapshot = ParsedSession(session_output_tokens_per_second=rate)
+    # The latest request can have a different speed from the whole session.
+    snapshot.request = RequestTokens(
+        status="confirmed", output_tokens_per_second=89.5,
+        output_usage_complete=True,
+    )
+
+    assert format_session_output_speed(snapshot) == expected
