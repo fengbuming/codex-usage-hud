@@ -438,6 +438,8 @@ class WorkOverlayRenderingTests(unittest.TestCase):
         card.layout().activate()
         record["footer_container"].layout().activate()
         self.assertEqual(speed.text(), "89.5 tok/s")
+        icon = record["speed_icon"]
+        self.assertLessEqual(icon.x() + icon.width(), shimmer.x())
         self.assertIs(speed, record["header_meta"])
         self.assertIs(speed.parentWidget(), card)
         self.assertLess(speed.y(), record["footer_container"].y())
@@ -464,6 +466,62 @@ class WorkOverlayRenderingTests(unittest.TestCase):
         self.assertTrue(speed.isHidden())
         self.assertFalse(card._tide_timer.isActive())
         self.assertEqual(card._heat, 0.0)
+        self.assertTrue(icon.isHidden())
+        self.assertFalse(icon._animation_timer.isActive())
+        self.assertFalse(icon._settle_timer.isActive())
+
+    def test_footer_vehicle_animates_shared_art_and_stops_when_hidden(self) -> None:
+        from PySide6.QtTest import QTest
+        from codex_usage_hud.renderer_assets.speed_titles import VEHICLE_ART
+        from codex_usage_hud.speed_title_model import SPEED_TITLE_STEPS
+        from codex_usage_hud.ui.work_overlay.qt_speed_icon import AnimatedSpeedIcon, vehicle_parts
+
+        for key, art in VEHICLE_ART.items():
+            parts = vehicle_parts(key)
+            self.assertEqual(len(parts), len(art["parts"]))
+            self.assertTrue(all(not part.path.isEmpty() for part in parts))
+        for key, _, threshold in SPEED_TITLE_STEPS:
+            probe = AnimatedSpeedIcon(self.shell)
+            probe._state.update(threshold, now=0)
+            probe._state.advance(now=0.8)
+            image = probe.grab().toImage()
+            self.assertTrue(
+                any(image.pixelColor(x, y).alpha() > 0
+                    for x in range(image.width()) for y in range(image.height())), key,
+            )
+            probe.deleteLater()
+        rendering = self._rendering()
+        rendering._build_item_card({
+            "id": "vehicle", "title": "Vehicle", "status": "running",
+            "statusText": "Working", "outputTokensPerSecond": 89.5,
+            "outputSpeedMode": "estimated",
+        })
+        self.shell.show()
+        self._app.processEvents()
+        icon = rendering._item_widgets[-1]["speed_icon"]
+        QTest.qWait(850)
+        self.assertEqual(icon._state.tier, 4)
+        self.assertEqual(icon.toolTip(), "摩托车")
+        first = icon.grab().toImage()
+        QTest.qWait(120)
+        self.assertNotEqual(first, icon.grab().toImage())
+        icon.hide()
+        self.assertFalse(icon._animation_timer.isActive())
+        self.assertFalse(icon._settle_timer.isActive())
+
+    def test_speed_increases_wave_height_without_covering_assistant_output(self) -> None:
+        from codex_usage_hud.ui.work_overlay.qt_energy_tide import EnergyTideCard
+
+        card = EnergyTideCard(self.shell)
+        ranges = []
+        for speed in (12, 89.5, 240):
+            card.set_output_speed(speed, enabled=True)
+            card._heat = card._target_heat
+            points = [card._surface_y(x, 110) for x in range(430)]
+            ranges.append(max(points) - min(points))
+            self.assertGreater(min(points), 110 - 34)
+        self.assertGreater(ranges[1], ranges[0] * 1.8)
+        self.assertGreater(ranges[2], ranges[1] * 1.3)
 
     def test_low_speed_tide_is_visible_and_moves_on_real_timer_ticks(self) -> None:
         from PySide6.QtTest import QTest

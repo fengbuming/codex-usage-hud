@@ -20,6 +20,7 @@ class EnergyTideCard(QFrame):
         self._heat = 0.0
         self._target_heat = 0.0
         self._phase = 0.0
+        self._bubble_phase = 0.0
         self._last_frame = 0.0
         self._tide_color = QColor("#F3D27A")
         self._tide_timer = QTimer(self)
@@ -31,7 +32,7 @@ class EnergyTideCard(QFrame):
         self, value: object, *, enabled: bool, color: str = "#F3D27A"
     ) -> None:
         speed = positive_output_speed(value) if enabled else None
-        target = min(1.0, (speed / 180.0) ** 0.6) if speed and speed >= 0.5 else 0.0
+        target = min(1.0, math.log1p(speed / 6.0) / math.log1p(400.0 / 6.0)) if speed and speed >= 0.5 else 0.0
         next_color = QColor(color)
         changed = target != self._target_heat or next_color != self._tide_color
         self._target_heat = target
@@ -57,7 +58,8 @@ class EnergyTideCard(QFrame):
         dt = min(0.08, max(0.0, now - self._last_frame))
         self._last_frame = now
         self._heat += (self._target_heat - self._heat) * (1.0 - math.exp(-dt / 0.22))
-        self._phase += dt * (1.2 + 3.8 * self._heat)
+        self._phase += dt * (1.2 + 4.8 * self._heat)
+        self._bubble_phase = (self._bubble_phase + dt * (0.16 + 0.28 * self._heat)) % 1.0
         if self._target_heat == 0 and self._heat <= 0.006:
             self._heat = 0.0
             self._tide_timer.stop()
@@ -78,6 +80,34 @@ class EnergyTideCard(QFrame):
         color.setAlphaF(max(0.0, min(1.0, opacity)))
         return color
 
+    def _surface_y(self, x: float, height: float, layer: int = 0) -> float:
+        heat = self._heat
+        amplitude = 2.0 + 11.0 * heat ** 1.4
+        level = height - 12 - 2 * heat + layer * 2.6
+        angle = x * 0.021 + self._phase + layer * 0.8
+        return level + amplitude * (
+            math.sin(angle)
+            + math.sin(x * 0.041 - self._phase * 0.73 + layer) * 0.20
+            + math.sin(2 * angle + 0.4) * 0.15 * heat
+        )
+
+    def _draw_bubbles(self, painter: QPainter, width: int, height: int, presence: float) -> None:
+        # A bounded pool of hollow bubbles. Edge lanes can rise farther;
+        # inner lanes stay below the assistant output and status text.
+        lanes = (0.018, 0.982, 0.035, 0.965, 0.07, 0.93, 0.12, 0.88, 0.2, 0.8, 0.34, 0.66)
+        heat = self._heat
+        for index in range(min(len(lanes), math.ceil(4 + 8 * heat))):
+            progress = (self._bubble_phase + index * 0.618034) % 1.0
+            lane = lanes[index]
+            rise = 38 + 15 * heat if lane < 0.06 or lane > 0.94 else 17 + 8 * heat
+            x = width * lane + math.sin(self._phase * 0.6 + index) * 1.4
+            y = height - 2 - progress * rise
+            radius = 1.1 + (index % 3) * 0.4 + 0.6 * heat
+            alpha = (0.38 + 0.28 * heat) * math.sin(progress * math.pi) ** 0.7 * presence
+            painter.setPen(QPen(self._color(alpha), 0.85))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawEllipse(QPointF(x, y), radius, radius)
+
     def paintEvent(self, event: object) -> None:
         super().paintEvent(event)
         heat = self._heat
@@ -92,17 +122,12 @@ class EnergyTideCard(QFrame):
         # Keep the low-speed tide legible: multiplying opacity by heat made a
         # real 2.98 tok/s sample nearly transparent and only a few pixels tall.
         presence = min(1.0, heat / 0.035)
-        amplitude = 2.4 + 5.6 * heat
-        level = height - 11 - 11 * heat
-        phase = self._phase
+        amplitude = 2.0 + 11.0 * heat ** 1.4
+        level = height - 12 - 2 * heat
         for layer in (2, 1, 0):
             path = QPainterPath()
-            y0 = level + layer * 3
             for x in range(0, width + 4, 4):
-                y = (
-                    y0 + math.sin(x * 0.021 + phase + layer * 0.8) * amplitude
-                    + math.sin(x * 0.041 - phase * 0.73 + layer) * amplitude * 0.28
-                )
+                y = self._surface_y(x, height, layer)
                 if x == 0:
                     path.moveTo(x, y)
                 else:
@@ -118,11 +143,4 @@ class EnergyTideCard(QFrame):
             surface_opacity = (0.45 + 0.35 * heat) * presence * (1 if layer == 0 else 0.38)
             painter.setPen(QPen(self._color(surface_opacity), 1.0 if layer == 0 else 0.7))
             painter.drawPath(surface)
-        painter.setPen(Qt.PenStyle.NoPen)
-        for index in range(math.ceil(2 + 6 * heat)):
-            progress = (phase * 0.085 + index * 0.196) % 1.0
-            x = width - 5 - (index % 3) * 2 if index % 2 else 5 + (index % 3) * 2
-            y = height - progress * (35 + 22 * heat)
-            radius = 0.65 + (index % 3) * 0.25
-            painter.setBrush(self._color(math.sin(progress * math.pi) * heat * 0.6))
-            painter.drawEllipse(QPointF(x + math.sin(phase + index) * 1.5, y), radius, radius)
+        self._draw_bubbles(painter, width, height, presence)

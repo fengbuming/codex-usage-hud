@@ -3,6 +3,7 @@
 import json
 
 from .speed_titles import VEHICLE_ART
+from ..speed_title_model import SPEED_TITLE_COLOR_STOPS, SPEED_TITLE_REDLINE, SPEED_TITLE_STEPS
 
 
 TEXT = r"""
@@ -10,27 +11,9 @@ TEXT = r"""
   // ABI marker retained for existing renderer contract probes:
   // data-field="topTaskOrdinalSession"
   const speedTitleArt = __CODEX_USAGE_HUD_SPEED_TITLE_ART__;
-  const speedTitleSteps = [
-    ["walk", "步行", 0.5],
-    ["bicycle", "自行车", null],
-    ["ebike", "电动自行车", null],
-    ["motorcycle", "摩托车", null],
-    ["car", "汽车", null],
-    ["sportsCar", "跑车", null],
-    ["bulletTrain", "高铁", null],
-    ["raceCar", "赛车", null],
-    ["maglev", "磁浮列车", null],
-    ["jetliner", "喷射客机", null],
-    ["fighterJet", "战斗机", null],
-    ["hypersonic", "高超音速飞机", null],
-    ["rocket", "火箭", null],
-  ];
-  const speedTitleFractions = [0.02, 0.03, 0.04, 0.06, 0.08, 0.12, 0.17, 0.24, 0.34, 0.5, 0.7, 1];
-  const speedTitleRedline = 2000;
-  const speedTitleColorStops = [
-    [0, "#7C8798"], [0.1, "#2DD4BF"], [0.3, "#38BDF8"], [0.48, "#818CF8"],
-    [0.64, "#E879F9"], [0.78, "#FB7185"], [0.9, "#FB923C"], [1, "#FACC15"],
-  ];
+  const speedTitleSteps = __CODEX_USAGE_HUD_SPEED_TITLE_STEPS__;
+  const speedTitleRedline = __CODEX_USAGE_HUD_SPEED_TITLE_REDLINE__;
+  const speedTitleColorStops = __CODEX_USAGE_HUD_SPEED_TITLE_COLORS__;
   let displayedSpeedTitle = 0;
   let pendingSpeedTitle = null;
   let pendingSpeedTitleTimeout = 0;
@@ -39,7 +22,7 @@ TEXT = r"""
   let currentSpeedNodes = [];
 
   function speedTitleThreshold(index) {
-    return index <= 1 ? 0.5 : speedTitleFractions[index - 2] * speedTitleRedline;
+    return speedTitleSteps[Math.max(1, index) - 1][2];
   }
 
   function rawSpeedTitle(value) {
@@ -2795,6 +2778,14 @@ TEXT = r"""
 """.replace(
     "__CODEX_USAGE_HUD_SPEED_TITLE_ART__",
     json.dumps(VEHICLE_ART, ensure_ascii=False, separators=(",", ":")),
+).replace(
+    "__CODEX_USAGE_HUD_SPEED_TITLE_STEPS__",
+    json.dumps(SPEED_TITLE_STEPS, ensure_ascii=False, separators=(",", ":")),
+).replace(
+    "__CODEX_USAGE_HUD_SPEED_TITLE_REDLINE__", str(SPEED_TITLE_REDLINE),
+).replace(
+    "__CODEX_USAGE_HUD_SPEED_TITLE_COLORS__",
+    json.dumps(SPEED_TITLE_COLOR_STOPS, separators=(",", ":")),
 )
 
 __all__ = ["TEXT"]

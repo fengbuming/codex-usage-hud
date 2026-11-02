@@ -30,6 +30,7 @@ from PySide6.QtWidgets import (
 
 from ...output_speed import format_output_speed, positive_output_speed
 from .qt_energy_tide import EnergyTideCard
+from .qt_speed_icon import AnimatedSpeedIcon
 from .constants import (
     WORK_OVERLAY_BODY_MAX_LINES,
     WORK_OVERLAY_CARD_SPACING,
@@ -977,6 +978,10 @@ class OverlayRenderingMixin:
         footer_layout.setContentsMargins(0, 0, 0, 0)
         footer_layout.setSpacing(8)
 
+        speed_icon = AnimatedSpeedIcon(footer_container)
+        speed_icon.hide()
+        footer_layout.addWidget(speed_icon, 0, alignment.AlignVCenter)
+
         status_label = ShimmerTextLabel("", footer_container, base_color="#8492A6")
         status_label.setAttribute(widget_attrs.WA_TransparentForMouseEvents, True)
         status_label.setFont(QFont("Microsoft YaHei UI", 8, QFont.Weight.Bold))
@@ -1091,6 +1096,7 @@ class OverlayRenderingMixin:
             "rest_actions_layout": rest_row_layout,
             "status_label": status_label,
             "speed_label": header_meta,
+            "speed_icon": speed_icon,
             "secondary_action_label": secondary_action_label,
             "primary_action_label": primary_action_label,
             "rest_action_labels": [
@@ -1443,6 +1449,9 @@ class OverlayRenderingMixin:
         footer_container = record["footer_container"]
         if isinstance(card, EnergyTideCard):
             card.set_output_speed(output_speed, enabled=speed_enabled, color=accent)
+        record["speed_icon"].set_speed(
+            output_speed, enabled=speed_enabled and output_speed is not None,
+        )
         footer_container.setVisible(bool(status_text or workdir_footer_text))
 
         status_label = record["status_label"]
