@@ -141,6 +141,14 @@ codex-hud --daemon
   `%LOCALAPPDATA%\codex-usage-hud\hud_settings.json`
 - daemon log:
   `%LOCALAPPDATA%\codex-usage-hud\daemon.log`
+  (2 MiB per file, five rotated backups). Keep `daemon.log` and all
+  `daemon.log.*` backups before restarting a stale HUD. Refresh progress is
+  sampled at most once every 30 seconds per component; session, task and status
+  changes are recorded immediately. Records include PID, thread, phase,
+  session/selection identifiers and state-file revision, without prompt or
+  command text. A `begin`/phase without its following completion narrows down
+  where a sampled refresh stopped. These logs diagnose recurrence; they do
+  not constitute lock/unlock acceptance or a fix for stale bubbles.
 - runtime diagnostics:
   `%LOCALAPPDATA%\codex-usage-hud\renderer_fallback.log`
 

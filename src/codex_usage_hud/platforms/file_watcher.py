@@ -251,6 +251,7 @@ class _WindowsDirectoryWorker(_ThreadWorker):
     def _run(self) -> None:
         handle = _open_windows_directory(self._directory)
         if handle is None:
+            _LOGGER.warning("file_watcher_windows_open_failed directory=%s", self._directory)
             return
         self._handle = handle
         buffer = ctypes.create_string_buffer(64 * 1024)
@@ -275,6 +276,11 @@ class _WindowsDirectoryWorker(_ThreadWorker):
                     None,
                 )
                 if not ok or self._stop_event.is_set():
+                    if not ok and not self._stop_event.is_set():
+                        _LOGGER.warning(
+                            "file_watcher_windows_read_failed directory=%s winerror=%s",
+                            self._directory, ctypes.windll.kernel32.GetLastError(),
+                        )
                     break
                 if bytes_returned.value == 0:
                     _LOGGER.warning(
@@ -287,6 +293,10 @@ class _WindowsDirectoryWorker(_ThreadWorker):
                 changed = _parse_windows_notifications(self._directory, buffer)
                 self._emit_matching(changed)
         finally:
+            _LOGGER.info(
+                "file_watcher_windows_exiting directory=%s stop_requested=%s",
+                self._directory, self._stop_event.is_set(),
+            )
             self.close()
 
     def _emit_overflow_reconciliation(self) -> None:

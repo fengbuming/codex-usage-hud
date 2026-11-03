@@ -35,6 +35,7 @@ from .core import WorkStatusItem
 from .platforms.codex_theme import CodexThemeProbe
 from .platforms.file_watcher import FileChangeWatcher, FileWatchSpec
 from .process_environment import internal_process_environment
+from .refresh_diagnostics import RefreshDiagnosticTrace
 
 WORK_OVERLAY_COMMAND_FALLBACK_POLL_SECONDS = 5.0
 WORK_OVERLAY_SWITCH_COMPLETED_HOLD_SECONDS = 1.4
@@ -154,6 +155,7 @@ class DesktopWorkOverlay:
         self._runtime_available_probe = runtime_available or _pyside6_runtime_available
         self._producer_instance_id = str(uuid.uuid4())
         self._state_revision = 0
+        self._write_trace = RefreshDiagnosticTrace(_LOGGER, "work_overlay_state")
         self.item_limit = normalize_work_overlay_max_items(item_limit)
         self.side = normalize_work_overlay_side(side)
         self.enabled = bool(enabled) and self.item_limit > 0
@@ -1092,6 +1094,21 @@ class DesktopWorkOverlay:
                 close=close,
             )
             next_revision = self._state_revision + 1
+            # Ignore heartbeat-only writes. Status/task changes are recorded
+            # immediately; content-only changes are sampled without text.
+            changed = payload_signature != self._last_state_signature
+            if changed:
+                states = tuple(
+                    (item.get("id"), item.get("status"), item.get("taskIndex"), item.get("pendingAccounting"))
+                    for item in payload_items
+                )
+                self._write_trace.begin(
+                    key=(close, states), revision=next_revision,
+                    state_file=self._state_path.name, close=close, items=states,
+                    activity_times=[item.get("updatedAt") for item in payload_items],
+                    helper_pid=getattr(self._process, "pid", None),
+                    helper_heartbeat_at=self._last_helper_heartbeat_at,
+                )
             state_payload = overlay_state.build_state_message(
                 owner_pid=os.getpid(),
                 item_limit=int(self.item_limit),
@@ -1121,7 +1138,13 @@ class DesktopWorkOverlay:
             self._state_revision = next_revision
             self._last_state_signature = payload_signature
             self._last_state_write_at = self._clock.monotonic()
+            if changed:
+                self._write_trace.phase("written", revision=next_revision)
         except OSError:
+            _LOGGER.warning(
+                "work_overlay_state_write_failed state_file=%s revision=%s",
+                self._state_path.name, self._state_revision + 1, exc_info=True,
+            )
             return
 
     def _state_signature(

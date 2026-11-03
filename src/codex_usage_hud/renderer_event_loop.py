@@ -9,6 +9,7 @@ from pathlib import Path
 
 from .core import ParsedSession
 from . import runtime_policies
+from .refresh_diagnostics import RefreshDiagnosticTrace
 from .renderer_event_normalization import (
     NormalizedEventBatch,
     event_bus_timestamp,
@@ -460,6 +461,7 @@ class RendererRefreshExecutor:
     ) -> None:
         self.state = state
         self.ports = ports
+        self._trace = RefreshDiagnosticTrace(_LOGGER, "renderer_snapshot")
 
     def apply(
         self,
@@ -467,6 +469,11 @@ class RendererRefreshExecutor:
         force_fast: bool,
     ) -> ParsedSession:
         del force_fast
+        self._trace.begin(
+            key=getattr(self.state.latest_snapshot, "session_id", None),
+            local=False, reasons=sorted(inputs.file_change_reasons),
+            paths=len(inputs.file_change_paths),
+        )
         refresh_started = self.ports.perf_counter()
         latest = self.state.latest_snapshot
         active_session_observation_key = (
@@ -488,7 +495,12 @@ class RendererRefreshExecutor:
         )
         snapshot_started = self.ports.perf_counter()
         snapshot_started_at_ms = int(self.ports.wall_time() * 1000)
+        self._trace.phase("build_snapshot")
         fresh = self.ports.build_snapshot(dict(decision.snapshot_kwargs))
+        self._trace.phase(
+            "snapshot_built", session_id=fresh.session_id,
+            selection_seq=fresh.selection_seq, items=len(fresh.active_work_items),
+        )
         snapshot_built_at_ms = int(self.ports.wall_time() * 1000)
         fresh.follow_timing = {
             **dict(fresh.follow_timing or {}),
@@ -509,6 +521,7 @@ class RendererRefreshExecutor:
             )
             self.ports.retry_active_session_update()
             return latest
+        self._trace.phase("merge_active_work")
         self._merge_active_work(fresh, latest, decision)
         self._reset_request_rows_page_for_session(fresh)
         self.ports.update_snapshot_activity(fresh)
@@ -518,12 +531,14 @@ class RendererRefreshExecutor:
             self.ports.wall_time() * 1000
         )
         update_started = self.ports.perf_counter()
+        self._trace.phase("push_payload", lightweight=decision.lightweight_active_session)
         update_ok = (
             self.ports.push_lightweight(fresh)
             if decision.lightweight_active_session
             else self.ports.push_full(fresh, inputs)
         )
         update_ms = (self.ports.perf_counter() - update_started) * 1000.0
+        self._trace.phase("payload_result", ok=update_ok, status=self.ports.client_status())
         self.ports.acknowledge_active_session_update(
             fresh.selection_seq,
             active_session_observation_key,
@@ -534,6 +549,7 @@ class RendererRefreshExecutor:
             # memory. Publish it immediately so a new/current conversation
             # does not wait for the deferred background scan before its desktop
             # bubble appears.
+            self._trace.phase("publish_overlay")
             self.ports.publish_overlay(fresh)
         self._log_slow_refresh(
             fresh,
@@ -545,6 +561,7 @@ class RendererRefreshExecutor:
             self._record_success(fresh, decision)
         else:
             self._record_failure()
+        self._trace.phase("complete", failures=self.state.failures)
         return fresh
 
     def apply_local(self, inputs: RendererTickInputs) -> ParsedSession | None:
@@ -556,6 +573,10 @@ class RendererRefreshExecutor:
         normal CDP retry remains pending.
         """
         latest = self.state.latest_snapshot
+        self._trace.begin(
+            key=getattr(latest, "session_id", None), local=True,
+            reasons=sorted(inputs.file_change_reasons), paths=len(inputs.file_change_paths),
+        )
         kwargs: dict[str, object] = {
             "refresh_budget_aggregate": False,
             "refresh_budget_paths": tuple(
@@ -570,9 +591,10 @@ class RendererRefreshExecutor:
         if latest is not None:
             kwargs["reuse_budget_from"] = latest
         try:
+            self._trace.phase("build_local_snapshot")
             fresh = self.ports.build_snapshot(kwargs)
         except Exception:
-            _LOGGER.debug("renderer_local_refresh_failed", exc_info=True)
+            _LOGGER.warning("renderer_local_refresh_failed", exc_info=True)
             return latest
         if latest is not None and self.ports.selection_is_stale(fresh):
             return latest
@@ -582,7 +604,9 @@ class RendererRefreshExecutor:
                 fresh,
             )
         self.state.latest_snapshot = fresh
+        self._trace.phase("publish_local_overlay", session_id=fresh.session_id)
         self.ports.publish_overlay(fresh)
+        self._trace.phase("complete", local=True)
         return fresh
 
     def _reset_request_rows_page_for_session(self, snapshot: ParsedSession) -> None:
@@ -754,7 +778,7 @@ class RendererRefreshExecutor:
             else str(metrics.get("attribution") or "hud_or_cdp")
         )
         _LOGGER.info(
-            "renderer_refresh_timing attribution=%s total_ms=%.1f snapshot_ms=%.1f hud_update_ms=%.1f target_ms=%s transport=%s cdp_ms=%s persistent_ms=%s fallback_ms=%s fallback_reason=%s renderer_apply_ms=%s source=%s",
+            "renderer_refresh_timing attribution=%s total_ms=%.1f snapshot_ms=%.1f hud_update_ms=%.1f target_ms=%s transport=%s cdp_ms=%s persistent_ms=%s fallback_ms=%s fallback_reason=%s renderer_apply_ms=%s session_id=%s source_kind=%s",
             attribution,
             refresh_ms,
             snapshot_ms,
@@ -766,7 +790,8 @@ class RendererRefreshExecutor:
             metrics.get("fallbackMs", "-"),
             metrics.get("persistentFallbackReason", "-") or "-",
             metrics.get("rendererApplyMs", "-"),
-            fresh.selection_source,
+            fresh.session_id,
+            str(fresh.selection_source or "").split(":", 1)[0],
         )
 
 
@@ -780,6 +805,9 @@ class RendererEventLoop:
     ) -> None:
         self.state = state
         self.ports = ports
+        self._trace = RefreshDiagnosticTrace(_LOGGER, "renderer_loop")
+        self._last_gate: tuple[bool, str] | None = None
+        self._was_quiesced = False
 
     def run(self) -> int:
         while True:
@@ -787,6 +815,9 @@ class RendererEventLoop:
             if daemon_result is not None:
                 return daemon_result
             if self.ports.quiesce_active():
+                if not self._was_quiesced:
+                    _LOGGER.info("renderer_loop_quiesced")
+                    self._was_quiesced = True
                 # Quiesced (session locked/sleeping): do not build snapshots,
                 # touch CDP, probe, or heal — any of those pins the renderer and
                 # wedges it across a long lock. Wait for wake/exit/restart only,
@@ -798,12 +829,32 @@ class RendererEventLoop:
                 wait_fn = self.ports.quiesce_wait or self.ports.wait
                 wait_fn(self.ports.quiesce_wait_delay())
                 continue
+            if self._was_quiesced:
+                _LOGGER.info("renderer_loop_resumed")
+                self._was_quiesced = False
             inputs = self.ports.sample_inputs()
+            trace_work = bool(
+                inputs.event_refresh_request.has_work
+                or self.state.pending_refresh_plan.has_work
+                or self.state.latest_snapshot is None
+            )
+            if trace_work:
+                self._trace.begin(
+                    key=getattr(self.state.latest_snapshot, "session_id", None),
+                    session_id=getattr(self.state.latest_snapshot, "session_id", None),
+                    reasons=sorted(inputs.file_change_reasons), paths=len(inputs.file_change_paths),
+                    active_session_wakeup=inputs.active_session_wakeup,
+                    events=sorted({str(getattr(event, "type", "")) for event in inputs.runtime_events}),
+                    pending=self.state.pending_refresh_plan.has_work,
+                )
+                self._trace.phase("apply_inputs")
             self.ports.apply_inputs(inputs)
             if self.ports.exit_requested():
                 return 0
             if self.ports.restart_requested():
                 return self.ports.restart_result()
+            if trace_work:
+                self._trace.phase("advance_recovery")
             self.ports.advance_recovery()
             if self.ports.recovery_refresh_pending():
                 self.state.soft_reinstall_pending = True
@@ -824,6 +875,15 @@ class RendererEventLoop:
             if snapshot_requested and not plan.snapshot:
                 plan.request_snapshot(force_fast=force_fast)
             allowed, _reason, remaining = self.ports.update_gate()
+            gate = (allowed, _reason)
+            if gate != self._last_gate:
+                _LOGGER.info(
+                    "renderer_loop_gate allowed=%s reason=%s retry_in=%.3f failures=%s pending=%s",
+                    allowed, _reason, remaining, self.state.failures, plan.has_work,
+                )
+                self._last_gate = gate
+            if trace_work:
+                self._trace.phase("refresh", allowed=allowed, reason=_reason, snapshot=snapshot_requested)
             if not allowed:
                 if plan.has_work:
                     self.state.pending_refresh_plan.merge(plan)
@@ -867,6 +927,12 @@ class RendererEventLoop:
                 )
             self.ports.after_iteration(snapshot)
             delay = self.ports.compute_wait_delay(snapshot, inputs, force_fast)
+            if trace_work:
+                self._trace.phase(
+                    "wait", delay=delay, failures=self.state.failures,
+                    pending=self.state.pending_refresh_plan.has_work,
+                    session_id=getattr(snapshot, "session_id", None),
+                )
             self.ports.wait(delay)
 
     def _should_retain_failed_plan(self, plan: RefreshPlan) -> bool:

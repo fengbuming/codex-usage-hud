@@ -1501,7 +1501,7 @@ def handle_general_command(
             base_url = str(command.get("baseUrl") or command.get("base_url") or "").strip()
             api_key = str(command.get("apiKey") or command.get("api_key") or "").strip()
             try:
-                if "useProxy" in command:
+                if command.get("useProxy") is True:
                     from .provider_proxy import provider_proxy_relay
                     from .codex_provider_config import default_codex_config_path
 
@@ -1542,7 +1542,7 @@ def handle_general_command(
             api_key = str(command.get("apiKey") or command.get("api_key") or "").strip()
             model = str(command.get("model") or "").strip()
             message = str(command.get("message") or "hi").strip() or "hi"
-            if "useProxy" in command:
+            if command.get("useProxy") is True:
                 from .provider_proxy import provider_proxy_relay
                 from .codex_provider_config import default_codex_config_path
 

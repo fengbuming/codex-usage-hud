@@ -194,6 +194,12 @@ def attach_cli_logger_to_daemon_log(
         "codex_usage_hud.file_watcher",
         "codex_usage_hud.daemon_runtime",
         "codex_usage_hud.renderer_runtime",
+        "codex_usage_hud.session_activity",
+        "codex_usage_hud.renderer_event_loop",
+        "codex_usage_hud.renderer_file_events",
+        "codex_usage_hud.ui.renderer_hud",
+        "codex_usage_hud.active_work",
+        "codex_usage_hud.desktop_overlay",
     ),
 ) -> bool:
     """Mirror CLI diagnostics into already-configured daemon handlers once."""

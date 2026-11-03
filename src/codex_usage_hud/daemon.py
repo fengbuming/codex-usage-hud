@@ -124,8 +124,8 @@ def configure_daemon_logging() -> Path | None:
         path.parent.mkdir(parents=True, exist_ok=True)
         handler = RotatingFileHandler(
             path,
-            maxBytes=512 * 1024,
-            backupCount=3,
+            maxBytes=2 * 1024 * 1024,
+            backupCount=5,
             encoding="utf-8",
         )
     except OSError:
@@ -133,7 +133,10 @@ def configure_daemon_logging() -> Path | None:
     level_name = os.environ.get("CODEX_USAGE_HUD_DAEMON_LOG_LEVEL", "INFO").upper()
     level = getattr(logging, level_name, logging.INFO)
     handler.setLevel(level)
-    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+    handler.setFormatter(logging.Formatter(
+        "%(asctime)s %(levelname)s pid=%(process)d thread=%(threadName)s "
+        "%(name)s %(message)s"
+    ))
     _logger.handlers = [
         item for item in _logger.handlers if not isinstance(item, logging.NullHandler)
     ]

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import logging
 from pathlib import Path
 from threading import Event
 from types import SimpleNamespace
@@ -1743,6 +1744,33 @@ def test_refresh_executor_builds_and_publishes_initial_snapshot() -> None:
         "snapshotBuiltAt": 20_000,
         "payloadSendStartedAt": 20_000,
     }
+
+
+def test_refresh_progress_records_stage_before_blocking_operation(caplog) -> None:
+    def fail_build(_kwargs):
+        raise RuntimeError("snapshot did not return")
+
+    caplog.set_level(logging.INFO, logger=renderer_event_loop.__name__)
+    executor = RendererRefreshExecutor(
+        RendererLoopState(),
+        replace(_refresh_ports(fresh=ParsedSession()), build_snapshot=fail_build),
+    )
+    with pytest.raises(RuntimeError, match="did not return"):
+        executor.apply(_tick_inputs(plan=RefreshPlan(snapshot=True)), False)
+    assert "phase=build_snapshot" in caplog.text
+    assert "phase=snapshot_built" not in caplog.text
+    assert "phase=complete" not in caplog.text
+
+
+def test_refresh_timing_does_not_log_selection_title(caplog) -> None:
+    caplog.set_level(logging.INFO, logger=renderer_event_loop.__name__)
+    fresh = ParsedSession(session_id="session-1", selection_source="renderer:private title")
+    executor = RendererRefreshExecutor(
+        RendererLoopState(), replace(_refresh_ports(fresh=fresh), slow_operation_ms=-1.0),
+    )
+    executor.apply(_tick_inputs(plan=RefreshPlan(snapshot=True)), False)
+    assert "session_id=session-1 source_kind=renderer" in caplog.text
+    assert "private title" not in caplog.text
 
 
 def test_refresh_executor_refreshes_current_bubble_on_visible_first_session_update() -> None:

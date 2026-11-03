@@ -4,10 +4,15 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from pathlib import Path
+import logging
 import sys
 import threading
 
 from .platforms.file_watcher import FileChangeWatcher, FileWatchSpec
+from .refresh_diagnostics import RefreshDiagnosticTrace
+
+
+_LOGGER = logging.getLogger(__name__)
 
 # Debounce for non-immediate wake reasons (sessions-root, settings, sse-log).
 # 0.2s balances new-session-file detection latency against coalescing frequent
@@ -91,6 +96,8 @@ class RendererFileEventSource:
         self._session_path: Path | None = None
         self._timer: threading.Timer | None = None
         self._closed = False
+        self._receive_trace = RefreshDiagnosticTrace(_LOGGER, "renderer_file_received")
+        self._consume_trace = RefreshDiagnosticTrace(_LOGGER, "renderer_file_consumed")
         self._watcher = FileChangeWatcher(
             self._on_change,
             fallback_poll_seconds=self._fallback_poll_seconds,
@@ -119,6 +126,8 @@ class RendererFileEventSource:
             paths = set(self._paths)
             self._reasons.clear()
             self._paths.clear()
+        if reasons:
+            self._consume_trace.begin(reasons=sorted(reasons), paths=len(paths))
         return reasons, paths
 
     def close(self) -> None:
@@ -140,6 +149,10 @@ class RendererFileEventSource:
                 return
             self._reasons.update(reasons)
             self._paths.update(paths)
+            self._receive_trace.begin(
+                reasons=sorted(reasons), paths=len(paths),
+                current_session_changed=self._session_path in paths,
+            )
             if self._should_wake_immediately(reasons) or self._debounce_seconds <= 0:
                 wake_now = True
             elif self._timer is None:

@@ -6,6 +6,7 @@ import ctypes
 import logging
 import sys
 import threading
+import time
 from collections.abc import Callable
 from ctypes import wintypes
 
@@ -152,6 +153,11 @@ class WindowsSessionLockMonitor:
             self._on_lock()
         thread.start()
         self._ready.wait(timeout=2.0)
+        _LOGGER.info(
+            "session_lock_monitor_start ready=%s alive=%s hwnd=%s thread_id=%s initial_locked=%s",
+            self._ready.is_set(), thread.is_alive(), self._hwnd,
+            self._thread_id, initial_locked,
+        )
         error = self._startup_error
         if error is not None:
             _LOGGER.error("session_lock_monitor_start_failed error=%s", error)
@@ -164,6 +170,7 @@ class WindowsSessionLockMonitor:
             self.close()
 
     def close(self) -> None:
+        _LOGGER.info("session_lock_monitor_stop_requested thread_id=%s", self._thread_id)
         self._stop_event.set()
         with self._state_lock:
             thread = self._thread
@@ -201,6 +208,7 @@ class WindowsSessionLockMonitor:
         handled; the query handshake (QUERYSUSPEND / QUERYSUSPENDFAILED) never
         triggers "away" because the suspend may still be vetoed.
         """
+        _LOGGER.info("session_power_notification wparam=%s", wparam)
         if wparam == _PBT_APMSUSPEND:
             self._emit_transition(True)
         elif wparam in {
@@ -222,10 +230,20 @@ class WindowsSessionLockMonitor:
             previous = self._locked
             self._locked = bool(locked)
         if previous is None or bool(locked) != previous:
-            if locked:
-                self._on_lock()
-            else:
-                self._on_unlock()
+            self._notify_transition(previous, locked)
+
+    def _notify_transition(self, previous: bool | None, locked: bool) -> None:
+        started = time.monotonic()
+        _LOGGER.info("session_lock_callback_begin previous=%s locked=%s", previous, locked)
+        try:
+            (self._on_lock if locked else self._on_unlock)()
+        except Exception:
+            _LOGGER.exception("session_lock_callback_failed locked=%s", locked)
+            raise
+        _LOGGER.info(
+            "session_lock_callback_complete locked=%s elapsed_ms=%.1f",
+            locked, (time.monotonic() - started) * 1000.0,
+        )
 
     def _run(self) -> None:
         user32 = None
@@ -259,6 +277,7 @@ class WindowsSessionLockMonitor:
                 lparam: int,
             ) -> int:
                 if message == _WM_WTSSESSION_CHANGE:
+                    _LOGGER.info("session_wts_notification wparam=%s session_id=%s", wparam, lparam)
                     if int(wparam) == _WTS_SESSION_LOCK:
                         self._emit_transition(True)
                     elif int(wparam) == _WTS_SESSION_UNLOCK:
@@ -333,6 +352,8 @@ class WindowsSessionLockMonitor:
             if not register_session(hwnd, _NOTIFY_FOR_THIS_SESSION):
                 raise ctypes.WinError(ctypes.get_last_error())
 
+            _LOGGER.info("session_lock_monitor_registered hwnd=%s thread_id=%s", hwnd, self._thread_id)
+
             self._synchronize_initial_state()
 
             get_message = user32.GetMessageW
@@ -366,6 +387,7 @@ class WindowsSessionLockMonitor:
                 self._startup_error = exc
             _LOGGER.exception("session_lock_monitor_failed")
         finally:
+            _LOGGER.info("session_lock_monitor_exiting stop_requested=%s", self._stop_event.is_set())
             if hwnd:
                 try:
                     user32.DestroyWindow(hwnd)
@@ -386,16 +408,14 @@ class WindowsSessionLockMonitor:
         with self._state_lock:
             previous = self._locked
             self._locked = current
+        _LOGGER.info("session_lock_initial_probe previous=%s locked=%s", previous, current)
         if previous is None:
             if current:
-                self._on_lock()
+                self._notify_transition(previous, current)
             return
         if previous == current:
             return
-        if current:
-            self._on_lock()
-        else:
-            self._on_unlock()
+        self._notify_transition(previous, current)
 
 
 __all__ = [

@@ -32,6 +32,7 @@ DEFAULT_LOG_LEVEL = "WARN"
 # - exclude Linux/macOS platform branches from the Windows build
 # - exclude dev/test helper module names so they cannot be pulled in accidentally
 DEFAULT_COLLECT_PACKAGES = ("codex_usage_hud",)
+DEFAULT_HIDDEN_IMPORTS = ("encodings.idna",)
 DEFAULT_DATA_FILES = (
     (
         PROJECT_ROOT / "src" / "codex_usage_hud" / "assets" / "sponsor_alipay.jpg",
@@ -160,6 +161,7 @@ def build_pyinstaller_command(
     icon_path: Path | None = DEFAULT_ICON_FILE,
     log_level: str = DEFAULT_LOG_LEVEL,
     collect_packages: Sequence[str] = DEFAULT_COLLECT_PACKAGES,
+    hidden_imports: Sequence[str] = DEFAULT_HIDDEN_IMPORTS,
     data_files: Sequence[tuple[Path, str]] = DEFAULT_DATA_FILES,
     excluded_modules: Sequence[str] = DEFAULT_EXCLUDED_MODULES,
     excluded_qt_modules: Sequence[str] = DEFAULT_EXCLUDED_QT_MODULES,
@@ -188,6 +190,8 @@ def build_pyinstaller_command(
     ]
     for package in collect_packages:
         command.extend(["--collect-submodules", package])
+    for module in hidden_imports:
+        command.extend(["--hidden-import", module])
     if icon_path is not None:
         command.extend(["--icon", str(icon_path)])
     for source, destination in data_files:

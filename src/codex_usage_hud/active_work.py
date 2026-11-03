@@ -36,6 +36,7 @@ from .runtime_usage import (
     workdir_leaf as _workdir_leaf,
 )
 from .session_snapshots import session_path_key as _session_path_key
+from .refresh_diagnostics import RefreshDiagnosticTrace
 from .usage_contributions import usage_scan_roots
 
 if TYPE_CHECKING:
@@ -84,6 +85,7 @@ class RendererActiveWorkPump:
         self._pending: tuple[object, Path | None, tuple[Path, ...], int] | None = None
         self._latest: tuple[int, list[Any]] | None = None
         self._worker: threading.Thread | None = None
+        self._trace = RefreshDiagnosticTrace(_LOGGER, "renderer_active_work")
 
     def request(
         self,
@@ -142,6 +144,11 @@ class RendererActiveWorkPump:
                     self._worker = None
                 return
             snapshot, session_path, priority_paths, selection_seq = request
+            self._trace.begin(
+                key=getattr(snapshot, "session_id", None),
+                session_id=getattr(snapshot, "session_id", None),
+                selection_seq=selection_seq, paths=len(priority_paths),
+            )
             try:
                 items = self._build_items(
                     self._context,
@@ -155,6 +162,7 @@ class RendererActiveWorkPump:
                     f"{type(exc).__name__}: {exc}",
                 )
                 items = []
+            self._trace.phase("built", items=len(items))
             with self._lock:
                 if self._closed:
                     self._worker = None
@@ -164,6 +172,7 @@ class RendererActiveWorkPump:
                 self._latest = (selection_seq, items)
                 self._worker = None
             self._wake_event.set()
+            self._trace.phase("published", selection_seq=selection_seq, items=len(items))
             return
 
 

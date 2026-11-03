@@ -186,6 +186,7 @@ class RendererHudClient:
         all stay in place; ``resume`` + the next ``update`` re-attach them.
         """
         self._quiesced = True
+        _LOGGER.info("renderer_client_quiesce_begin target_id=%s", self._target_id)
         for attr in (
             "_active_session_binding",
             "_settings_command_binding",
@@ -213,6 +214,8 @@ class RendererHudClient:
         self._warmup_started_at = 0.0
         self._last_warmup_probe_at = None
 
+        _LOGGER.info("renderer_client_quiesce_complete target_id=%s", self._target_id)
+
     def resume(self) -> None:
         """Re-enable CDP activity after unlock/wake through the warmup gate.
 
@@ -231,6 +234,7 @@ class RendererHudClient:
         self._last_warmup_probe_at = None
         self._recovery_refresh_pending = True
         self._split_next_full = True
+        _LOGGER.info("renderer_client_resume warmup=True target_id=%s", self._target_id)
 
     def recovery_seconds_until_probe(self) -> float | None:
         """Return the next recovery probe deadline without touching CDP."""
@@ -313,6 +317,10 @@ class RendererHudClient:
         self._last_warmup_probe_at = time.monotonic()
         ok, probe_ms = self._probe_renderer_alive(timeout_seconds=2.0)
         self._warmup_probes += 1
+        _LOGGER.info(
+            "renderer_client_warmup_probe attempt=%s ok=%s elapsed_ms=%.1f",
+            self._warmup_probes, ok, probe_ms,
+        )
         if ok and probe_ms < 100.0:
             self._warmup_acks += 1
         else:
@@ -330,6 +338,7 @@ class RendererHudClient:
             self._warming = False
             self._split_next_full = True
             self.last_update_metrics["rendererAliveProbe"] = "warmup-complete"
+            _LOGGER.info("renderer_client_warmup_complete probes=%s", self._warmup_probes)
         elif (
             self._warmup_probes >= WARMUP_MAX_PROBES
             or time.monotonic() - self._warmup_started_at >= WARMUP_MAX_SECONDS
@@ -341,6 +350,7 @@ class RendererHudClient:
             self._split_next_full = True
             self._clear_target_cache(clear_script=True)
             self.last_update_metrics["rendererAliveProbe"] = "warmup-timeout-recover"
+            _LOGGER.warning("renderer_client_warmup_bounded_recovery probes=%s", self._warmup_probes)
         return True
 
     def degrade(self, reason: str = "") -> None:
@@ -350,6 +360,7 @@ class RendererHudClient:
         if self._degraded:
             return
         self._degraded = True
+        _LOGGER.warning("renderer_client_degrade reason=%s", reason)
         self._degraded_reason = str(reason or "")
         self._degraded_at = time.monotonic()
         self._last_degrade_probe_at = None
@@ -384,6 +395,7 @@ class RendererHudClient:
             self._clear_target_cache(clear_script=True)
             self._reset_update_retry_state()
             self.last_update_metrics["rendererAliveProbe"] = "degraded-recovered"
+            _LOGGER.info("renderer_client_degraded_recovered target_id=%s", self._target_id)
         return True
 
     _HEAVY_UPDATE_DOMAINS = frozenset({

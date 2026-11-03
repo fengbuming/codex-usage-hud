@@ -1,9 +1,24 @@
 from __future__ import annotations
 
-import sys
+import logging
+
+import pytest
 
 from codex_usage_hud import session_activity as _session_activity
 from codex_usage_hud.session_activity import WindowsSessionLockMonitor
+
+
+def test_failed_lock_callback_keeps_begin_and_failure_evidence(caplog) -> None:
+    def fail() -> None:
+        raise RuntimeError("callback stalled then failed")
+
+    monitor = WindowsSessionLockMonitor(on_lock=fail, on_unlock=lambda: None)
+    caplog.set_level(logging.INFO, logger=_session_activity.__name__)
+    with pytest.raises(RuntimeError, match="callback stalled"):
+        monitor._emit_transition(True)
+    assert "session_lock_callback_begin" in caplog.text
+    assert "session_lock_callback_failed" in caplog.text
+    assert "session_lock_callback_complete" not in caplog.text
 
 
 def test_monitor_emits_lock_state_transitions_including_first_event() -> None:

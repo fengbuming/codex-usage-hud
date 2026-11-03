@@ -2,8 +2,13 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import json
+import inspect
+import logging
 from pathlib import Path
 from types import SimpleNamespace
+
+from codex_usage_hud import runtime_diagnostics
+from codex_usage_hud.refresh_diagnostics import RefreshDiagnosticTrace
 
 from codex_usage_hud.runtime_diagnostics import (
     CRASH_DIAGNOSTICS_ENV,
@@ -15,6 +20,58 @@ from codex_usage_hud.runtime_diagnostics import (
 
 
 FIXED_NOW = datetime(2026, 7, 31, 12, 30, tzinfo=timezone.utc)
+
+
+def test_refresh_loggers_write_to_daemon_file(tmp_path, monkeypatch) -> None:
+    """The default module loggers must actually reach a persistent handler."""
+    from codex_usage_hud import renderer_client, renderer_event_loop, session_activity
+
+    configure = runtime_diagnostics.attach_cli_logger_to_daemon_log
+    names = inspect.signature(configure).parameters["logger_names"].default
+    for logger in (renderer_client._LOGGER, renderer_event_loop._LOGGER, session_activity._LOGGER):
+        assert logger.name in names
+    path = tmp_path / "daemon.log"
+    handler = logging.FileHandler(path, encoding="utf-8")
+    daemon_logger = logging.getLogger("test.hud.daemon")
+    monkeypatch.setattr(daemon_logger, "handlers", [handler])
+    monkeypatch.setattr(daemon_logger, "level", logging.INFO)
+    monkeypatch.setattr(runtime_diagnostics, "_cli_logging_attached", False)
+    for name in names:
+        logger = logging.getLogger(name)
+        monkeypatch.setattr(logger, "handlers", list(logger.handlers))
+        monkeypatch.setattr(logger, "level", logger.level)
+        monkeypatch.setattr(logger, "propagate", logger.propagate)
+    try:
+        assert configure(daemon_logger_name=daemon_logger.name)
+        assert configure(daemon_logger_name=daemon_logger.name)
+        for name in names:
+            logging.getLogger(name).info("persistent_refresh_marker %s", name)
+        handler.flush()
+        lines = path.read_text(encoding="utf-8").splitlines()
+        assert len(lines) == len(names)
+        assert all(any(name in line for line in lines) for name in names)
+    finally:
+        handler.close()
+
+
+def test_refresh_trace_throttles_content_but_records_state_transitions(caplog) -> None:
+    now = [0.0]
+    logger = logging.getLogger("test.hud.trace")
+    caplog.set_level(logging.INFO, logger=logger.name)
+    trace = RefreshDiagnosticTrace(logger, "refresh", monotonic=lambda: now[0])
+    trace.begin(key="running", session_id="session-1")
+    trace.phase("written", revision=1)
+    for _ in range(10):
+        now[0] += 1.0
+        trace.begin(key="running")
+        trace.phase("written")
+    assert len(caplog.records) == 2
+    trace.begin(key="completed")
+    assert len(caplog.records) == 3
+    now[0] = 40.0
+    trace.begin(key="completed")
+    assert len(caplog.records) == 4
+    assert "session-1" in caplog.records[0].message
 
 
 def test_jsonl_sink_writes_structured_record_and_omits_empty_fields(

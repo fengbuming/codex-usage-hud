@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import encodings.idna  # noqa: F401 -- socket.getaddrinfo resolves this codec dynamically.
 import http.client
 from http.server import BaseHTTPRequestHandler
 import json

@@ -1022,17 +1022,20 @@ def test_general_command_dispatches_fetch_provider_models() -> None:
         fetch_provider_models=lambda base, key: calls.append((base, key)) or ["gpt-5", "gpt-5.6"],
     )
 
-    status = dispatch_command(
-        {
-            "action": "fetchProviderModels",
-            "baseUrl": "https://api.example.com/v1",
-            "apiKey": "sk-secret",
-            "requestId": "models-1",
-        },
-        RuntimeCommandPorts(),
-        ports,
-    )
+    with patch("codex_usage_hud.provider_proxy.provider_proxy_relay.route") as route:
+        status = dispatch_command(
+            {
+                "action": "fetchProviderModels",
+                "baseUrl": "https://api.example.com/v1",
+                "apiKey": "sk-secret",
+                "useProxy": False,
+                "requestId": "models-1",
+            },
+            RuntimeCommandPorts(),
+            ports,
+        )
 
+    route.assert_not_called()
     assert calls == [("https://api.example.com/v1", "sk-secret")]
     assert status["providerConnected"] is True
     assert status["models"] == ["gpt-5", "gpt-5.6"]
@@ -1175,19 +1178,22 @@ def test_general_command_dispatches_provider_chat_test() -> None:
         ) or {"ok": True, "reply": "Hello!", "model": model},
     )
 
-    status = dispatch_command(
-        {
-            "action": "providerChatTest",
-            "baseUrl": "https://api.example.com/v1",
-            "apiKey": "sk-secret",
-            "model": "Deepseek-v4-flash",
-            "message": "hi",
-            "requestId": "chat-1",
-        },
-        RuntimeCommandPorts(),
-        ports,
-    )
+    with patch("codex_usage_hud.provider_proxy.provider_proxy_relay.route") as route:
+        status = dispatch_command(
+            {
+                "action": "providerChatTest",
+                "baseUrl": "https://api.example.com/v1",
+                "apiKey": "sk-secret",
+                "model": "Deepseek-v4-flash",
+                "message": "hi",
+                "useProxy": False,
+                "requestId": "chat-1",
+            },
+            RuntimeCommandPorts(),
+            ports,
+        )
 
+    route.assert_not_called()
     assert calls == [
         ("https://api.example.com/v1", "sk-secret", "Deepseek-v4-flash", "hi")
     ]
