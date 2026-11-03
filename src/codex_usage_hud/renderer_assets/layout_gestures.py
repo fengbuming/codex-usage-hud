@@ -252,7 +252,12 @@ TEXT = r"""
 
       function measureNativeTitleReveal() {
         const panel = document.querySelector(`#${rootId} [data-panel="top"]`);
-        const header = conversationHeaderElement();
+        // New Desktop builds render the title in the main chat toolbar,
+        // outside the shell header's (now empty) anchor surface.
+        const toolbarTitle = document.querySelector(
+          '[data-app-shell-focus-area="main"][role="toolbar"] [data-app-shell-titlebar-content]',
+        );
+        const header = visible(toolbarTitle) ? toolbarTitle : conversationHeaderElement();
         if (!visible(panel) || !visible(header)) return null;
         const candidates = Array.from(header.querySelectorAll([
           "[data-thread-title]",

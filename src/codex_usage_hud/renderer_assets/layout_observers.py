@@ -212,6 +212,7 @@ TEXT = r"""
           "[data-testid*='thread-title' i]",
           "[data-testid*='conversation-title' i]",
           "[data-testid='app-shell-header-context-menu-surface'] .truncate",
+          '[data-app-shell-focus-area="main"][role="toolbar"] [data-app-shell-titlebar-content]',
           // Codex Desktop's current title button is nested under the title
           // row. Keep this structural fallback narrow so arbitrary header
           // headings and truncation changes do not retrigger layout.
@@ -317,11 +318,21 @@ TEXT = r"""
         const headerNode = cachedHeaderNode;
         const composerNode = cachedComposerNode;
         let touchesHeaderTitle = false;
+        let touchesToolbarTitle = false;
         let touchesComposerMode = false;
         for (const mutation of mutations) {
           const target = layoutMutationTarget(mutation, headerNode, composerNode);
           if (target === "header" && mutationTouchesHeaderTitleScope(mutation)) {
             touchesHeaderTitle = true;
+          }
+          // The main chat toolbar can be a sibling of the cached shell
+          // header. Title replacement/text changes must also drop a cached
+          // null reveal measurement, without reflowing the HUD anchor.
+          const element = elementFromMutationNode(mutation.target);
+          if (!element?.closest?.(`#${rootId}`)
+            && element?.closest?.('[data-app-shell-focus-area="main"][role="toolbar"]')
+            && mutationTouchesHeaderTitleScope(mutation)) {
+            touchesToolbarTitle = true;
           }
           if (target === "composer") {
             // Typing in the active conversation must not repeatedly measure
@@ -341,7 +352,7 @@ TEXT = r"""
         // Legacy contract markers: scheduleForPanels(["top"], { invalidateTop: true });
         // scheduleForPanels(["request"]);
         // Legacy contract marker: if (!layoutMutationTouchesTextInput(mutation) && mutationTouchesComposerModeControl(mutation))
-        if (touchesHeaderTitle) invalidateNativeTitleReveal();
+        if (touchesHeaderTitle || touchesToolbarTitle) invalidateNativeTitleReveal();
         if (touchesHeaderTitle && !getPanelState("top").manual) {
           invalidateHeaderAnchor();
           scheduleForPanels(["top"], { invalidateTop: true });
@@ -352,6 +363,8 @@ TEXT = r"""
           scheduleForPanels(["request"]);
         }
       }
+
+      let observedTitleToolbarNode = null;
 
       function horizontalLayoutSignature(headerNode, composerNode) {
         return [headerNode, composerNode].map((node) => {
@@ -560,14 +573,19 @@ TEXT = r"""
         installColumnResizeWatchers();
         const headerNode = conversationHeaderElement();
         const composerNode = composerElement();
+        const titleToolbarNode = document.querySelector(
+          '[data-app-shell-focus-area="main"][role="toolbar"]',
+        );
         if (
           headerNode === observedHeaderNode
           && composerNode === observedComposerNode
+          && titleToolbarNode === observedTitleToolbarNode
           && window[mutationObserverName]
           && window[resizeObserverName]
         ) return;
         observedHeaderNode = headerNode;
         observedComposerNode = composerNode;
+        observedTitleToolbarNode = titleToolbarNode;
         ctx.observers.clear("layout");
         ctx.observers.clear("layout_resize");
         window[mutationObserverName] = ctx.observers.set("layout", new MutationObserver(handleLayoutMutations));
@@ -580,6 +598,10 @@ TEXT = r"""
         };
         if (headerNode) window[mutationObserverName].observe(headerNode, mutationOptions);
         if (composerNode && composerNode !== headerNode) window[mutationObserverName].observe(composerNode, mutationOptions);
+        if (titleToolbarNode && !headerNode?.contains(titleToolbarNode)
+          && !composerNode?.contains(titleToolbarNode)) {
+          window[mutationObserverName].observe(titleToolbarNode, mutationOptions);
+        }
         // Side views and tabs can resize the conversation column without a
         // window resize. Observe anchor widths only so composer height changes
         // while typing do not trigger panel reflow.

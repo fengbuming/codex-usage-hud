@@ -147,6 +147,8 @@ global.window = new EventProbe();
 global.document = new EventProbe();
 global.document.documentElement = null;
 global.document.querySelectorAll = selector => selector === 'img' ? [] : previewDialogs;
+let titleToolbar = {};
+global.document.querySelector = () => titleToolbar;
 global.Node = {ELEMENT_NODE: 1};
 global.Element = class ElementProbe {
   constructor(role = '', cursor = 'default', tagName = 'DIV', rect = {left: 0, top: 0, right: 10, bottom: 10, width: 10, height: 10}) {
@@ -170,8 +172,8 @@ global.ResizeObserver = class {
   disconnect() {}
 };
 global.MutationObserver = class {
-  constructor(callback) { mutationCallbacks.push(callback); }
-  observe() {}
+  constructor(callback) { mutationCallbacks.push(callback); this.nodes = []; }
+  observe(node) { this.nodes.push(node); }
   disconnect() {}
 };
 const rootId = 'hud', mutationObserverName = 'mutation', resizeObserverName = 'resize';
@@ -198,8 +200,8 @@ const ctxTimers = new Map();
 let observedHeaderNode = null, observedComposerNode = null;
 const headerRect = {left: 200, right: 1200, top: 40, bottom: 90};
 const composerRect = {left: 200, right: 1200, top: 700, bottom: 780};
-const header = {getBoundingClientRect: () => headerRect};
-const composer = {getBoundingClientRect: () => composerRect};
+const header = {getBoundingClientRect: () => headerRect, contains: () => false};
+const composer = {getBoundingClientRect: () => composerRect, contains: () => false};
 const visible = node => Boolean(node);
 const conversationHeaderElement = () => header, composerElement = () => composer;
 const invalidateHeaderAnchor = () => {}, invalidateComposerAnchor = () => {};
@@ -211,11 +213,19 @@ const flushPreviewFrame = () => { const callback = frameCallbacks.get('layout_pr
 const ensureComposerInputWatchers = () => {};
 """
     observers = OBSERVERS[
-        OBSERVERS.index("      function horizontalLayoutSignature"):
+        OBSERVERS.index("      let observedTitleToolbarNode"):
         OBSERVERS.index("      function stopBootstrapObserver")
     ]
     checks = r"""
 refreshLayoutObservers();
+assert.ok(window[mutationObserverName].nodes.includes(titleToolbar));
+const firstObserver = window[mutationObserverName];
+refreshLayoutObservers();
+assert.equal(window[mutationObserverName], firstObserver);
+titleToolbar = {};
+refreshLayoutObservers();
+assert.notEqual(window[mutationObserverName], firstObserver);
+assert.ok(window[mutationObserverName].nodes.includes(titleToolbar));
 assert.equal(resizeObserver !== undefined, true);
 composerRect.right = 800;
 resizeObserver.callback();

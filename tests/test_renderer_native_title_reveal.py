@@ -8,6 +8,7 @@ import pytest
 
 from codex_usage_hud.renderer_assets.kernel import TEXT as KERNEL
 from codex_usage_hud.renderer_assets.layout_gestures import TEXT as GESTURES
+from codex_usage_hud.renderer_assets.layout_observers import TEXT as OBSERVERS
 
 
 HARNESS = r"""
@@ -85,6 +86,7 @@ const panel = {
   removeAttribute: name => { if (name === 'data-native-title-reveal') delete panel.dataset.nativeTitleReveal; },
 };
 const header = {isConnected: true, shown: true, querySelectorAll: () => [title]};
+let toolbarTitle = null;
 const conversationHeaderElement = () => header;
 global.getComputedStyle = () => ({display: 'block', visibility: 'visible', opacity: '1', overflowX: 'hidden', overflowY: 'hidden'});
 let collapsedMeasureCount = 0, fitRequired = 0;
@@ -95,7 +97,7 @@ global.budgetDomain = {measureCollapsedProgressStrip: () => {
 const contentFitRefreshes = [];
 function refreshTopContentFit(options) { contentFitRefreshes.push(options); }
 global.NodeFilter = {SHOW_TEXT: 4};
-document.querySelector = () => panel;
+document.querySelector = selector => selector.includes('data-app-shell-focus-area') ? toolbarTitle : panel;
 document.createTreeWalker = () => {
   let read = false; return {nextNode() { if (read) return null; read = true; return textNode; }};
 };
@@ -117,6 +119,28 @@ const revealLeft = () => Number.parseFloat(panel.style.left);
 @pytest.mark.parametrize(
     "scenario",
     [
+        """
+        header.querySelectorAll = () => [];
+        toolbarTitle = {isConnected: true, shown: true, querySelectorAll: () => [title]};
+        move(40); advance(150); assert.equal(revealed(), true);
+        move(600); advance(150); assert.equal(revealed(), false);
+        assert.equal(panel.style.width, '310px');
+        """,
+        """
+        toolbarTitle = {isConnected: true, shown: false, querySelectorAll: () => []};
+        move(40); advance(150); assert.equal(revealed(), true);
+        """,
+        """
+        toolbarTitle = {isConnected: true, shown: true, querySelectorAll: () => []};
+        move(40); advance(150); assert.equal(revealed(), false);
+        toolbarTitle.querySelectorAll = () => [title];
+        invalidateNativeTitleReveal(); flushFrames(); advance(150);
+        assert.equal(revealed(), true);
+        """,
+        """
+        toolbarTitle = {isConnected: true, shown: true, querySelectorAll: () => [title, {...title}]};
+        move(40); advance(150); assert.equal(revealed(), false);
+        """,
         # A wide flex container is not evidence that a short title is covered.
         """
         textRects = [rect(25, 14, 90, 31)];
@@ -228,7 +252,7 @@ const revealLeft = () => Number.parseFloat(panel.style.left);
         move(600); advance(150); assert.equal(revealed(), false);
         """,
     ],
-    ids=["short-title", "native-clipping", "hover-and-restore", "cancel-and-drag", "overlays-and-focus", "restore-remeasure-cancel", "invalidation-and-teardown", "content-fit-right-anchor", "expanded-content-fit-right-anchor", "fit-width-matches-collapsed-layout"],
+    ids=["toolbar-title", "hidden-toolbar-fallback", "toolbar-title-replacement", "ambiguous-toolbar", "short-title", "native-clipping", "hover-and-restore", "content-fit-right-anchor", "expanded-content-fit-right-anchor", "cancel-and-drag", "restore-remeasure-cancel", "overlays-and-focus", "invalidation-and-teardown", "fit-width-matches-collapsed-layout"],
 )
 def test_native_title_reveal_behavior(scenario: str) -> None:
     controller = GESTURES[GESTURES.index("      let nativeTitleRevealGeometry;"):]
@@ -245,3 +269,44 @@ def test_native_title_reveal_behavior(scenario: str) -> None:
         check=True,
         timeout=10,
     )
+
+
+def test_toolbar_mutations_invalidate_reveal_without_reflowing_anchor() -> None:
+    functions = OBSERVERS[
+        OBSERVERS.index("      function layoutMutationTouchesTextInput"):
+        OBSERVERS.index("      let observedTitleToolbarNode")
+    ]
+    script = r"""
+const assert = require('node:assert/strict');
+const rootId = 'hud';
+const runtimeIsCurrent = () => true, ctx = {lifecycle: {active: () => true}};
+const cachedHeaderNode = null, cachedComposerNode = null;
+const elementFromMutationNode = node => node.nodeType === 1 ? node : node.parentElement;
+let invalidations = 0;
+const invalidateNativeTitleReveal = () => invalidations++;
+const getPanelState = () => ({manual: false});
+const invalidateHeaderAnchor = () => { throw Error('toolbar must not reflow anchor'); };
+const normalize = value => String(value || '').trim();
+const toolbar = {nodeType: 1, closest: selector => selector === '[data-app-shell-focus-area="main"][role="toolbar"]' ? toolbar : null};
+const title = {
+  nodeType: 1,
+  closest: selector => selector.includes('role="toolbar"') || selector.includes('data-app-shell-titlebar-content') ? toolbar : null,
+  matches: () => false,
+};
+const hud = {nodeType: 1, closest: selector => selector === '#hud' ? hud : null};
+const unrelated = {nodeType: 1, closest: () => null};
+""" + functions + r"""
+handleLayoutMutations([{target: {nodeType: 3, parentElement: title}}]);
+assert.equal(invalidations, 1);
+handleLayoutMutations([{target: toolbar, removedNodes: [title]}]);
+assert.equal(invalidations, 2);
+handleLayoutMutations([{target: toolbar, addedNodes: [title]}]);
+assert.equal(invalidations, 3);
+handleLayoutMutations([{target: hud}, {target: unrelated}, {target: toolbar}]);
+assert.equal(invalidations, 3);
+"""
+    result = subprocess.run(
+        ["node", "--input-type=commonjs", "-"], input=script,
+        text=True, encoding="utf-8", capture_output=True, timeout=10,
+    )
+    assert result.returncode == 0, result.stderr
