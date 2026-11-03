@@ -16,6 +16,8 @@ ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_FOCUSED_TESTS = (
     "tests/test_renderer_contract_tool.py",
     "tests/test_validation_tool.py",
+    "tests/test_push_check.py",
+    "tests/test_speed_title_model.py",
     "tests/test_background_control.py",
     "tests/test_runtime_commands.py",
     "tests/test_settings_bridge.py",
@@ -101,7 +103,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    focused_tests = tuple(args.tests) or DEFAULT_FOCUSED_TESTS
+    # Feature-specific tests supplement the shared regression gate.
+    focused_tests = tuple(dict.fromkeys((*DEFAULT_FOCUSED_TESTS, *args.tests)))
     phases = build_phases(focused_tests=focused_tests, full=args.full)
     total = len(phases)
     print(f"Validation plan: {total} phase(s)")

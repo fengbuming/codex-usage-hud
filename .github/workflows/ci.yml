@@ -14,10 +14,35 @@ on:
   workflow_dispatch:
 
 jobs:
+  preflight:
+    name: Shared regression checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Install dependencies
+        run: python -m pip install pytest -e .
+      - name: Run shared validation gate
+        run: python tools/run_validation.py
+
   test:
+    needs: preflight
     name: test (${{ matrix.os }}, ${{ matrix.python-version }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 25
+    env:
+      QT_QPA_PLATFORM: offscreen
+      PYTHONFAULTHANDLER: "1"
 
     strategy:
       fail-fast: false
@@ -44,6 +69,11 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: pip
 
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
       - name: Install Linux system dependencies for Qt
         if: runner.os == 'Linux'
         run: |
@@ -62,9 +92,21 @@ jobs:
       - name: Run portable test suite
         run: >-
           python -m pytest -q
+          -m "not ui and not qt_ui"
           --ignore=tests/test_ui.py
           --ignore=tests/test_window_tracker.py
           --ignore=tests/test_pricing_sync.py
+          --ignore=tests/test_work_overlay_rendering.py
+
+      # Native Qt rendering uses its own interpreter so shutdown failures
+      # identify the relevant suite instead of obscuring portable test results.
+      - name: Run native overlay rendering tests
+        run: >-
+          python -m pytest -q
+          tests/test_work_overlay_rendering.py
+          tests/test_renderer_recovery.py
+          tests/test_desktop_overlay.py
+          -m qt_ui
 
       - name: Run portable pricing synchronization tests
         run: python -m pytest -q tests/test_pricing_sync.py

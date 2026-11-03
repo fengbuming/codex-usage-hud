@@ -1,0 +1,4 @@
+#!/bin/sh
+# Use the interpreter selected at installation, including venv paths with spaces.
+validation_python=$(git config --get hud.validationPython) || validation_python=python
+exec "$validation_python" tools/check_push.py "$@"

@@ -16,6 +16,7 @@ import pytest
 
 
 pytest.importorskip("PySide6")
+pytestmark = pytest.mark.qt_ui
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SRC_ROOT = PROJECT_ROOT / "src"
@@ -681,7 +682,6 @@ class WorkOverlayRenderingTests(unittest.TestCase):
         self.assertNotEqual(before, badge.grab().toImage())
 
     def test_footer_vehicle_animates_shared_art_and_stops_when_hidden(self) -> None:
-        from PySide6.QtTest import QTest
         from codex_usage_hud.renderer_assets.speed_titles import VEHICLE_ART
         from codex_usage_hud.speed_title_model import SPEED_TITLE_STEPS
         from codex_usage_hud.ui.work_overlay.qt_speed_icon import AnimatedSpeedIcon, vehicle_parts
@@ -709,12 +709,18 @@ class WorkOverlayRenderingTests(unittest.TestCase):
         self.shell.show()
         self._app.processEvents()
         icon = rendering._item_widgets[-1]["speed_icon"]
-        QTest.qWait(850)
+        # Drive the shared settling deadline directly; CI event-loop latency
+        # must not determine which vehicle this assertion observes.
+        deadline = icon._state.pending_at + 0.8
+        with patch("codex_usage_hud.ui.work_overlay.qt_speed_icon.time.monotonic", return_value=deadline):
+            icon._settle()
         self.assertEqual(icon._state.tier, 4)
         self.assertEqual(icon.toolTip(), "摩托车")
-        first = icon.grab().toImage()
-        QTest.qWait(120)
-        self.assertNotEqual(first, icon.grab().toImage())
+        with patch("codex_usage_hud.ui.work_overlay.qt_speed_icon.time.monotonic", return_value=icon._epoch + 0.1):
+            first = icon.grab().toImage()
+        with patch("codex_usage_hud.ui.work_overlay.qt_speed_icon.time.monotonic", return_value=icon._epoch + 0.3):
+            self.assertNotEqual(first, icon.grab().toImage())
+        self.assertTrue(icon._animation_timer.isActive())
         icon.hide()
         self.assertFalse(icon._animation_timer.isActive())
         self.assertFalse(icon._settle_timer.isActive())

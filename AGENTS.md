@@ -32,6 +32,16 @@ exhaustive, long-running, integration, end-to-end, packaging, or cross-platform
 test suites. Run only the smallest focused test set needed to validate behavior
 affected by the current task.
 
+## Push validation
+
+Before pushing, keep the shared gate in `tools/run_validation.py` passing and
+add focused tests for the changed behavior. Positional test paths supplement
+the shared baseline. Enable the committed-snapshot pre-push gate with
+`python tools/install_git_hooks.py` on each clone; do not bypass a failing hook.
+Renderer changes require reviewing and explicitly updating both derived
+contract files with `python tools/update_renderer_contract.py --update`.
+Local focused checks do not establish that the remote platform matrix passed.
+
 ## Verbose build output
 
 When running verbose build or packaging commands (for example `python tools/build_exe.py`, `python tools/build_installer.py`, PyInstaller, or Inno Setup), redirect full stdout/stderr to a log file and only surface a concise summary or log tail in the conversation. Do not stream full build logs into agent context unless explicitly requested.

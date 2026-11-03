@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import subprocess
 
 from codex_usage_hud.renderer_assets import manifest
@@ -17,6 +18,7 @@ from codex_usage_hud.renderer_assets.settings_support_panels import (
     TEXT as SETTINGS_SUPPORT_PANELS,
 )
 from codex_usage_hud.ui import renderer_script
+from codex_usage_hud.speed_title_model import SPEED_TITLE_STEPS
 
 
 def test_renderer_asset_manifest_is_ordered_and_byte_identical() -> None:
@@ -140,8 +142,9 @@ def test_output_speed_includes_compact_accessible_vehicle_icons() -> None:
 
     assert LAYOUT_MARKUP.count('data-field="outputSpeedIcon" role="img"') == 2
     assert "const speedTitleRedline = 2000;" in script
-    assert '["maglev", "磁浮列车", null]' in script
-    assert '["rocket", "火箭", null]' in script
+    # Check the shared data, independently of JSON whitespace or stale tiers.
+    declaration = script.split("const speedTitleSteps = ", 1)[1].split(";", 1)[0]
+    assert json.loads(declaration) == [list(step) for step in SPEED_TITLE_STEPS]
     assert 'node.dataset.speedThreshold = threshold === null ? "0.5"' in script
     assert '"待机：低于 0.5 tok/s 持续 3 秒"' in script
     assert "non-scaling-stroke" in script

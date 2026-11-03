@@ -64,6 +64,37 @@ failure instead of making you wait for the complete suite:
 python tools/run_validation.py
 ```
 
+Install the push gate once per clone using the Python environment that has
+pytest and the project dependencies installed:
+
+```powershell
+python tools/install_git_hooks.py
+```
+
+`git push` exports each outgoing tip into a temporary directory and runs the
+same shared validation there. Only committed files are checked; dirty or
+untracked files cannot hide a missing fix. Failed checks block the push and
+the temporary directory is removed. This local gate does not replace the
+Linux/Windows/macOS CI matrix. It never updates Renderer contracts for you:
+review the bundle change, run `python tools/update_renderer_contract.py --update`,
+and commit both derived files before pushing.
+
+Add feature-specific tests without dropping the shared baseline:
+
+```powershell
+python tools/run_validation.py tests/test_renderer_application_menu.py
+```
+
+To check an existing commit without pushing, run
+`python tools/check_push.py --revision HEAD`. Deleting a remote ref runs no tests.
+The installer preserves custom hook setups and reports a conflict instead of
+replacing them. Re-run it after changing your Python environment.
+
+CI first runs this shared gate, then starts the platform matrix. Real Qt
+helper tests carry `qt_ui` and run in a separate interpreter with the offscreen
+plugin, keeping their native lifecycle and shutdown diagnostics separate from
+portable tests. They are still required; the split does not discard failures.
+
 Use the direct pytest command when you specifically need the complete suite:
 
 ```powershell
