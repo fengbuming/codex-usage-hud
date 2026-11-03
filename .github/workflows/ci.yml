@@ -12,9 +12,45 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      qt_regression:
+        description: Compare Qt shutdown on Linux without running the full suite
+        type: boolean
+        default: false
 
 jobs:
+  qt-regression:
+    if: ${{ inputs.qt_regression }}
+    name: Qt shutdown (${{ matrix.qt-version }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        qt-version: ["6.11.1", "6.12.0"]
+    env:
+      QT_QPA_PLATFORM: offscreen
+      PYTHONFAULTHANDLER: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install Qt dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y libgl1 libglib2.0-0 libegl1 libxkbcommon0 libdbus-1-3 libxcb-cursor0
+          python -m pip install pytest -e . PySide6==${{ matrix.qt-version }}
+      - name: Run native regression tests including interpreter shutdown
+        run: >-
+          python -m pytest -q
+          tests/test_work_overlay_rendering.py
+          tests/test_renderer_recovery.py
+          tests/test_desktop_overlay.py
+          -m qt_ui
+
   preflight:
+    if: ${{ !inputs.qt_regression }}
     name: Shared regression checks
     runs-on: ubuntu-latest
     timeout-minutes: 10
