@@ -57,6 +57,8 @@ def work_item_to_overlay_dict(item: WorkStatusItem) -> dict[str, object]:
         "outputTokensPerSecond": getattr(item, "output_tokens_per_second", None),
         "outputSpeedMode": getattr(item, "output_speed_mode", "idle"),
         "sessionOutputTokensPerSecond": getattr(item, "session_output_tokens_per_second", None),
+        "sessionOutputMinTokensPerSecond": getattr(item, "session_output_min_tokens_per_second", None),
+        "sessionOutputMaxTokensPerSecond": getattr(item, "session_output_max_tokens_per_second", None),
         "workdirName": item.workdir_name,
         "source": item.source,
         "workdir": item.workdir,
@@ -312,11 +314,13 @@ def _merge_stable_item_metadata(
         or cached_task_index == current_task_index
     ) and (cached_task is None or current_task is None or cached_task == current_task)
     if same_task:
-        if (
-            getattr(current, "session_output_tokens_per_second", None) is None
-            and getattr(cached, "session_output_tokens_per_second", None) is not None
+        for field in (
+            "session_output_tokens_per_second",
+            "session_output_min_tokens_per_second",
+            "session_output_max_tokens_per_second",
         ):
-            updates["session_output_tokens_per_second"] = cached.session_output_tokens_per_second
+            if getattr(current, field, None) is None and getattr(cached, field, None) is not None:
+                updates[field] = getattr(cached, field)
         updates["round_index"] = max(
             0,
             int(getattr(cached, "round_index", 0) or 0),

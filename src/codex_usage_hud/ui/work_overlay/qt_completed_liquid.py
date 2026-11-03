@@ -15,6 +15,13 @@ from ...output_speed import positive_output_speed
 
 
 COMPLETED_LIQUID_REVEAL_SECONDS = 0.9
+COMPLETED_LIQUID_RISE_SECONDS = 1.4
+COMPLETED_LIQUID_PEAK_SECONDS = 0.3
+COMPLETED_LIQUID_SETTLE_SECONDS = 1.1
+COMPLETED_LIQUID_SWEEP_SECONDS = (
+    COMPLETED_LIQUID_REVEAL_SECONDS + COMPLETED_LIQUID_RISE_SECONDS
+    + COMPLETED_LIQUID_PEAK_SECONDS + COMPLETED_LIQUID_SETTLE_SECONDS
+)
 # Matches the selected preview; vehicle tiers retain their independent scale.
 COMPLETED_LIQUID_REDLINE = 400.0
 _COLOR_STOPS = (
@@ -36,6 +43,32 @@ def _alpha(color: QColor, opacity: float) -> QColor:
     return result
 
 
+def completed_liquid_heat(speed: object) -> float:
+    return min(1.0, ((positive_output_speed(speed) or 0.0) / COMPLETED_LIQUID_REDLINE) ** 0.6)
+
+
+def completed_liquid_intro_speed(
+    average: object, minimum: object, maximum: object, elapsed: float,
+) -> float | None:
+    """Reveal at the session minimum, crest at its maximum, then settle."""
+    mean = positive_output_speed(average)
+    if mean is None:
+        return None
+    low = min(mean, positive_output_speed(minimum) or mean)
+    high = max(mean, positive_output_speed(maximum) or mean)
+    elapsed = max(0.0, elapsed - COMPLETED_LIQUID_REVEAL_SECONDS)
+    if elapsed <= COMPLETED_LIQUID_RISE_SECONDS:
+        progress = elapsed / COMPLETED_LIQUID_RISE_SECONDS
+        eased = progress * progress * (3.0 - 2.0 * progress)
+        return low + (high - low) * eased
+    elapsed -= COMPLETED_LIQUID_RISE_SECONDS + COMPLETED_LIQUID_PEAK_SECONDS
+    if elapsed <= 0.0:
+        return high
+    progress = min(1.0, elapsed / COMPLETED_LIQUID_SETTLE_SECONDS)
+    eased = progress * progress * (3.0 - 2.0 * progress)
+    return high + (mean - high) * eased
+
+
 def paint_completed_liquid(
     painter: QPainter,
     rect: QRectF,
@@ -43,12 +76,14 @@ def paint_completed_liquid(
     *,
     elapsed: float = COMPLETED_LIQUID_REVEAL_SECONDS,
     light: bool = False,
+    phase: float | None = None,
+    bubble_phase: float | None = None,
 ) -> None:
     """Draw liquid below the readout, clipped to the original circular badge."""
     rate = positive_output_speed(speed)
     if rate is None:
         return
-    heat = min(1.0, (rate / COMPLETED_LIQUID_REDLINE) ** 0.6)
+    heat = completed_liquid_heat(rate)
     color = QColor(_COLOR_STOPS[-1][1])
     for (low, first), (high, second) in zip(_COLOR_STOPS, _COLOR_STOPS[1:]):
         if heat <= high:
@@ -61,7 +96,8 @@ def paint_completed_liquid(
     scale = rect.width() / 168.0
     level = inner.bottom() - inner.height() * (0.12 + 0.74 * heat * reveal)
     amplitude = (1.4 + 5.2 * heat) * scale
-    phase = elapsed * (1.5 + 3.0 * heat)
+    phase = elapsed * (1.5 + 3.0 * heat) if phase is None else phase
+    bubble_phase = elapsed * (0.22 + 0.16 * heat) if bubble_phase is None else bubble_phase
     clip = QPainterPath()
     clip.addEllipse(inner)
     painter.save()
@@ -95,7 +131,7 @@ def paint_completed_liquid(
         painter.drawPath(surface)
 
     for index in range(11 + round(heat * 7)):
-        progress = (elapsed * (0.22 + 0.16 * heat) + index * 0.177) % 1.0
+        progress = (bubble_phase + index * 0.177) % 1.0
         x = center.x() + math.sin(index * 13.7) * 60.0 * scale
         y = inner.bottom() - progress * (inner.bottom() - level + 14.0 * scale)
         if y < level + 2.0 * scale:

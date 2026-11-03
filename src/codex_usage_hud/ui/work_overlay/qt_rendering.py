@@ -217,6 +217,11 @@ class OverlayRenderingMixin:
         )
 
     def _clear_shell(self) -> None:
+        self._rebuild_badge_animation_states = {
+            str(record.get("item_id") or ""): record["badge"].liquid_animation_state()
+            for record in self._item_widgets
+            if isinstance(record.get("badge"), CompletedBadgeWidget)
+        }
         self._close_anchors.clear()
         self._workdir_anchors.clear()
         self._completed_check_anchors.clear()
@@ -792,6 +797,9 @@ class OverlayRenderingMixin:
             animate_intro=animate_intro,
             theme_tokens=self._theme_tokens,
         )
+        previous_animation = getattr(self, "_rebuild_badge_animation_states", {}).pop(item_id, None)
+        if previous_animation is not None:
+            badge.restore_liquid_animation(previous_animation)
         if item_id:
             self._settled_completed_intro_ids.add(item_id)
         hover_anchor = QWidget(badge)
@@ -809,8 +817,8 @@ class OverlayRenderingMixin:
         workdir_anchor.show()
         check_anchor = QWidget(badge)
         check_anchor.setAttribute(widget_attrs.WA_TransparentForMouseEvents, True)
-        check_anchor.setFixedSize(68, 56)
-        check_anchor.move(50, 18)
+        check_anchor.setFixedSize(48, 32)
+        check_anchor.move(60, 22)
         check_anchor.show()
         record = {
             "kind": "completed",
@@ -1722,6 +1730,9 @@ class OverlayRenderingMixin:
         footer_layout.setContentsMargins(0, 0, 0, 0)
         footer_layout.setSpacing(8)
 
+        speed_icon = AnimatedSpeedIcon(footer_container)
+        footer_layout.addWidget(speed_icon, 0, alignment.AlignVCenter)
+
         status_label = ShimmerTextLabel("", footer_container, base_color="#8492A6")
         status_label.setAttribute(widget_attrs.WA_TransparentForMouseEvents, True)
         status_label.setFont(QFont("Microsoft YaHei UI", 8, QFont.Weight.Bold))
@@ -1776,6 +1787,7 @@ class OverlayRenderingMixin:
             "detail": detail,
             "rest_hint": rest_hint,
             "footer_container": footer_container,
+            "speed_icon": speed_icon,
             "status_label": status_label,
             "round_badge": round_badge,
             "workdir_label": workdir_label,

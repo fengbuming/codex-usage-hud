@@ -527,6 +527,119 @@ class WorkOverlayRenderingTests(unittest.TestCase):
         self.assertTrue(badge._timer.isActive())
         self.assertEqual(badge._liquid_started_at, started)
 
+    def test_completed_liquid_sweeps_min_to_max_then_mean_once_and_pauses(self) -> None:
+        from codex_usage_hud.ui.work_overlay.qt_completed_liquid import (
+            COMPLETED_LIQUID_REVEAL_SECONDS,
+            COMPLETED_LIQUID_RISE_SECONDS,
+            COMPLETED_LIQUID_PEAK_SECONDS,
+            COMPLETED_LIQUID_SWEEP_SECONDS,
+        )
+        from codex_usage_hud.ui.work_overlay.qt_visuals import CompletedBadgeWidget
+
+        clock = [1000.0]
+        item = {
+            "id": "sweep", "sessionOutputTokensPerSecond": 89.5,
+            "sessionOutputMinTokensPerSecond": 10.0,
+            "sessionOutputMaxTokensPerSecond": 240.0,
+        }
+        with patch("codex_usage_hud.ui.work_overlay.qt_visuals.time.monotonic", side_effect=lambda: clock[0]):
+            badge = CompletedBadgeWidget(item, self.shell, animate_intro=False, animate_speed_intro=True)
+            self.shell.show()
+            badge.show()
+            self._app.processEvents()
+            self.assertEqual(badge._liquid_speed(), 10.0)
+            clock[0] += COMPLETED_LIQUID_REVEAL_SECONDS + COMPLETED_LIQUID_RISE_SECONDS / 2
+            badge._advance()
+            self.assertAlmostEqual(badge._liquid_speed(), 125.0)
+            phase = badge._liquid_phase
+            badge.set_item(dict(item))
+            badge.hide()
+            clock[0] += 20
+            badge.show()
+            self.assertAlmostEqual(badge._liquid_speed(), 125.0)
+            clock[0] += COMPLETED_LIQUID_RISE_SECONDS / 2
+            badge._advance()
+            self.assertAlmostEqual(badge._liquid_speed(), 240.0)
+            clock[0] += COMPLETED_LIQUID_PEAK_SECONDS
+            badge._advance()
+            self.assertAlmostEqual(badge._liquid_speed(), 240.0)
+            clock[0] += COMPLETED_LIQUID_SWEEP_SECONDS
+            badge._advance()
+            self.assertEqual(badge._liquid_speed(), 89.5)
+            self.assertGreater(badge._liquid_phase, phase)
+            self.assertIn("最终均速 89.5 tok/s", badge.accessibleName())
+            self.assertIn("最低 10.0 tok/s", badge.accessibleName())
+            self.assertIn("最高 240 tok/s", badge.accessibleName())
+
+    def test_completed_liquid_without_extremes_uses_mean_without_invented_speeds(self) -> None:
+        from codex_usage_hud.ui.work_overlay.qt_completed_liquid import completed_liquid_intro_speed
+
+        for elapsed in (0, 0.9, 1.6, 2.3, 3, 4, 100):
+            self.assertEqual(completed_liquid_intro_speed(40, None, None, elapsed), 40)
+            self.assertIsNone(completed_liquid_intro_speed(None, 10, 240, elapsed))
+
+    def test_card_to_completed_runs_continuous_morph_and_preserves_speed_intro(self) -> None:
+        from codex_usage_hud.ui.work_overlay.constants import (
+            WORK_OVERLAY_TRANSITION_SHRINK_MS,
+            WORK_OVERLAY_TRANSITION_PAUSE_MS,
+        )
+        from codex_usage_hud.ui.work_overlay.qt_visuals import CardToCompletedMorphWidget
+
+        item = {
+            "id": "morph", "status": "running", "title": "Morph",
+            "taskStartedAt": "2026-11-03T00:00:00Z", "taskIndex": 1,
+            "lastText": "Working", "sessionOutputTokensPerSecond": 89.5,
+            "sessionOutputMinTokensPerSecond": 10.0,
+            "sessionOutputMaxTokensPerSecond": 240.0,
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            window = OverlayWindow(
+                app=self._app, path=Path(directory) / "state.json", read_state=lambda: {},
+                owner_pid=None, process_exists=lambda _: True, stale_seconds=20,
+                item_limit=2, overlay_alpha=1, hover_alpha=1,
+                heartbeat_path=Path(directory) / "heartbeat", header_title_limit=28,
+            )
+            try:
+                window.render_items([item])
+                self._app.processEvents()
+                # Also exercise the reverse transition's temporary card schema.
+                reverse_card = window._build_transition_card_widget(item)
+                reverse_card.deleteLater()
+                window.render_items([{**item, "status": "recent"}])
+                self.assertTrue(window._transition_in_progress)
+                morph = window._transition_card_widget
+                self.assertIsInstance(morph, CardToCompletedMorphWidget)
+                start_width = morph.width()
+                phase = window._transition_animation_group
+                phase.setCurrentTime(WORK_OVERLAY_TRANSITION_SHRINK_MS // 2)
+                self.assertGreater(morph._morph_progress, 0)
+                self.assertLess(morph._morph_progress, 1)
+                self.assertLess(morph.width(), start_width)
+                self.assertGreater(morph.width(), morph.height())
+                self.assertEqual(morph.graphicsEffect().opacity(), 1)
+                phase.setCurrentTime(WORK_OVERLAY_TRANSITION_SHRINK_MS + WORK_OVERLAY_TRANSITION_PAUSE_MS)
+                badge = window._transition_badge_widget
+                self.assertEqual(badge._liquid_speed(), 10.0)
+                flight = window._transition_animation_group
+                self.assertIsNot(flight, phase)
+                flight.setCurrentTime(flight.duration())
+                self.assertFalse(window._transition_in_progress)
+                settled = window._record_widget_for_kind("morph", "completed")
+                self.assertAlmostEqual(settled._liquid_speed(), 10.0, places=2)
+                self.assertEqual(settled._progress, 1.0)
+                settled._sweep_elapsed = 1.6
+                animation_state = settled.liquid_animation_state()
+                window._last_payload_signature = ""
+                window._last_structure_signature = ""
+                window.render_items([{**item, "status": "recent"}])
+                rebuilt = window._record_widget_for_kind("morph", "completed")
+                self.assertIsNot(rebuilt, settled)
+                self.assertEqual(rebuilt.liquid_animation_state(), animation_state)
+            finally:
+                window.close()
+                window.deleteLater()
+                self._app.processEvents()
+
     def test_completed_liquid_retains_bounds_and_distinguishes_final_speed(self) -> None:
         from codex_usage_hud.ui.work_overlay.qt_visuals import CompletedBadgeWidget
 

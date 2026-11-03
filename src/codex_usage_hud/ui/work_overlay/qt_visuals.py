@@ -20,6 +20,7 @@ from PySide6.QtGui import (
     QPainter,
     QPainterPath,
     QPen,
+    QPixmap,
     QRadialGradient,
     QTextLayout,
     QTextOption,
@@ -27,7 +28,13 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import QSizePolicy, QWidget
 
 from ...output_speed import format_output_speed, positive_output_speed
-from .qt_completed_liquid import COMPLETED_LIQUID_REVEAL_SECONDS, paint_completed_liquid
+from .qt_completed_liquid import (
+    COMPLETED_LIQUID_REVEAL_SECONDS,
+    COMPLETED_LIQUID_SWEEP_SECONDS,
+    completed_liquid_heat,
+    completed_liquid_intro_speed,
+    paint_completed_liquid,
+)
 from .constants import (
     WORK_OVERLAY_COMPLETED_BADGE_ANIMATION_MS,
     WORK_OVERLAY_COMPLETED_BADGE_ROW_HEIGHT,
@@ -657,6 +664,52 @@ class EnergyRingAnnihilationWidget(QWidget):
             painter.setPen(QPen(QColor(0, 191, 255, delayed_alpha), 1.5))
             painter.drawEllipse(center, delayed_outer, delayed_outer)
 
+class CardToCompletedMorphWidget(QWidget):
+    """One clipped silhouette for the live card's rectangle-to-circle morph."""
+
+    def __init__(
+        self, snapshot: QPixmap, parent: QWidget,
+        *, theme_tokens: Mapping[str, object] | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self._snapshot = snapshot
+        self._palette = _completed_badge_palette(_resolved_overlay_theme(theme_tokens))
+        self._morph_progress = 0.0
+        self.setAttribute(widget_attrs.WA_TransparentForMouseEvents, True)
+        self.setAttribute(widget_attrs.WA_TranslucentBackground, True)
+
+    def _get_morph_progress(self) -> float:
+        return self._morph_progress
+
+    def _set_morph_progress(self, value: float) -> None:
+        self._morph_progress = _clamp01(value)
+        self.update()
+
+    morphProgress = Property(float, _get_morph_progress, _set_morph_progress)
+
+    def paintEvent(self, event: object) -> None:
+        del event
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        rect = QRectF(self.rect()).adjusted(0.7, 0.7, -0.7, -0.7)
+        progress = _ease_out_cubic(self._morph_progress)
+        radius = 10.0 + (min(rect.width(), rect.height()) / 2.0 - 10.0) * progress
+        clip = QPainterPath()
+        clip.addRoundedRect(rect, radius, radius)
+        gradient = QLinearGradient(rect.topLeft(), rect.bottomRight())
+        for position, key in ((0.0, "fillStart"), (0.5, "fillMid"), (1.0, "fillEnd")):
+            gradient.setColorAt(position, QColor(self._palette[key]))
+        painter.fillPath(clip, gradient)
+        painter.save()
+        painter.setClipPath(clip)
+        painter.setOpacity(1.0 - _clamp01(self._morph_progress / 0.7))
+        painter.drawPixmap(self.rect(), self._snapshot)
+        painter.restore()
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.setPen(QPen(QColor(self._palette["border"]), 1.4))
+        painter.drawPath(clip)
+
+
 class CompletedBadgeWidget(QWidget):
     """Animated circular summary for finished work."""
 
@@ -666,6 +719,7 @@ class CompletedBadgeWidget(QWidget):
         parent: QWidget | None = None,
         *,
         animate_intro: bool = True,
+        animate_speed_intro: bool | None = None,
         theme_tokens: Mapping[str, object] | None = None,
     ) -> None:
         super().__init__(parent)
@@ -675,7 +729,13 @@ class CompletedBadgeWidget(QWidget):
         self._progress = 0.0 if animate_intro else 1.0
         self._session_speed = positive_output_speed(item.get("sessionOutputTokensPerSecond"))
         self._liquid_started_at: float | None = None
-        self._liquid_elapsed = 0.0 if animate_intro else COMPLETED_LIQUID_REVEAL_SECONDS
+        self._liquid_elapsed = 0.0 if animate_intro or animate_speed_intro else COMPLETED_LIQUID_REVEAL_SECONDS
+        self._sweep_elapsed = 0.0 if (
+            animate_intro if animate_speed_intro is None else animate_speed_intro
+        ) else COMPLETED_LIQUID_SWEEP_SECONDS
+        heat = completed_liquid_heat(self._session_speed)
+        self._liquid_phase = self._liquid_elapsed * (1.5 + 3.0 * heat)
+        self._bubble_phase = self._liquid_elapsed * (0.22 + 0.16 * heat)
         self._switch_pending = False
         self._switch_pending_started_at = 0.0
         self._switch_pending_completed = False
@@ -700,6 +760,8 @@ class CompletedBadgeWidget(QWidget):
         if next_speed is not None and (self._session_speed is None or task_changed):
             self._liquid_started_at = None
             self._liquid_elapsed = 0.0
+            self._sweep_elapsed = 0.0
+            self._liquid_phase = self._bubble_phase = 0.0
         elif next_speed is None:
             self._liquid_started_at = None
             self._liquid_elapsed = 0.0
@@ -709,9 +771,43 @@ class CompletedBadgeWidget(QWidget):
         self._sync_animation_timer()
         self.update()
 
+    def start_speed_intro(self) -> None:
+        # The orb is already revealing during the morph. Start its speed
+        # sweep without restarting the waves at the handoff.
+        self._sweep_elapsed = 0.0
+        self._sync_animation_timer()
+        self.update()
+
+    def _liquid_speed(self) -> float | None:
+        return completed_liquid_intro_speed(
+            self._session_speed,
+            self._item.get("sessionOutputMinTokensPerSecond"),
+            self._item.get("sessionOutputMaxTokensPerSecond"),
+            self._sweep_elapsed,
+        )
+
+    def liquid_animation_state(self) -> tuple[object, ...]:
+        return (
+            tuple(self._item.get(key) for key in ("id", "taskStartedAt", "taskIndex")),
+            self._liquid_elapsed, self._sweep_elapsed, self._liquid_phase, self._bubble_phase,
+        )
+
+    def restore_liquid_animation(self, state: tuple[object, ...]) -> None:
+        if state[0] != tuple(self._item.get(key) for key in ("id", "taskStartedAt", "taskIndex")):
+            return
+        self._liquid_elapsed, self._sweep_elapsed, self._liquid_phase, self._bubble_phase = state[1:]
+        self._liquid_started_at = None
+        self._sync_animation_timer()
+        self.update()
+
     def _speed_accessible_name(self) -> str:
         speed = format_output_speed(self._session_speed) or "— tok/s"
-        return f"{self._item.get('title') or 'Codex 工作'}，已完成，最终均速 {speed}"
+        minimum = format_output_speed(self._item.get("sessionOutputMinTokensPerSecond")) or "— tok/s"
+        maximum = format_output_speed(self._item.get("sessionOutputMaxTokensPerSecond")) or "— tok/s"
+        return (
+            f"{self._item.get('title') or 'Codex 工作'}，已完成，"
+            f"最低 {minimum}，最终均速 {speed}，最高 {maximum}"
+        )
 
     def _sync_animation_timer(self) -> None:
         active = self.isVisible() and (
@@ -781,7 +877,16 @@ class CompletedBadgeWidget(QWidget):
             self._progress = min(1.0, elapsed_ms / WORK_OVERLAY_COMPLETED_BADGE_ANIMATION_MS)
         self._sync_animation_timer()
         if self._liquid_started_at is not None and self.isVisible():
+            previous_elapsed = self._liquid_elapsed
             self._liquid_elapsed = max(0.0, now - self._liquid_started_at)
+            dt = max(0.0, self._liquid_elapsed - previous_elapsed)
+            if self._progress >= 1.0:
+                self._sweep_elapsed = min(COMPLETED_LIQUID_SWEEP_SECONDS, self._sweep_elapsed + dt)
+            heat = completed_liquid_heat(self._liquid_speed())
+            # Integrate phase so decelerating from peak to mean never jumps
+            # or reverses the waves and rising bubbles.
+            self._liquid_phase += dt * (1.5 + 3.0 * heat)
+            self._bubble_phase += dt * (0.22 + 0.16 * heat)
         if self.isVisible():
             self.update()
 
@@ -858,9 +963,11 @@ class CompletedBadgeWidget(QWidget):
         center = QPointF(end_rect.center())
 
         paint_completed_liquid(
-            painter, end_rect, self._session_speed,
+            painter, end_rect, self._liquid_speed(),
             elapsed=self._liquid_elapsed,
             light=QColor(palette["fillMid"]).lightnessF() > 0.5,
+            phase=self._liquid_phase,
+            bubble_phase=self._bubble_phase,
         )
 
         outer_pen = QPen(QColor(palette["ring"]), 2.0)
@@ -908,27 +1015,44 @@ class CompletedBadgeWidget(QWidget):
                 compact_spacing=True,
             )
 
-        check_font = QFont("Segoe UI Symbol", 28, QFont.Weight.Bold)
+        check_font = QFont("Segoe UI Symbol", 20, QFont.Weight.Bold)
         painter.setFont(check_font)
         painter.setPen(QColor(palette["checkText"]))
         painter.drawText(
-            QRectF(center.x() - 34.0, center.y() - 61.0, 68.0, 40.0),
+            QRectF(center.x() - 34.0, center.y() - 57.0, 68.0, 29.0),
             alignment.AlignCenter,
             "✓",
         )
 
-        painter.setFont(QFont("Consolas", 12, QFont.Weight.Bold))
+        painter.setFont(QFont("Microsoft YaHei UI", 6))
+        painter.setPen(QColor(palette["elapsedText"]))
+        for offset, label in ((-65.0, "最低"), (29.0, "最高")):
+            painter.drawText(
+                QRectF(center.x() + offset, center.y() - 30.0, 36.0, 12.0),
+                alignment.AlignCenter, label,
+            )
         painter.setPen(QColor(palette["titleText"]))
+        for value, offset, width, top, height, point_size in (
+            (self._item.get("sessionOutputMinTokensPerSecond"), -65.0, 36.0, -16.0, 16.0, 9),
+            (self._session_speed, -29.0, 58.0, -29.0, 27.0, 16),
+            (self._item.get("sessionOutputMaxTokensPerSecond"), 29.0, 36.0, -16.0, 16.0, 9),
+        ):
+            self._draw_speed_number(
+                painter, value,
+                QRectF(center.x() + offset, center.y() + top, width, height),
+                point_size=point_size,
+            )
+        painter.setFont(QFont("Microsoft YaHei UI", 6))
+        painter.setPen(QColor(palette["elapsedText"]))
         painter.drawText(
-            QRectF(center.x() - 72.0, center.y() - 17.0, 144.0, 24.0),
-            alignment.AlignCenter,
-            format_output_speed(self._session_speed) or "— tok/s",
+            QRectF(center.x() - 30.0, center.y() - 2.0, 60.0, 12.0),
+            alignment.AlignCenter, "平均 tok/s",
         )
         elapsed = str(self._item.get("elapsedText") or "已处理 --").strip()
-        elapsed_rect = QRectF(center.x() - 66.0, center.y() + 7.0, 132.0, 14.0)
+        elapsed_rect = QRectF(center.x() - 62.0, center.y() + 12.0, 124.0, 12.0)
         caption_font = QFont("Microsoft YaHei UI", 7)
         caption = self._arc_limited_text(
-            f"最终均速 · {_compact_work_text(elapsed, 18)}", caption_font, elapsed_rect.width() - 4.0,
+            _compact_work_text(elapsed, 18), caption_font, elapsed_rect.width() - 4.0,
         )
         metrics = QFontMetrics(caption_font)
         caption_path = QPainterPath()
@@ -953,14 +1077,14 @@ class CompletedBadgeWidget(QWidget):
         box_height = 23.0
         spacing = 4.0
         start_x = center.x() - ((box_width * 3.0 + spacing * 2.0) / 2.0)
-        y = center.y() + 24.0
+        y = center.y() + 26.0
         for index, (label, value) in enumerate(stats):
             box = QRectF(start_x + index * (box_width + spacing), y, box_width, box_height)
             stat_border = QColor(palette["statBoxBorder"])
-            stat_border.setAlpha(220)
+            stat_border.setAlpha(130)
             painter.setPen(QPen(stat_border, 0.8))
             stat_fill = QColor(palette["statBoxFill"])
-            stat_fill.setAlpha(235)
+            stat_fill.setAlpha(105)
             painter.setBrush(stat_fill)
             painter.drawRoundedRect(box, 6.0, 6.0)
             painter.setPen(QColor(palette["statValue"]))
@@ -974,7 +1098,7 @@ class CompletedBadgeWidget(QWidget):
             painter.setPen(QColor(palette["workdirText"]))
             painter.setFont(QFont("Microsoft YaHei UI", 6, QFont.Weight.DemiBold))
             painter.drawText(
-                QRectF(center.x() - 60.0, center.y() + 50.0, 120.0, 12.0),
+                QRectF(center.x() - 60.0, center.y() + 53.0, 120.0, 12.0),
                 alignment.AlignCenter,
                 f"[{profile}]",
             )
@@ -987,6 +1111,19 @@ class CompletedBadgeWidget(QWidget):
                 completed=self._switch_pending_completed,
                 completed_at=self._switch_pending_completed_at,
             )
+
+    def _draw_speed_number(
+        self, painter: QPainter, value: object, rect: QRectF, *, point_size: int,
+    ) -> None:
+        number = format_output_speed(value).removesuffix(" tok/s") or "—"
+        font = QFont("Consolas", point_size, QFont.Weight.Bold)
+        while font.pointSizeF() > 6.0 and QFontMetrics(font).horizontalAdvance(number) > rect.width() - 2.0:
+            font.setPointSizeF(font.pointSizeF() - 0.5)
+        painter.setFont(font)
+        painter.drawText(
+            rect, alignment.AlignCenter,
+            QFontMetrics(font).elidedText(number, Qt.TextElideMode.ElideMiddle, int(rect.width() - 2.0)),
+        )
 
     def _arc_limited_text(self, text: str, font: QFont, max_width: float) -> str:
         compact = " ".join(str(text or "").split())
@@ -1280,5 +1417,6 @@ __all__ = [
     'ShimmerTextLabel',
     'CardSwitchPendingOverlayWidget',
     'EnergyRingAnnihilationWidget',
+    'CardToCompletedMorphWidget',
     'CompletedBadgeWidget'
 ]

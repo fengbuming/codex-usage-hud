@@ -45,7 +45,7 @@ from .geometry import (
     _transition_total_ms,
 )
 from .model import _item_id, _item_is_completed, _mark_item_dismissed
-from .qt_visuals import CompletedBadgeWidget, EnergyRingAnnihilationWidget
+from .qt_visuals import CardToCompletedMorphWidget, CompletedBadgeWidget, EnergyRingAnnihilationWidget
 
 widget_attrs = Qt.WidgetAttribute
 
@@ -536,6 +536,7 @@ class OverlayTransitionsMixin:
                     item,
                     self._shell,
                     animate_intro=False,
+                    animate_speed_intro=True,
                     theme_tokens=self._theme_tokens,
                 )
                 badge.setAttribute(widget_attrs.WA_TransparentForMouseEvents, True)
@@ -649,11 +650,12 @@ class OverlayTransitionsMixin:
                         [source_circle, target_circle],
                     )
 
+                    source_snapshot = source_widget.grab()
                     source_widget.hide()
                     self._transition_hidden_widget = source_widget
                     self._transition_source_widget = source_widget
-                    transition_card = self._build_transition_card_widget(
-                        self._transition_item_payload(item_id, old_items, new_items)
+                    transition_card = CardToCompletedMorphWidget(
+                        source_snapshot, self._shell, theme_tokens=self._theme_tokens,
                     )
                     transition_card.setGeometry(self._qrect_from_rectf(source_rect))
                     transition_card.show()
@@ -708,6 +710,11 @@ class OverlayTransitionsMixin:
                     transition_card.setGraphicsEffect(card_effect)
 
                     phase = QParallelAnimationGroup(self)
+                    morph = QPropertyAnimation(transition_card, b"morphProgress")
+                    morph.setStartValue(0.0)
+                    morph.setEndValue(1.0)
+                    morph.setDuration(WORK_OVERLAY_TRANSITION_SHRINK_MS)
+                    phase.addAnimation(morph)
                     phase.addAnimation(
                         self._animate_widget_geometry(
                             transition_card,
@@ -716,22 +723,14 @@ class OverlayTransitionsMixin:
                             QEasingCurve.Type.OutCubic,
                         )
                     )
-                    phase.addAnimation(
-                        self._animate_effect_opacity(
-                            card_effect,
-                            1.0,
-                            0.0,
-                            WORK_OVERLAY_TRANSITION_SHRINK_MS,
-                        )
-                    )
-                    phase.addAnimation(
-                        self._animate_effect_opacity(
-                            badge_effect,
-                            0.0,
-                            1.0,
-                            WORK_OVERLAY_TRANSITION_SHRINK_MS,
-                        )
-                    )
+                    # Keep the shrinking rounded silhouette opaque until it
+                    # is nearly circular, then hand off to the orb readout.
+                    handoff_ms = max(1, int(WORK_OVERLAY_TRANSITION_SHRINK_MS * 0.35))
+                    for effect, start, end in ((card_effect, 1.0, 0.0), (badge_effect, 0.0, 1.0)):
+                        handoff = QSequentialAnimationGroup(self)
+                        handoff.addAnimation(QPauseAnimation(WORK_OVERLAY_TRANSITION_SHRINK_MS - handoff_ms))
+                        handoff.addAnimation(self._animate_effect_opacity(effect, start, end, handoff_ms))
+                        phase.addAnimation(handoff)
                     self._add_noop_animation(phase, duration_ms)
                     phase.finished.connect(
                         lambda: self._start_card_to_completed_fly_phase(
@@ -769,6 +768,8 @@ class OverlayTransitionsMixin:
                     del clicked_record
                     transition_card.hide()
                     transition_badge.setGeometry(source_circle)
+                    if isinstance(transition_badge, CompletedBadgeWidget):
+                        transition_badge.start_speed_intro()
                     transition_badge.show()
                     transition_badge.raise_()
                     effect = transition_badge.graphicsEffect()
@@ -884,6 +885,13 @@ class OverlayTransitionsMixin:
 
     def _end_transition(self) -> None:
                 finished_transition_type = self._transition_type
+                finished_item_id = self._transition_item_id
+                liquid_state = (
+                    self._transition_badge_widget.liquid_animation_state()
+                    if finished_transition_type == "card_to_completed"
+                    and isinstance(self._transition_badge_widget, CompletedBadgeWidget)
+                    else None
+                )
                 completed_ids = {
                     _item_id(item)
                     for item in self._raw_items
@@ -930,6 +938,10 @@ class OverlayTransitionsMixin:
                 self._last_payload_signature = ""
                 self._last_structure_signature = ""
                 self.render_items(self._raw_items)
+                if liquid_state is not None:
+                    badge = self._record_widget_for_kind(finished_item_id, "completed")
+                    if isinstance(badge, CompletedBadgeWidget):
+                        badge.restore_liquid_animation(liquid_state)
 __all__ = [
     "OverlayTransitionsMixin",
 ]

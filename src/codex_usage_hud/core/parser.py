@@ -899,6 +899,8 @@ class WorkStatusItem:
     output_tokens_per_second: float | None = None
     output_speed_mode: str = "idle"
     session_output_tokens_per_second: float | None = None
+    session_output_min_tokens_per_second: float | None = None
+    session_output_max_tokens_per_second: float | None = None
 
 
 @dataclass
@@ -1010,6 +1012,8 @@ class ParsedSession:
     request_history: list[RequestRound] = field(default_factory=list)
     session_request_history: list[RequestRound] = field(default_factory=list)
     session_output_tokens_per_second: float | None = None
+    session_output_min_tokens_per_second: float | None = None
+    session_output_max_tokens_per_second: float | None = None
     activity_tasks: list[TaskHistory] = field(default_factory=list)
     activity: Activity = field(default_factory=Activity)
     activity_steps: list[ActivityStep] = field(default_factory=list)
@@ -1508,6 +1512,8 @@ class JsonlSessionParser:
         """
         request = snapshot.request
         snapshot.session_output_tokens_per_second = None
+        snapshot.session_output_min_tokens_per_second = None
+        snapshot.session_output_max_tokens_per_second = None
         started_at = None
         output_at = None
         tool_finished_at = None
@@ -1638,6 +1644,11 @@ class JsonlSessionParser:
                 sum(sample[1] for sample in session_samples)
                 / sum(sample[2] for sample in session_samples)
             )
+            # Use the same valid response samples as the pooled mean; tool
+            # waits, mirrored usage and time between user turns stay excluded.
+            rates = [sample[1] / sample[2] for sample in session_samples]
+            snapshot.session_output_min_tokens_per_second = min(rates)
+            snapshot.session_output_max_tokens_per_second = max(rates)
         if request.source != "jsonl" or request.status not in {"running", "confirmed"}:
             return
         cutoff = anchor - SseRequestStateMachine.RECENT_SPEED_WINDOW

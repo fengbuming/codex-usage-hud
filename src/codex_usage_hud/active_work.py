@@ -953,6 +953,12 @@ def _work_item_from_snapshot(
         session_output_tokens_per_second=positive_output_speed(
             snapshot.session_output_tokens_per_second
         ),
+        session_output_min_tokens_per_second=positive_output_speed(
+            snapshot.session_output_min_tokens_per_second
+        ),
+        session_output_max_tokens_per_second=positive_output_speed(
+            snapshot.session_output_max_tokens_per_second
+        ),
     )
 
 

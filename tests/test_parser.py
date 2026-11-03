@@ -126,6 +126,8 @@ class JsonlSessionParserTests(unittest.TestCase):
         self.assertEqual(snapshot.request.output_tokens_per_second, 25.0)
         # Pool both responses, excluding tool wait and the mirrored usage.
         self.assertEqual(snapshot.session_output_tokens_per_second, 20.0)
+        self.assertEqual(snapshot.session_output_min_tokens_per_second, 10.0)
+        self.assertEqual(snapshot.session_output_max_tokens_per_second, 25.0)
         self.assertEqual(len(snapshot.request_history), 2)
         self.assertEqual(snapshot.request.output_tokens, 100)
 
@@ -184,11 +186,15 @@ class JsonlSessionParserTests(unittest.TestCase):
 
         self.assertEqual(snapshot.request.output_tokens_per_second, 20.0)
         self.assertEqual(snapshot.session_output_tokens_per_second, 16.0)
+        self.assertEqual(snapshot.session_output_min_tokens_per_second, 10.0)
+        self.assertEqual(snapshot.session_output_max_tokens_per_second, 20.0)
         snapshot.refreshed_at += timedelta(hours=5)
         snapshot = JsonlSessionParser().parse_records(
             records, session_id="session-a", snapshot=snapshot,
         )
         self.assertEqual(snapshot.session_output_tokens_per_second, 16.0)
+        self.assertEqual(snapshot.session_output_min_tokens_per_second, 10.0)
+        self.assertEqual(snapshot.session_output_max_tokens_per_second, 20.0)
 
     def test_session_speed_updates_with_live_output_then_final_usage(self) -> None:
         records = [
@@ -208,6 +214,8 @@ class JsonlSessionParserTests(unittest.TestCase):
         self.assertEqual(live.request.status, "running")
         self.assertEqual(live.estimate.output_tokens, 20)
         self.assertEqual(live.session_output_tokens_per_second, 7.5)
+        self.assertEqual(live.session_output_min_tokens_per_second, 5.0)
+        self.assertEqual(live.session_output_max_tokens_per_second, 10.0)
         records += [
             token_count("2026-05-28T00:00:17Z", 10, 0, 60, 0, 70, 120),
             record("2026-05-28T00:00:18Z", "event_msg", {"type": "task_complete"}),
@@ -216,6 +224,8 @@ class JsonlSessionParserTests(unittest.TestCase):
         final = self.speed_snapshot(records)
 
         self.assertEqual(final.session_output_tokens_per_second, 12.5)
+        self.assertEqual(final.session_output_min_tokens_per_second, 10.0)
+        self.assertEqual(final.session_output_max_tokens_per_second, 15.0)
 
     def test_latest_activity_keeps_command_visible_after_token_count(self) -> None:
         parser = JsonlSessionParser()
