@@ -5,6 +5,7 @@ on:
   push:
     paths:
       - ".github/workflows/macos-smoke.yml"
+      - ".github/requirements-ci.txt"
       - "pyproject.toml"
       - "src/**"
       - "tests/**"
@@ -12,6 +13,7 @@ on:
   pull_request:
     paths:
       - ".github/workflows/macos-smoke.yml"
+      - ".github/requirements-ci.txt"
       - "pyproject.toml"
       - "src/**"
       - "tests/**"
@@ -36,7 +38,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install pytest
-          python -m pip install -e ".[desktop-overlay]"
+          python -m pip install -c .github/requirements-ci.txt -e ".[desktop-overlay]"
 
       - name: Verify lazy CLI import
         run: |

@@ -41,6 +41,9 @@ the shared baseline. Enable the committed-snapshot pre-push gate with
 Renderer changes require reviewing and explicitly updating both derived
 contract files with `python tools/update_renderer_contract.py --update`.
 Local focused checks do not establish that the remote platform matrix passed.
+Keep CI's Qt dependency constraint in `.github/requirements-ci.txt`. Before
+upgrading it, use CI's `qt_regression` dispatch (and optional `qt_version`) on
+Linux Python 3.10/3.11 and require a clean interpreter exit as well as passing tests.
 
 ## Verbose build output
 

@@ -1,0 +1,4 @@
+# Qt 6.12.0 aborts during interpreter shutdown on Linux Python 3.10/3.11
+# after the native overlay regression tests (none_dealloc, exit 134).
+# Upgrade deliberately with CI's qt_regression workflow_dispatch first.
+PySide6==6.11.1

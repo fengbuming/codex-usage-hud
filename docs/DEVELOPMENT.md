@@ -95,6 +95,13 @@ helper tests carry `qt_ui` and run in a separate interpreter with the offscreen
 plugin, keeping their native lifecycle and shutdown diagnostics separate from
 portable tests. They are still required; the split does not discard failures.
 
+CI's native Qt version is pinned in `.github/requirements-ci.txt`. PySide6
+6.12.0 passed assertions but aborted at interpreter shutdown on Linux Python
+3.10/3.11; 6.11.1 passed the same regression on Linux Python 3.11. To validate
+the locked version on both affected interpreters without a full run, dispatch
+CI with `qt_regression=true`. To trial an upgrade before changing the constraint,
+also supply `qt_version` (for example, a future patched release).
+
 Use the direct pytest command when you specifically need the complete suite:
 
 ```powershell
