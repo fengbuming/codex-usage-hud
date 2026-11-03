@@ -8710,8 +8710,15 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
         // so steady state must write nothing: touch the DOM only when the
         // placement or content actually differs, otherwise the renderer ends
         // in a mutation/observer feedback loop and freezes the app.
-        if (label.parentElement !== menubar || label.previousElementSibling !== toggle) {
-          toggle.insertAdjacentElement("afterend", label);
+        if (toggle) {
+          if (label.parentElement !== menubar || label.previousElementSibling !== toggle) {
+            toggle.insertAdjacentElement("afterend", label);
+          }
+        } else {
+          const anchor = menubar.querySelector("#application-menu-content-anchor");
+          if (label.parentElement !== menubar || label.nextElementSibling !== anchor) {
+            menubar.insertBefore(label, anchor);
+          }
         }
         if (
           label.dataset.provider !== state.provider
@@ -8732,14 +8739,24 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
         const providers = codexCliQuickLaunchMenuProviders();
         const menubar = codexDesktopApplicationMenu();
         const existing = document.querySelector('[data-codex-usage-hud-cli-menu-toggle="true"]');
-        if (!providers.length || !menubar) {
+        if (!menubar) {
           closeCodexCliQuickLaunchMenu();
           closeCodexProviderSwitchMenu();
           existing?.remove();
-          menubar?.querySelector('[data-codex-usage-hud-cli-provider-label="true"]')?.remove();
+          document.querySelector('[data-codex-usage-hud-cli-provider-label="true"]')?.remove();
           codexCliQuickLaunchMenuState.toggle = null;
           codexCliQuickLaunchMenuState.providers = [];
           codexProviderSwitchMenuState.toggle = null;
+          return;
+        }
+        // CLI shortcuts are optional; the current-provider switcher is not
+        // controlled by that separate preference.
+        if (!providers.length) {
+          closeCodexCliQuickLaunchMenu();
+          existing?.remove();
+          codexCliQuickLaunchMenuState.toggle = null;
+          codexCliQuickLaunchMenuState.providers = [];
+          syncCodexCliQuickLaunchProviderLabel(menubar, null);
           return;
         }
         let toggle = menubar.querySelector('[data-codex-usage-hud-cli-menu-toggle="true"]');
