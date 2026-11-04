@@ -138,6 +138,61 @@ async function fetch(href) {
     assert result.returncode == 0, result.stdout + result.stderr
 
 
+def test_runtime_discovers_rspack_cached_manager_without_executing_factories(tmp_path):
+    start = TEXT.index("      async function resolveCodexProviderRuntime()")
+    end = TEXT.index("      function desktopModelReasoningEffort", start)
+    resolver = TEXT[start:end].replace("await import(href)", "await importModule(href)")
+    script = r'''
+const assert = require('node:assert/strict');
+const manager = {clearPrewarmedThreads() {}, sendRequest() {}};
+const scope = {node: {}, query() {}, get() {}, set() {}};
+const unrelated = {...scope};
+const hook = {memoizedState: unrelated, next: {memoizedState: {current: scope}}};
+const window = {__codexRoot: {_internalRoot: {current: {memoizedState: hook}}}};
+const imported = [];
+const document = {
+  querySelectorAll() {return [
+    {src: 'app://-/assets/123.abc.js'},
+    {src: 'app://-/assets/456.def.js'},
+    {href: 'app://-/assets/789.style.css'},
+  ];},
+  getElementById() {return null;},
+};
+// A one-argument initializer contains the same message but would create services.
+function initializer(scope) {
+  throw new Error('AppServerManager RPC is unavailable for hostId: initializer must not run');
+}
+function managerForHost(candidate, hostId) {
+  if (candidate !== scope || hostId !== 'local') {
+    throw new Error('AppServerManager RPC is unavailable for hostId: ' + hostId);
+  }
+  return manager;
+}
+function requireModule() {throw new Error('must not initialize modules');}
+requireModule.c = {
+  initializer: {exports: {renamed: initializer}},
+  nativeManager: {exports: {renamed: managerForHost}},
+};
+requireModule.m = {unloaded() {throw new Error('must not execute factories');}};
+async function importModule(href) {
+  imported.push(href);
+  return href.endsWith('456.def.js') ? {__webpack_require__: requireModule} : {};
+}
+''' + resolver + r'''
+(async () => {
+  const first = await resolveCodexProviderRuntime();
+  assert.equal(first.manager, manager); assert.equal(first.scope, scope);
+  assert.equal(imported.length, 2);
+  await resolveCodexProviderRuntime();
+  assert.equal(imported.length, 2, 'reuse factory, resolve current scope again');
+})().catch(error => {console.error(error); process.exitCode = 1;});
+'''
+    path = tmp_path / "provider_runtime_rspack.js"
+    path.write_text(script, encoding="utf-8")
+    result = subprocess.run(["node", str(path)], capture_output=True, text=True, encoding="utf-8")
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
 def test_provider_switch_feedback_and_correlated_completion(tmp_path):
     start = TEXT.index("      function clearDefaultProviderSwitchFeedback(")
     end = TEXT.index("      function renderCodexProviderSwitchMenu(", start)
@@ -159,6 +214,7 @@ const document = {
 const settings = {default_provider: 'old'};
 const settingsProviderDraft = {appProvider: 'old'};
 const codexProviderSwitchMenuState = {};
+function completeCodexProviderMismatchSwitch() {}
 function hudSettingsFromPayload() { return settings; }
 function providerDisplayName(_settings, provider) { return provider; }
 function escapeHtml(text) { return String(text); }

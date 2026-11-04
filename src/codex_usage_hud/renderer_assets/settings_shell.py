@@ -85,6 +85,15 @@ _TEXT_PREFIX = r"""
         timeoutTimer: 0,
         feedbackLayer: null,
       };
+      const codexProviderMismatchState = {
+        layer: null,
+        context: null,
+        attempt: null,
+        checking: false,
+        dismissedKey: "",
+        requestId: "",
+        seen: new WeakMap(),
+      };
       // 点击供应商切换菜单项且存在活跃会话（其供应商与目标不同）时弹出的
       // 迁移提示对话框。复制、命名和切换均在此流程内完成。
       const codexProviderMigrateDialogState = {
@@ -5439,7 +5448,7 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
                   requestId,
                   provider,
                   ok: false,
-                  message: "供应商设置已保存，但 Codex 暂未应用。请重试切换；若仍失败，重启 Codex 后新建会话。",
+                  message: "默认供应商已保存，但 HUD 未能确认自动刷新结果。请新建会话验证；若仍使用原供应商，再重试切换。",
                 });
               });
             }
@@ -7869,24 +7878,25 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
         state.feedbackLayer = null;
       }
 
-      function showDefaultProviderSwitchFeedback(message, failed = false) {
+      function showDefaultProviderSwitchFeedback(message, failed = false, completed = false) {
         const state = codexProviderSwitchMenuState;
         state.feedbackLayer?.remove();
         const layer = document.createElement("div");
         layer.dataset.codexProviderSwitchFeedback = "true";
         layer.setAttribute("role", "dialog");
         layer.setAttribute("aria-modal", "true");
-        layer.setAttribute("aria-label", failed ? "供应商切换未确认" : "正在切换供应商");
+        const title = completed ? "已切换默认供应商" : failed ? "供应商切换未确认" : "正在切换默认供应商";
+        layer.setAttribute("aria-label", title);
         layer.innerHTML = `
           <div class="codex-usage-hud-provider-migrate-surface">
-            <div class="codex-usage-hud-provider-migrate-head"><strong>${failed ? "供应商切换未确认" : "正在切换默认供应商"}</strong></div>
+            <div class="codex-usage-hud-provider-migrate-head"><strong>${title}</strong></div>
             <div class="codex-usage-hud-provider-migrate-body" role="status">
-              ${failed ? "" : '<span class="codex-usage-hud-provider-migrate-spinner" aria-hidden="true"></span>'}
+              ${failed || completed ? "" : '<span class="codex-usage-hud-provider-migrate-spinner" aria-hidden="true"></span>'}
               ${escapeHtml(message)}
             </div>
-            ${failed ? '<div class="codex-usage-hud-provider-migrate-actions"><button type="button">关闭</button></div>' : ""}
+            ${failed || completed ? '<div class="codex-usage-hud-provider-migrate-actions"><button type="button">关闭</button></div>' : ""}
           </div>`;
-        if (failed) layer.querySelector("button")?.addEventListener("click", clearDefaultProviderSwitchFeedback);
+        if (failed || completed) layer.querySelector("button")?.addEventListener("click", clearDefaultProviderSwitchFeedback);
         document.body.appendChild(layer);
         state.feedbackLayer = layer;
       }
@@ -7932,34 +7942,50 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
         if (ok && migration && typeof migration === "object") {
           openCodexProviderMigrateDialog(migration);
         }
+        completeCodexProviderMismatchSwitch(received, ok);
         return true;
       }
 
       async function resolveCodexProviderRuntime() {
-        // Discover the native manager from this page's assets, without pinning
-        // hashed filenames or minified exports. Rolldown builds only preload
-        // app-shared in HTML; app-initial is imported through index -> app-main.
+        // Discover the native manager from loaded modules in both Rspack and
+        // Rolldown builds, without pinning chunk IDs or minified exports.
         let managerForHost = resolveCodexProviderRuntime.managerForHost || null;
         if (!managerForHost) {
-          const links = Array.from(document.querySelectorAll('link[href], script[src]'))
-            .map((node) => node.href || node.src)
-            .filter((href) => /\/assets\/(?:app-(?:shared|initial|main)|index)-[A-Za-z0-9_-]+\.js$/.test(href));
+          const assets = Array.from(document.querySelectorAll('link[href], script[src]'))
+            .map((node) => node.href || node.src);
+          const links = assets.filter((href) => /\/assets\/(?:app-(?:shared|initial|main)|index)-[A-Za-z0-9_-]+\.js$/.test(href));
+          const isManagerFactory = (value) => {
+            if (typeof value !== "function" || value.length < 2) return false;
+            try {
+              return Function.prototype.toString.call(value)
+                .includes("AppServerManager RPC is unavailable for hostId:");
+            } catch (_) { return false; }
+          };
           const imported = new Set();
           const loadManagerFactory = async (href) => {
             if (imported.has(href)) return null;
             imported.add(href);
             try {
               const module = await import(href);
-              return Object.values(module).find((value) => {
-                if (typeof value !== "function") return false;
-                try {
-                  return Function.prototype.toString.call(value)
-                    .includes("AppServerManager RPC is unavailable for hostId:");
-                } catch (_) { return false; }
-              }) || null;
+              return Object.values(module).find(isManagerFactory) || null;
             } catch (_) { return null; }
           };
+          for (const href of assets.filter((href) => /\/assets\/\d+\.[A-Za-z0-9_-]+\.js$/.test(href))) {
+            try {
+              const module = await import(href);
+              // Inspect only initialized module exports. Executing arbitrary
+              // factories can register duplicate services or React hooks.
+              const cache = module.__webpack_require__?.c;
+              if (!cache) continue;
+              for (const loaded of Object.values(cache)) {
+                managerForHost = Object.values(loaded?.exports || {}).find(isManagerFactory) || null;
+                if (managerForHost) break;
+              }
+            } catch (_) { /* Another loaded asset may own the runtime. */ }
+            if (managerForHost) break;
+          }
           for (const href of links.filter((href) => /\/app-(?:shared|initial)-/.test(href))) {
+            if (managerForHost) break;
             managerForHost = await loadManagerFactory(href);
             if (managerForHost) break;
           }
@@ -8005,7 +8031,9 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
           for (let depth = 0; hook && depth < 100; depth += 1, hook = hook.next) {
             for (const scope of [hook.memoizedState, hook.memoizedState?.current]) {
               if (!scope?.node || !scope.query || typeof scope.get !== "function" || typeof scope.set !== "function") continue;
-              const manager = managerForHost(scope, "local");
+              let manager;
+              try { manager = managerForHost(scope, "local"); }
+              catch (_) { continue; }
               if (typeof manager?.clearPrewarmedThreads === "function" && typeof manager?.sendRequest === "function") {
                 // Cache only the factory. Resolve the live scope and manager
                 // again on each switch so replaced backends are never reused.
@@ -8342,7 +8370,7 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
               ${closeButton}
             </div>
             <div class="codex-usage-hud-provider-migrate-body">
-              默认已切换到「${escapeHtml(targetName)}」，仅对新会话生效。可立即复制当前会话到「${escapeHtml(targetName)}」并自动切换，副本标题以「(复制)」开头，原会话保留。
+              默认已切换到「${escapeHtml(targetName)}」，仅对新会话生效。当前会话仍使用「${escapeHtml(activeName)}」。可立即复制当前会话到「${escapeHtml(targetName)}」并自动切换，副本标题以「(复制)」开头，原会话保留。
             </div>
             <div class="codex-usage-hud-provider-migrate-actions">
               <button type="button" data-codex-provider-migrate-dismiss="true" data-variant="ghost">暂不迁移</button>
@@ -8419,6 +8447,231 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
           window.addEventListener("hashchange", check);
           check();
         });
+      }
+
+      function codexProviderMismatchThreadId() {
+        const route = String(window.location?.hash || "").replace(/^#/, "")
+          || String(window.location?.pathname || "");
+        const routed = route.match(/^\/local\/([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})(?:[?/#]|$)/i)?.[1] || "";
+        if (routed) return routed;
+        if (/^\/(?:remote|ssh|c|cloud)\//i.test(route)) return "";
+        // Desktop uses an in-memory router. Prefer its visible selection over
+        // the asynchronous Python payload when a user has just changed chats.
+        if (typeof readActiveSessionRef === "function") {
+          const ref = readActiveSessionRef();
+          const identity = String(ref?.rendererSessionId || "");
+          if (ref?.newSession || ref?.pendingSession || (identity.includes(":") && !identity.startsWith("local:"))) return "";
+          const selected = String(ref?.sessionId || "").trim();
+          if (/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(selected)) return selected;
+        }
+        const active = String(currentPayload()?.sessionId || "").trim();
+        return /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(active) ? active : "";
+      }
+
+      function parseCodexProviderMismatch(text) {
+        const match = String(text || "").match(/This chat uses ([A-Za-z0-9_-]+), but your current provider is ([A-Za-z0-9_-]+)\. Switch to ([A-Za-z0-9_-]+) to continue\./i);
+        if (!match || match[1].toLowerCase() !== match[3].toLowerCase()
+          || match[1].toLowerCase() === match[2].toLowerCase()) return null;
+        return { provider: match[1].toLowerCase(), currentProvider: match[2].toLowerCase() };
+      }
+
+      function closeCodexProviderMismatchDialog() {
+        if (codexProviderMismatchState.context) codexProviderMismatchState.dismissedKey = codexProviderMismatchState.context.key;
+        codexProviderMismatchState.layer?.remove();
+        codexProviderMismatchState.layer = null;
+        codexProviderMismatchState.context = null;
+      }
+
+      function codexProviderMismatchDraft(composer) {
+        const input = composer?.querySelector?.("textarea, [contenteditable='true'], [role='textbox'], .ProseMirror");
+        if (!input) return "";
+        const attachments = Array.from(composer.querySelectorAll(
+          ".composer-attachment-surface, [data-testid*='attachment'], [class*='file-attachment']"
+        )).map((node) => node.outerHTML);
+        return JSON.stringify([input.value ?? input.innerHTML ?? input.textContent, attachments]);
+      }
+
+      function captureCodexProviderMismatchAttempt(event) {
+        const composer = composerElement();
+        if (!composer?.contains(event.target) || codexProviderSwitchMenuState.pendingRequestId) return;
+        const button = event.target?.closest?.("button, [role='button']");
+        const enter = event.type === "keydown" && event.key === "Enter"
+          && !event.shiftKey && !event.ctrlKey && !event.altKey && !event.metaKey && !event.isComposing;
+        if (!enter && !(event.type === "click" && activeSessionComposerSubmitButton(button))) return;
+        const submit = enter ? Array.from(composer.querySelectorAll("button, [role='button']"))
+          .find(activeSessionComposerSubmitButton) : button;
+        codexProviderMismatchState.attempt = {
+          threadId: codexProviderMismatchThreadId(), composer, submit,
+          draft: codexProviderMismatchDraft(composer), createdAt: Date.now(),
+        };
+        codexProviderMismatchState.dismissedKey = "";
+      }
+
+      function openCodexProviderMismatchDialog(mismatch) {
+        const state = codexProviderMismatchState;
+        const threadId = codexProviderMismatchThreadId();
+        if (!threadId || state.requestId || codexProviderSwitchMenuState.pendingRequestId) return;
+        const key = threadId + ":" + mismatch.provider + ":" + mismatch.currentProvider;
+        if (state.dismissedKey === key) return;
+        if (state.context?.key === key && state.layer?.isConnected) return;
+        closeCodexProviderMismatchDialog();
+        const settings = hudSettingsFromPayload();
+        const name = providerDisplayName(settings, mismatch.provider);
+        const currentName = providerDisplayName(settings, mismatch.currentProvider);
+        const attempt = state.attempt;
+        state.context = { ...mismatch, threadId, key,
+          attempt: attempt?.threadId === threadId && Date.now() - attempt.createdAt < 60000 ? attempt : null };
+        const layer = document.createElement("div");
+        layer.dataset.codexProviderMismatchLayer = "true";
+        layer.dataset.codexProviderMigrateLayer = "true";
+        layer.setAttribute("role", "dialog");
+        layer.setAttribute("aria-modal", "true");
+        layer.setAttribute("aria-label", "切换供应商后继续会话");
+        layer.innerHTML = `
+          <div class="codex-usage-hud-provider-migrate-surface">
+            <div class="codex-usage-hud-provider-migrate-head"><strong>该会话需要供应商 ${escapeHtml(name)}</strong></div>
+            <div class="codex-usage-hud-provider-migrate-body">
+              当前默认供应商为「${escapeHtml(currentName)}」。是否切换到「${escapeHtml(name)}」后重试？
+              <p>这会修改所有窗口共用的默认供应商，并持续生效。已发出的请求通常不受影响；其他供应商会话后续发送可能需要切回。</p>
+              <p>通常无需重启。HUD 确认生效后会尝试重试；若草稿已变化，请手动发送。</p>
+            </div>
+            <div class="codex-usage-hud-provider-migrate-actions">
+              <button type="button" data-provider-mismatch-cli="true" data-variant="ghost">使用此供应商启动 CLI</button>
+              <button type="button" data-provider-mismatch-cancel="true" data-variant="ghost">暂不切换</button>
+              <button type="button" data-provider-mismatch-confirm="true" data-primary="true">切换到 ${escapeHtml(name)} 并重试</button>
+            </div>
+          </div>`;
+        layer.querySelector('[data-provider-mismatch-cli]')?.addEventListener("click", () => {
+          const selectedProvider = state.context?.provider;
+          closeCodexProviderMismatchDialog();
+          state.attempt = null;
+          openCodexCliFromApplicationMenu(selectedProvider);
+        });
+        layer.querySelector('[data-provider-mismatch-cancel]')?.addEventListener("click", closeCodexProviderMismatchDialog);
+        layer.querySelector('[data-provider-mismatch-confirm]')?.addEventListener("click", () => { void confirmCodexProviderMismatchSwitch(); });
+        document.body.appendChild(layer);
+        state.layer = layer;
+      }
+
+      async function confirmCodexProviderMismatchSwitch() {
+        const state = codexProviderMismatchState;
+        const context = state.context;
+        if (!context || state.checking || state.requestId || codexProviderSwitchMenuState.pendingRequestId) return;
+        if (codexProviderMismatchThreadId() !== context.threadId) { closeCodexProviderMismatchDialog(); return; }
+        const requestId = typedSettingsRequestId("provider-mismatch");
+        state.checking = true;
+        try {
+          // Recheck the thread and effective default after the user's decision;
+          // an error toast or HUD payload can outlive a config/navigation change.
+          const thread = await codexBridgeRequest("thread/read", { threadId: context.threadId, includeTurns: false }, 8000);
+          const read = await codexBridgeRequest("config/read", { includeLayers: false, cwd: null }, 8000);
+          if (state.context !== context || codexProviderMismatchThreadId() !== context.threadId) return;
+          if (thread.error || read.error) throw new Error("无法确认当前会话与默认供应商，请稍后重试。");
+          if (String(thread.result?.thread?.modelProvider || "").toLowerCase() !== context.provider) {
+            throw new Error("会话供应商已变化，请重新发送以获取最新提示。");
+          }
+          const actual = String(read.result?.config?.model_provider || "openai").toLowerCase();
+          if (actual !== context.currentProvider && actual !== context.provider) {
+            throw new Error("默认供应商已被其他操作修改，请重新发送以获取最新提示。");
+          }
+          // Claim the existing switching lifecycle only after confirmation.
+          if (!beginDefaultProviderSwitch({ provider: context.provider, requestId })) return;
+          state.requestId = requestId;
+          state.layer?.remove(); state.layer = null;
+          if (actual === context.provider) {
+            await refreshCodexProviderRuntime(context.provider, requestId);
+            finishDefaultProviderSwitch({ requestId, provider: context.provider });
+          } else {
+            const submitted = submitSettingsCommand(
+              { action: "providerSetDefault", provider: context.provider, requestId },
+              "正在切换默认供应商…", { preserveOverlay: true, quiet: true },
+            );
+            if (!submitted) finishDefaultProviderSwitch({ requestId, ok: false });
+          }
+        } catch (error) {
+          if (state.requestId === requestId) finishDefaultProviderSwitch({ requestId, ok: false, message: String(error?.message || error) });
+          else if (state.context === context) { closeCodexProviderMismatchDialog(); showDefaultProviderSwitchFeedback(String(error?.message || error), true); }
+        } finally {
+          state.checking = false;
+        }
+      }
+
+      function completeCodexProviderMismatchSwitch(requestId, ok) {
+        const state = codexProviderMismatchState;
+        if (state.requestId !== requestId) return;
+        const context = state.context;
+        state.requestId = "";
+        closeCodexProviderMismatchDialog();
+        state.attempt = null;
+        if (!ok || !context || codexProviderMismatchThreadId() !== context.threadId) return;
+        const attempt = context.attempt;
+        // Replay only the still-present, unchanged native draft. Never construct
+        // a turn/start request: that would lose attachments/settings or duplicate input.
+        if (attempt?.composer?.isConnected && attempt.submit?.isConnected
+          && attempt.composer.contains(attempt.submit)
+          && codexProviderMismatchDraft(attempt.composer) === attempt.draft
+          && activeSessionComposerSubmitButton(attempt.submit)) {
+          attempt.submit.click();
+        } else {
+          showDefaultProviderSwitchFeedback("默认供应商已切换，通常无需重启。请在当前会话重新发送；若仍提示供应商不一致，请重新打开该会话。", false, true);
+        }
+      }
+
+      function observeCodexProviderMismatchErrors(records = null) {
+        const state = codexProviderMismatchState;
+        if (state.context && codexProviderMismatchThreadId() !== state.context.threadId && !state.requestId) {
+          closeCodexProviderMismatchDialog();
+        }
+        const selector = ".codex-toast-area [data-sonner-toast], [role='alert'], [data-sonner-toast], [data-state][role='status'], [class*='destructive'], [class*='error-banner'], [class*='ErrorBanner']";
+        const candidates = new Set();
+        const add = (node, descendants = false) => {
+          const element = node?.nodeType === 3 ? node.parentElement : node;
+          if (!element?.querySelectorAll || element.closest?.("#" + rootId + ", [data-codex-provider-migrate-layer], [data-codex-provider-switch-feedback]")) return;
+          const banner = element.closest?.(selector);
+          if (banner) candidates.add(banner);
+          // React may insert the entire Sonner list at once, with the toast
+          // inside it. Query only added subtrees for the native notification.
+          if (descendants) element.querySelectorAll("[data-sonner-toast]")
+            .forEach((toast) => candidates.add(toast));
+          // Codex's native provider error is a top-of-window toast in some
+          // Desktop builds and carries no alert role or stable CSS class.
+          // Inspect only this changed subtree and a short ancestor chain.
+          let current = element;
+          for (let depth = 0; current && depth < 8; depth += 1, current = current.parentElement) {
+            if (current === document.body || current === document.documentElement || current.id === "root") break;
+            candidates.add(current);
+          }
+        };
+        if (records) records.forEach((record) => {
+          add(record.target);
+          record.addedNodes?.forEach((node) => add(node, true));
+          record.removedNodes?.forEach((node) => {
+            if (node?.nodeType === 1) {
+              state.seen.delete(node);
+              node.querySelectorAll?.(selector).forEach((child) => state.seen.delete(child));
+            }
+          });
+        });
+        else document.querySelectorAll(selector).forEach((node) => candidates.add(node));
+        for (const node of candidates) {
+          if (!visible(node) || node.closest?.("#" + rootId + ", [data-codex-provider-migrate-layer], [data-codex-provider-switch-feedback]")) continue;
+          const text = String(node.textContent || "");
+          if (text.length > 1500 || state.seen.get(node) === text) continue;
+          const mismatch = parseCodexProviderMismatch(text);
+          if (!mismatch) { state.seen.delete(node); continue; }
+          const nativeToast = node.matches?.("[data-sonner-toast]") && node.closest?.(".codex-toast-area");
+          if (!nativeToast) {
+            const rect = node.getBoundingClientRect?.();
+            if (!rect || rect.top < -8 || rect.top > 220 || rect.height < 24 || rect.height > 180) continue;
+            const position = String(window.getComputedStyle?.(node)?.position || node.style?.position || "");
+            const dismiss = node.querySelector?.("button[aria-label*='close' i], button[aria-label*='dismiss' i], button[aria-label*='关闭']");
+            if (position !== "fixed" && position !== "absolute" && !dismiss) continue;
+          }
+          if (node.getAttribute?.("data-visible") === "false" || node.getAttribute?.("data-removed") === "true") continue;
+          state.seen.set(node, text);
+          openCodexProviderMismatchDialog(mismatch);
+          break;
+        }
       }
 
       function startCodexProviderMigrate() {
@@ -8665,7 +8918,7 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
             title: pending
               ? `正在切换默认供应商为：${fallbackName}`
               : mismatch
-              ? `当前会话供应商：${activeName}（config.toml 默认：${fallbackName}）`
+              ? `当前会话供应商：${activeName}（新会话默认：${fallbackName}）`
               : `当前会话供应商：${activeName}`,
           };
         }
@@ -8802,6 +9055,8 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
         };
         ctx.lifecycle.listen("codex_cli_quick_launch_menu", window, "keydown", blockPendingProviderSend, true);
         ctx.lifecycle.listen("codex_cli_quick_launch_menu", window, "click", blockPendingProviderSend, true);
+        ctx.lifecycle.listen("codex_cli_quick_launch_menu", window, "keydown", captureCodexProviderMismatchAttempt, true);
+        ctx.lifecycle.listen("codex_cli_quick_launch_menu", window, "click", captureCodexProviderMismatchAttempt, true);
         ctx.lifecycle.listen("codex_cli_quick_launch_menu", document, "click", handleCodexCliQuickLaunchMenuClick, true);
         ctx.lifecycle.listen("codex_cli_quick_launch_menu", document, "pointerdown", (event) => {
           if (!codexCliQuickLaunchMenuState.open && !codexProviderSwitchMenuState.open) return;
@@ -8825,6 +9080,11 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
         }, true);
         ctx.lifecycle.listen("codex_cli_quick_launch_menu", document, "keydown", (event) => {
           if (event.key !== "Escape") return;
+          if (codexProviderMismatchState.layer) {
+            event.preventDefault();
+            closeCodexProviderMismatchDialog();
+            return;
+          }
           if (codexProviderMigrateDialogState.layer) {
             event.preventDefault();
             closeCodexProviderMigrateDialog();
@@ -8863,19 +9123,28 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
           }
         }, { passive: true });
         if (document.body) {
-          const observer = ctx.observers.set("codex_cli_quick_launch_menu", new MutationObserver(() => {
+          const observer = ctx.observers.set("codex_cli_quick_launch_menu", new MutationObserver((records) => {
             if (!document.getElementById(rootId)) return;
             syncCodexCliQuickLaunchMenu();
+            observeCodexProviderMismatchErrors(records);
           }));
           observer?.observe(document.body, {
             childList: true,
             subtree: true,
+            characterData: true,
+            attributes: true,
+            attributeFilter: ["data-mounted", "data-visible", "data-removed"],
           });
         }
         syncCodexCliQuickLaunchMenu();
+        observeCodexProviderMismatchErrors();
       }
 
       function disposeCodexCliQuickLaunchMenu() {
+        closeCodexProviderMismatchDialog();
+        codexProviderMismatchState.requestId = "";
+        codexProviderMismatchState.attempt = null;
+        codexProviderMismatchState.seen = new WeakMap();
         clearDefaultProviderSwitchFeedback();
         codexProviderSwitchMenuState.pendingRequestId = "";
         codexProviderSwitchMenuState.refreshPendingRequestId = "";

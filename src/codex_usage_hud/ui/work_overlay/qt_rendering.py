@@ -39,6 +39,10 @@ from .constants import (
     WORK_OVERLAY_CLOSE_SIZE,
     WORK_OVERLAY_COMPLETED_BADGE_ROW_HEIGHT,
     WORK_OVERLAY_COMPLETED_BADGE_SIZE,
+    WORK_OVERLAY_COMPLETED_CHECK_HOTSPOT_HEIGHT,
+    WORK_OVERLAY_COMPLETED_CHECK_HOTSPOT_WIDTH,
+    WORK_OVERLAY_COMPLETED_CHECK_HOTSPOT_X,
+    WORK_OVERLAY_COMPLETED_CHECK_HOTSPOT_Y,
     WORK_OVERLAY_EMPTY_GRACE_SECONDS,
     WORK_OVERLAY_FEED_SPINNER_ENABLED,
     WORK_OVERLAY_MARGIN,
@@ -817,8 +821,16 @@ class OverlayRenderingMixin:
         workdir_anchor.show()
         check_anchor = QWidget(badge)
         check_anchor.setAttribute(widget_attrs.WA_TransparentForMouseEvents, True)
-        check_anchor.setFixedSize(48, 32)
-        check_anchor.move(60, 22)
+        # The check and the min/mean/max speed copy form one dismiss action.
+        # Keep the hotspot above the lower stats and workdir regions.
+        check_anchor.setFixedSize(
+            WORK_OVERLAY_COMPLETED_CHECK_HOTSPOT_WIDTH,
+            WORK_OVERLAY_COMPLETED_CHECK_HOTSPOT_HEIGHT,
+        )
+        check_anchor.move(
+            WORK_OVERLAY_COMPLETED_CHECK_HOTSPOT_X,
+            WORK_OVERLAY_COMPLETED_CHECK_HOTSPOT_Y,
+        )
         check_anchor.show()
         record = {
             "kind": "completed",
@@ -864,7 +876,7 @@ class OverlayRenderingMixin:
             WORK_OVERLAY_CARD_X_PADDING,
             WORK_OVERLAY_CARD_Y_PADDING,
             WORK_OVERLAY_CARD_X_PADDING,
-            WORK_OVERLAY_CARD_Y_PADDING,
+            WORK_OVERLAY_CARD_Y_PADDING if _item_is_rest_reminder(item) else 4,
         )
         if _item_is_rest_reminder(item):
             # The rest card stacks hint text and an action row on top of the
@@ -902,7 +914,13 @@ class OverlayRenderingMixin:
         close_anchor = QWidget(card)
         close_anchor.setAttribute(widget_attrs.WA_TransparentForMouseEvents, True)
         close_anchor.setFixedSize(WORK_OVERLAY_CLOSE_SIZE, WORK_OVERLAY_CLOSE_SIZE)
-        head_layout.addWidget(close_anchor, 0, alignment.AlignVCenter)
+        # The native close window follows this logical anchor outside the card;
+        # it no longer consumes the rightmost part of the header row.
+        close_anchor.move(
+            card.width() - WORK_OVERLAY_CLOSE_SIZE // 2,
+            -(WORK_OVERLAY_CLOSE_SIZE // 2),
+        )
+        head_layout.addStrut(0 if _item_is_rest_reminder(item) else WORK_OVERLAY_CLOSE_SIZE)
         card_layout.addLayout(head_layout)
 
         body_host = QWidget(card)
@@ -984,7 +1002,7 @@ class OverlayRenderingMixin:
         footer_container.setAttribute(widget_attrs.WA_TransparentForMouseEvents, True)
         footer_layout = QHBoxLayout(footer_container)
         footer_layout.setContentsMargins(0, 0, 0, 0)
-        footer_layout.setSpacing(8)
+        footer_layout.setSpacing(2)
 
         speed_icon = AnimatedSpeedIcon(footer_container)
         speed_icon.hide()
@@ -1679,7 +1697,7 @@ class OverlayRenderingMixin:
             WORK_OVERLAY_CARD_X_PADDING,
             WORK_OVERLAY_CARD_Y_PADDING,
             WORK_OVERLAY_CARD_X_PADDING,
-            WORK_OVERLAY_CARD_Y_PADDING,
+            WORK_OVERLAY_CARD_Y_PADDING if _item_is_rest_reminder(item) else 4,
         )
         card_layout.setSpacing(WORK_OVERLAY_CARD_SPACING)
 
@@ -1699,7 +1717,11 @@ class OverlayRenderingMixin:
         close_anchor = QWidget(card)
         close_anchor.setAttribute(widget_attrs.WA_TransparentForMouseEvents, True)
         close_anchor.setFixedSize(WORK_OVERLAY_CLOSE_SIZE, WORK_OVERLAY_CLOSE_SIZE)
-        head_layout.addWidget(close_anchor, 0)
+        close_anchor.move(
+            card.width() - WORK_OVERLAY_CLOSE_SIZE // 2,
+            -(WORK_OVERLAY_CLOSE_SIZE // 2),
+        )
+        head_layout.addStrut(0 if _item_is_rest_reminder(item) else WORK_OVERLAY_CLOSE_SIZE)
         card_layout.addLayout(head_layout)
 
         detail = QLabel("", card)
@@ -1728,7 +1750,7 @@ class OverlayRenderingMixin:
         footer_container.setAttribute(widget_attrs.WA_TransparentForMouseEvents, True)
         footer_layout = QHBoxLayout(footer_container)
         footer_layout.setContentsMargins(0, 0, 0, 0)
-        footer_layout.setSpacing(8)
+        footer_layout.setSpacing(2)
 
         speed_icon = AnimatedSpeedIcon(footer_container)
         footer_layout.addWidget(speed_icon, 0, alignment.AlignVCenter)

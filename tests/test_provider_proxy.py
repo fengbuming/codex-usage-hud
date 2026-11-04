@@ -130,6 +130,21 @@ def test_loopback_server_binding_never_resolves_hostnames(monkeypatch):
         assert server.server_port > 0
 
 
+def test_relay_reports_codec_lookup_failure_instead_of_closing_connection(relay, tmp_path):
+    endpoint = urlsplit(relay.route({
+        "base_url": "https://upstream.example/v1", "enabled": True, "port": 7897,
+    }, tmp_path / "config.toml"))
+    with patch.object(http.client.HTTPSConnection, "set_tunnel", side_effect=LookupError("unknown encoding: idna")):
+        client = http.client.HTTPConnection(endpoint.hostname, endpoint.port, timeout=3)
+        try:
+            client.request("GET", endpoint.path + "/models")
+            response = client.getresponse()
+            assert response.status == 502
+            assert b"unknown encoding: idna" in response.read()
+        finally:
+            client.close()
+
+
 def test_source_helper_uses_lightweight_module_entry_and_retains_startup_errors(tmp_path, monkeypatch):
     state = tmp_path / "state.json"
     monkeypatch.setattr(provider_proxy_service.sys, "frozen", False, raising=False)

@@ -86,7 +86,7 @@ def vehicle_parts(key: str) -> tuple[VehiclePart, ...]:
 class AnimatedSpeedIcon(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setFixedSize(22, 18)
+        self.setFixedSize(20, 18)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self._state = SpeedTitleState()
@@ -98,6 +98,7 @@ class AnimatedSpeedIcon(QWidget):
         self._settle_timer = QTimer(self)
         self._settle_timer.setSingleShot(True)
         self._settle_timer.timeout.connect(self._settle)
+        self._sync_motion(None)
 
     def set_speed(self, value: object, *, enabled: bool) -> None:
         deadline = self._state.update(value if enabled else None, now=time.monotonic())
@@ -111,6 +112,12 @@ class AnimatedSpeedIcon(QWidget):
         self.update()
 
     def _sync_motion(self, deadline: float | None) -> None:
+        key = SPEED_TITLE_STEPS[self._state.tier - 1][0] if self._state.tier else "walk"
+        _, _, width, height = VEHICLE_ART[key]["viewBox"]
+        scale = min(16 / width, 14 / height)
+        # Preserve the artwork size, but reclaim unused horizontal space for
+        # narrow tiers (especially the walking figure). Keep room for motion.
+        self.setFixedWidth(math.ceil(width * scale) + 4)
         if not self.isVisible():
             return
         if deadline != self._settle_due:

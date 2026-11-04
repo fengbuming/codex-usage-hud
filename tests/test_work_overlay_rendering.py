@@ -193,7 +193,10 @@ class WorkOverlayRenderingTests(unittest.TestCase):
         )
         self.assertNotIn("Worked", header.text())
         self.assertEqual(header_meta.text(), "89.5 tok/s")
-        self.assertEqual(header_meta.geometry().center().y(), close_anchor.geometry().center().y())
+        self.assertLessEqual(abs(close_anchor.geometry().center().x() - card.width()), 1)
+        self.assertLessEqual(abs(close_anchor.geometry().center().y()), 1)
+        self.assertEqual(header_meta.geometry().right(), header_row.geometry().right())
+        self.assertLess(close_anchor.geometry().bottom(), header_meta.geometry().top())
         self.assertIn("border-left: 2px solid #339cff", card.styleSheet())
         self.assertNotIn("#ad7bf9", card.styleSheet())
 
@@ -440,13 +443,14 @@ class WorkOverlayRenderingTests(unittest.TestCase):
         record["footer_container"].layout().activate()
         self.assertEqual(speed.text(), "89.5 tok/s")
         icon = record["speed_icon"]
-        self.assertLessEqual(icon.x() + icon.width(), shimmer.x())
+        self.assertEqual(shimmer.x() - icon.x() - icon.width(), 2)
+        self.assertLessEqual(icon.width(), 8)
         self.assertIs(speed, record["header_meta"])
         self.assertIs(speed.parentWidget(), card)
         self.assertLess(speed.y(), record["footer_container"].y())
         self.assertEqual(record["round_badge"].parentWidget(), record["footer_container"])
         self.assertEqual(record["round_badge"].text(), "2")
-        self.assertGreaterEqual(record["close_anchor"].y(), 0)
+        self.assertLess(record["close_anchor"].y(), 0)
         self.assertEqual(record["close_anchor"].size().width(), 22)
         self.assertTrue(shimmer._shimmer_enabled)
         self.assertTrue(card._tide_timer.isActive())
@@ -470,6 +474,79 @@ class WorkOverlayRenderingTests(unittest.TestCase):
         self.assertTrue(icon.isHidden())
         self.assertFalse(icon._animation_timer.isActive())
         self.assertFalse(icon._settle_timer.isActive())
+
+    def test_corner_close_window_tracks_border_and_dismisses_its_session(self) -> None:
+        from PySide6.QtCore import QPoint, Qt
+        from PySide6.QtTest import QTest
+
+        item = {"id": "corner-close", "status": "running", "title": "Corner close"}
+        with tempfile.TemporaryDirectory() as directory:
+            window = OverlayWindow(
+                app=self._app, path=Path(directory) / "state.json", read_state=lambda: {},
+                owner_pid=None, process_exists=lambda _: True, stale_seconds=20,
+                item_limit=2, overlay_alpha=1, hover_alpha=1,
+                heartbeat_path=Path(directory) / "heartbeat", header_title_limit=28,
+            )
+            try:
+                dismissed = MagicMock(wraps=window.dismiss_item)
+                window.dismiss_item = dismissed
+                window.render_items([item])
+                window.show()
+                self._app.processEvents()
+                window.reposition_interactive_windows()
+                card = window._item_widgets[-1]["card"]
+                close = window._close_windows[0]
+                corner = card.mapToGlobal(QPoint(card.width(), 0))
+                self.assertLessEqual(abs(close.geometry().center().x() - corner.x()), 1)
+                self.assertLessEqual(abs(close.geometry().center().y() - corner.y()), 1)
+                window.move(window.pos() + QPoint(15, 20))
+                window.reposition_interactive_windows()
+                corner = card.mapToGlobal(QPoint(card.width(), 0))
+                self.assertLessEqual(abs(close.geometry().center().x() - corner.x()), 1)
+                self.assertLessEqual(abs(close.geometry().center().y() - corner.y()), 1)
+                QTest.mouseClick(close, Qt.MouseButton.LeftButton)
+                dismissed.assert_called_once_with(item)
+                self.assertTrue(window._dismissed_instances)
+            finally:
+                window.close()
+                window.deleteLater()
+                self._app.processEvents()
+
+    def test_completed_speed_summary_shares_dismiss_hotspot(self) -> None:
+        from PySide6.QtCore import QPoint, Qt
+        from PySide6.QtTest import QTest
+
+        item = {
+            "id": "completed-speed-hotspot",
+            "status": "recent",
+            "title": "Completed speed hotspot",
+            "sessionOutputTokensPerSecond": 89.5,
+            "sessionOutputMinTokensPerSecond": 10.0,
+            "sessionOutputMaxTokensPerSecond": 240.0,
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            window = OverlayWindow(
+                app=self._app, path=Path(directory) / "state.json", read_state=lambda: {},
+                owner_pid=None, process_exists=lambda _: True, stale_seconds=20,
+                item_limit=2, overlay_alpha=1, hover_alpha=1,
+                heartbeat_path=Path(directory) / "heartbeat", header_title_limit=28,
+            )
+            try:
+                dismissed = MagicMock(wraps=window.dismiss_item)
+                window.dismiss_item = dismissed
+                window.render_items([item])
+                window.show()
+                self._app.processEvents()
+                window.reposition_interactive_windows()
+                hotspot = window._completed_check_windows[0]
+                # This point is in the left min-speed copy, outside the old
+                # check-only 48x32 hotspot.
+                QTest.mouseClick(hotspot, Qt.MouseButton.LeftButton, pos=QPoint(20, 60))
+                dismissed.assert_called_once_with(item)
+            finally:
+                window.close()
+                window.deleteLater()
+                self._app.processEvents()
 
     def test_completed_liquid_loops_past_completion_and_pauses_when_hidden(self) -> None:
         from codex_usage_hud.ui.work_overlay.qt_visuals import CompletedBadgeWidget

@@ -8,6 +8,7 @@ The relay is idle until Codex sends a request; it has no polling worker.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
+import encodings.idna  # noqa: F401 -- preload before frozen relay worker threads resolve hosts.
 import http.client
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
@@ -374,7 +375,7 @@ class ProviderProxyRelay:
                             while data := response.read1(65536):
                                 self.wfile.write(data)
                                 self.wfile.flush()
-                except (OSError, ValueError, http.client.HTTPException) as exc:
+                except (OSError, ValueError, LookupError, http.client.HTTPException) as exc:
                     if not upstream_response_received:
                         self._send_relay_failure(exc)
                 finally:
