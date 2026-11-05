@@ -68,6 +68,7 @@ class DaemonServices:
     launch: Callable[..., bool] = launch_codex_app
     append_diagnostic: Callable[..., object] = append_renderer_diagnostic
     create_tray: Callable[..., object] | None = None
+    activate_providers: Callable[[], object] | None = None
 
 
 @contextmanager
@@ -77,8 +78,16 @@ def _tray_lifetime(
 ):
     """Keep one tray instance alive for the whole daemon lifetime."""
     tray: object | None = None
+    def request_exit():
+        from .provider_exit import confirm_gateway_exit
+
+        if not confirm_gateway_exit():
+            return False
+        shutdown.request()
+        return True
+
     try:
-        tray = factory(on_exit=shutdown.request)
+        tray = factory(on_exit=request_exit)
         start = getattr(tray, "start", None)
         if callable(start):
             start()
@@ -469,6 +478,8 @@ def run_daemon(
     tray_factory = services.create_tray or create_windows_tray
     try:
         with services.lock_factory(), _tray_lifetime(tray_factory, shutdown):
+            if services.activate_providers is not None:
+                services.activate_providers()
             try:
                 startup = startup_decision(args, manager)
             except KeyboardInterrupt:

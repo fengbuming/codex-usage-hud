@@ -111,10 +111,15 @@ def discover_provider_registry(
     )
     raw_config = read_codex_config(resolved_config_path)
     provider_definitions = read_provider_definitions(resolved_config_path)
+    from .provider_gateway import PROVIDER_ID, gateway_info
+
+    gateway = gateway_info(resolved_config_path)
     entries: dict[str, dict[str, object]] = {}
 
     def include(provider_value: object, **source: bool) -> None:
         provider = normalize_provider(provider_value)
+        if gateway and provider == PROVIDER_ID:
+            return
         if not provider:
             return
         state = entries.setdefault(provider, {"profiles": set()})
@@ -122,7 +127,7 @@ def discover_provider_registry(
             if value:
                 state[key] = True
 
-    app_provider = normalize_provider(raw_config.get("model_provider"))
+    app_provider = normalize_provider(gateway.get("default_provider") or raw_config.get("model_provider"))
     include(app_provider, from_base_config=True)
 
     model_providers = raw_config.get("model_providers")
@@ -157,7 +162,7 @@ def discover_provider_registry(
                 continue
             provider = normalize_provider(profile_config.get("model_provider"))
             include(provider, from_profile=True)
-            if provider:
+            if provider in entries:
                 profile_names = entries[provider].setdefault("profiles", set())
                 if isinstance(profile_names, set):
                     profile_names.add(str(profile_name))
@@ -195,7 +200,7 @@ def discover_provider_registry(
             from_saved_settings=bool(state.get("from_saved_settings")),
             from_history=bool(state.get("from_history")),
         )
-        for provider, state in entries.items()
+        for provider, state in entries.items() if provider != PROVIDER_ID
     }
     return ProviderRegistry(
         entries=normalized_entries,

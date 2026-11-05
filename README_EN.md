@@ -42,7 +42,7 @@ codex-hud --update
 
 Providers without a local proxy or custom Desktop model keep their real upstream URL in `config.toml`. Once Codex reads that configuration, requests work even when neither the HUD nor its relay has been started since boot. Saving, selecting a default, and cloning providers all follow this rule.
 
-Providers requiring a proxy or model rewriting, and cached loopback endpoints from existing sessions, use the independent relay. The HUD starts it automatically; `--stop` leaves the relay and old routes running. New direct configurations need no relay, and existing direct providers can migrate back to their upstream URL even if the relay is unavailable.
+Renderer mode routes providers through the HUD gateway. The title-bar menu switches the default upstream internally for new chats. Existing chats keep their upstream; choosing another provider asks to create a copy. Normal exit requires choosing a provider and successfully restoring its direct configuration. The detached helper preserves existing connections; windows with cached proxy URLs may need a Codex restart. See [gateway behavior and migration](PROVIDER_GATEWAY.md), including migration from magpie and encrypted-context limitations.
 
 ## Sponsors
 

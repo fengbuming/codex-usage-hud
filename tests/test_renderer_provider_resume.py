@@ -219,6 +219,7 @@ function handleCodexCliQuickLaunchMenuClick(){}
 function syncCodexCliQuickLaunchMenu(){}
 function observeCodexProviderMismatchErrors(records){scans.push(records);}
 function closeCodexProviderMismatchDialog(){closed++;}
+function disposeGatewayResumeAdapter(){}
 function clearDefaultProviderSwitchFeedback(){}
 function closeCodexCliQuickLaunchMenu(){}
 function closeCodexProviderSwitchMenu(){}

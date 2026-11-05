@@ -291,7 +291,7 @@ def test_direct_migration_finishes_when_another_provider_cannot_start_helper(tmp
     assert proxy_metadata(config.read_provider_definitions(path)["demo"].section_text)["token"] == "demo"
 
 
-def test_migrated_default_sends_requests_after_detached_helper_is_stopped(detached_relay, upstream, tmp_path):
+def test_legacy_direct_migration_sends_after_detached_helper_stops(detached_relay, upstream, tmp_path):
     server, calls, _, release = upstream
     release.set()
     path = tmp_path / "config.toml"
@@ -304,7 +304,7 @@ def test_migrated_default_sends_requests_after_detached_helper_is_stopped(detach
         f'# codex-hud-proxy: {json.dumps(metadata)}\n', encoding="utf-8",
     )
     try:
-        detached_relay.activate(path)
+        ProviderProxyRelay.activate(detached_relay, path)
         direct_url = config._parse_toml_mapping(path.read_text())["model_providers"]["demo"]["base_url"]
         assert direct_url == metadata["base_url"]
         assert metadata["token"] in json.loads(detached_relay.state_path.read_text())["routes"]

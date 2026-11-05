@@ -536,8 +536,12 @@ class WindowsTrayIcon:
                 return
             self._exit_dispatched = True
         try:
-            self._on_exit()
+            if self._on_exit() is False:
+                with self._state_lock:
+                    self._exit_dispatched = False
         except Exception:
+            with self._state_lock:
+                self._exit_dispatched = False
             _LOGGER.exception("windows_tray_exit_callback_failed")
 
 

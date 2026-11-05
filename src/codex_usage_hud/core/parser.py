@@ -1734,7 +1734,11 @@ class JsonlSessionParser:
     def session_model_provider(self, records: Sequence[Mapping[str, Any]]) -> str:
         """Return the stable billing channel from session metadata."""
         payload = self.session_meta_payload(records)
-        return str(payload.get("model_provider") or "").strip().lower() or "unknown"
+        provider = str(payload.get("model_provider") or "").strip().lower() or "unknown"
+        from ..provider_gateway import session_provider
+
+        provider = session_provider(str(payload.get("id") or ""), provider) or "unknown"
+        return provider
 
     def session_profile_name(self, records: Sequence[Mapping[str, Any]]) -> str:
         """Return the CLI profile label recorded for this session.

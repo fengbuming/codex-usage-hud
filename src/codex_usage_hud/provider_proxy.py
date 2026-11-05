@@ -10,6 +10,8 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 import encodings.idna  # noqa: F401 -- preload before frozen relay worker threads resolve hosts.
 import http.client
+import gzip
+import io
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import logging
@@ -18,6 +20,7 @@ import re
 import secrets
 import select
 import socket
+import sqlite3
 from socketserver import TCPServer
 from threading import RLock, Thread
 from urllib.parse import SplitResult, urlsplit
@@ -27,6 +30,33 @@ _METADATA = re.compile(r"(?m)^# codex-hud-proxy: (.+)\r?$")
 _HOP_HEADERS = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
                 "te", "trailer", "transfer-encoding", "upgrade"}
 _LOGGER = logging.getLogger(__name__)
+
+
+def _decode_gateway_body(body: bytes | None, encoding: str) -> bytes | None:
+    encoding = encoding.strip().lower()
+    if not body or not encoding or encoding == "identity":
+        return body
+    if encoding not in {"gzip", "zstd"}:
+        raise ValueError("HUD 代理不支持此请求压缩格式。")
+    try:
+        errors = (OSError, EOFError)
+        if encoding == "gzip":
+            reader = gzip.GzipFile(fileobj=io.BytesIO(body))
+        else:
+            try:
+                import zstandard
+            except ImportError as exc:
+                raise ValueError("缺少 zstandard 依赖，无法解压 Codex 请求。") from exc
+            errors += (zstandard.ZstdError,)
+            reader = zstandard.ZstdDecompressor().stream_reader(io.BytesIO(body))
+        limit = 128 * 1024 * 1024
+        with reader:
+            result = reader.read(limit + 1)
+    except errors as exc:
+        raise ValueError("无法解压 Codex 请求。") from exc
+    if len(result) > limit:
+        raise ValueError("解压后的 Codex 请求超过 128 MiB。")
+    return result
 
 
 class LoopbackHTTPServer(ThreadingHTTPServer):
@@ -174,6 +204,12 @@ class ProviderProxyRelay:
     def config_base_url(self, metadata: dict, config_path: Path) -> str:
         """Select the persisted URL and retain any existing relay endpoints."""
         _validated_proxy_upstream(metadata)
+        if metadata.get("gateway"):
+            from .provider_gateway import gateway_info
+
+            info = gateway_info(config_path)
+            if info:
+                return str(info["endpoint"])
         if proxy_route_required(metadata):
             return self.route(metadata, config_path)
         # Direct providers never need a new loopback endpoint. Warm only
@@ -274,8 +310,29 @@ class ProviderProxyRelay:
                 if not route:
                     self.send_error(404)
                     return
+                gateway = bool(route.get("gateway_config"))
+                if gateway:
+                    from .provider_gateway import resolve_route
+
+                    gateway_path = Path(route["gateway_config"])
+                    try:
+                        route = resolve_route(
+                            gateway_path, self.headers,
+                            generation=(self.command == "POST" or self.headers.get("Upgrade", "").lower() == "websocket")
+                            and suffix.rstrip("/").endswith(("/responses", "/responses/compact")),
+                        )
+                    except (ValueError, RuntimeError, OSError, sqlite3.Error) as exc:
+                        self._send_relay_failure(exc)
+                        self.close_connection = True
+                        return
                 upstream = urlsplit(route["base_url"])
                 target = "/" + suffix if suffix else upstream.path or "/"
+                if gateway:
+                    target = upstream.path.rstrip("/") + "/" + suffix.removeprefix("v1/")
+                    # The built-in ChatGPT client includes /codex beneath its
+                    # configured backend root; custom Responses clients do not.
+                    if suffix.startswith("v1/codex/"):
+                        target = upstream.path.rstrip("/") + "/" + suffix[len("v1/codex/"):]
                 query = "&".join(filter(None, (upstream.query, path.query)))
                 if query:
                     target += "?" + query
@@ -309,6 +366,12 @@ class ProviderProxyRelay:
                     nominated = {x.strip().lower() for x in self.headers.get("Connection", "").split(",")}
                     headers = {k: v for k, v in self.headers.items()
                                if k.lower() not in _HOP_HEADERS | nominated | {"host", "content-length"}}
+                    if gateway:
+                        headers = {k: v for k, v in headers.items() if k.lower() not in {
+                            "authorization", "api-key", "x-api-key", "chatgpt-account-id",
+                            "openai-organization", "openai-project", "cookie",
+                        }}
+                        headers.update(route.get("headers") or {})
                     headers["Host"] = upstream.netloc
                     if upgrade:
                         headers.update({"Connection": "Upgrade", "Upgrade": "websocket"})
@@ -336,10 +399,19 @@ class ProviderProxyRelay:
                         body = b"".join(chunks)
                     elif self.headers.get("Content-Length"):
                         body = read_exact(int(self.headers["Content-Length"]))
+                    if gateway and self.headers.get("Content-Encoding"):
+                        body = _decode_gateway_body(body, self.headers["Content-Encoding"])
+                        headers = {k: v for k, v in headers.items() if k.lower() != "content-encoding"}
                     request_path = urlsplit(target).path.rstrip("/")
                     if request_path.endswith(("/responses", "/responses/compact")):
                         relay._report_source_evidence(self.headers, body)
                         body = _rewrite_model(body, route.get("model"), route.get("models"))
+                        if gateway:
+                            from .provider_gateway import prepare_request_body
+
+                            if upgrade and route.get("foreign_history"):
+                                raise ValueError("跨供应商副本需要 HTTP Responses 传输；请重新打开副本后重试。")
+                            body = prepare_request_body(gateway_path, route, body)
                     connection.request(self.command, target or "/", body=body, headers=headers)
                     response = connection.getresponse()
                     upstream_response_received = True
@@ -375,7 +447,7 @@ class ProviderProxyRelay:
                             while data := response.read1(65536):
                                 self.wfile.write(data)
                                 self.wfile.flush()
-                except (OSError, ValueError, LookupError, http.client.HTTPException) as exc:
+                except (OSError, ValueError, LookupError, sqlite3.Error, http.client.HTTPException) as exc:
                     if not upstream_response_received:
                         self._send_relay_failure(exc)
                 finally:
@@ -457,6 +529,7 @@ class DetachedProviderProxyRelay(ProviderProxyRelay):
         super().__init__(port)
         self.state_path = state_path
         self._service = None
+        self._gateway_service = None
 
     def route(self, metadata: dict, config_path: Path) -> str:
         from .provider_proxy_service import ProviderProxyServiceClient
@@ -471,12 +544,36 @@ class DetachedProviderProxyRelay(ProviderProxyRelay):
             self.config_paths.add(config_path)
             return endpoint
 
+    def activate(self, config_path: Path) -> None:
+        from .provider_gateway import activate_gateway
+
+        activate_gateway(config_path, self)
+
+    def gateway_route(self, metadata: dict, config_path: Path) -> str:
+        from .provider_proxy_service import ProviderProxyServiceClient
+        from .runtime_paths import runtime_file_path
+
+        # The legacy helper can keep servicing cached URLs and active streams.
+        # A separate stable endpoint upgrades the protocol without killing it.
+        with self.lock:
+            if self._gateway_service is None:
+                self._gateway_service = ProviderProxyServiceClient(
+                    self.port + 1,
+                    state_path=(self.state_path.with_name("gateway-" + self.state_path.name)
+                                if self.state_path else runtime_file_path("provider-gateway-service.json")),
+                    on_evidence=self._deliver_source_evidence,
+                )
+            return self._gateway_service.route(metadata, config_path)
+
     def close(self) -> None:
         with self.lock:
             service, self._service = self._service, None
+            gateway_service, self._gateway_service = self._gateway_service, None
             self.config_paths.clear()
         if service is not None:
             service.close()
+        if gateway_service is not None:
+            gateway_service.close()
 
 
 # Stable endpoint across HUD restarts; never redirect to an arbitrary free port.

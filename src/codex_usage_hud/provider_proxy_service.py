@@ -22,7 +22,7 @@ from .provider_proxy import LoopbackHTTPServer
 
 CONTROL_PATH = "/__codex_hud_proxy__/"
 CONTROL_HEADER = "X-Codex-Hud-Proxy-Control"
-PROTOCOL_VERSION = 1
+PROTOCOL_VERSION = 2
 
 # A HUD launched from the Windows desktop can itself be placed in a
 # kill-on-close Job Object.  The provider relay is deliberately a separate
@@ -47,7 +47,7 @@ def _save_state(path: Path, state: dict) -> None:
 def _read_state(path: Path, port: int) -> dict:
     try:
         state = json.loads(path.read_text(encoding="utf-8"))
-        if state.get("version") == PROTOCOL_VERSION and state.get("port") == port and state.get("control_token"):
+        if state.get("version") in {1, PROTOCOL_VERSION} and state.get("port") == port and state.get("control_token"):
             return state
     except (OSError, ValueError, AttributeError):
         pass
@@ -132,12 +132,12 @@ class ProviderProxyServiceClient:
         finally:
             connection.close()
 
-    def ensure(self) -> None:
+    def ensure(self, *, minimum_version: int = 1) -> None:
         with self._lock:
             self.state = _read_state(self.state_path, self.port)
             if self.state:
                 try:
-                    if self._call("health").get("version") == PROTOCOL_VERSION:
+                    if minimum_version <= self._call("health").get("version", 0) <= PROTOCOL_VERSION:
                         self._subscribe()
                         return
                 except (OSError, ValueError, RuntimeError, http.client.HTTPException):
@@ -177,7 +177,7 @@ class ProviderProxyServiceClient:
             )
 
     def route(self, metadata: dict, config_path: Path) -> str:
-        self.ensure()
+        self.ensure(minimum_version=2 if metadata.get("gateway_config") else 1)
         result = self._call("route", {"metadata": metadata, "config_path": str(config_path.resolve())})
         metadata.update(result["metadata"])
         return result["endpoint"]
@@ -251,7 +251,7 @@ def run_helper(state_path: Path, port: int, *, wait_for_port: float = 0) -> int:
     from .codex_provider_config import default_codex_config_path, read_provider_definitions
     from .provider_proxy import ProviderProxyRelay, proxy_metadata
 
-    state = _load_or_create_state(state_path, port)
+    state = {**_load_or_create_state(state_path, port), "version": PROTOCOL_VERSION}
     subscriptions: dict[str, int] = {}
 
     class Relay(ProviderProxyRelay):

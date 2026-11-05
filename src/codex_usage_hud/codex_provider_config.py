@@ -737,7 +737,7 @@ def read_provider_definitions(
         )
         auth_key = (
             CODEX_AUTH_API_KEY
-            if normalized_provider == default_provider and requires_openai_auth
+            if (normalized_provider == default_provider or default_provider == "codex_hud") and requires_openai_auth
             else ""
         )
         official_account = bool(
@@ -748,6 +748,11 @@ def read_provider_definitions(
         if metadata:
             raw_url = urlsplit(raw_base_url)
             is_relay_url = raw_url.hostname == "127.0.0.1" and raw_url.path.split("/")[1:2] == [metadata.get("token")]
+            if metadata.get("gateway"):
+                from .provider_gateway import gateway_metadata
+
+                gateway = gateway_metadata(text)
+                is_relay_url = is_relay_url or bool(gateway and raw_base_url == gateway.get("endpoint"))
             if not is_relay_url and raw_base_url != metadata.get("base_url"):
                 # Respect an external edit instead of resurrecting the old upstream URL.
                 metadata["base_url"] = raw_base_url
@@ -803,6 +808,8 @@ def _validate_request(
             "Provider ID 与 Codex 内置 Provider 重名（openai / ollama / lmstudio），"
             "内置 Provider 无法覆盖，请改用其它 ID（例如 ollama-local）。"
         )
+    if provider_id.casefold() == "codex_hud":
+        raise ValueError("codex_hud 是 HUD 统一代理的保留供应商 ID。")
     if not base_url or "\r" in base_url or "\n" in base_url:
         raise ValueError("base_url 不能为空且必须是单行文本。")
     if env_key and not ENVIRONMENT_KEY_PATTERN.fullmatch(env_key):
@@ -1061,7 +1068,10 @@ def save_provider_configs(
             })
 
         existing_proxy = proxy_metadata(_provider_section_text(original_text, provider_id))
-        if "use_proxy" in update or existing_proxy:
+        from .provider_gateway import gateway_info
+
+        active_gateway = gateway_info(path)
+        if "use_proxy" in update or existing_proxy or active_gateway:
             section = _section_range(candidate_text, provider_id)
             newline = _preferred_newline(candidate_text)
             proxy_options = (
@@ -1072,6 +1082,8 @@ def save_provider_configs(
                 existing_proxy, base_url=base_url,
                 model=model_for_route, models=models_for_route, **proxy_options,
             )
+            if active_gateway:
+                metadata["gateway"] = True
             body = _set_quoted_value(
                 section[2],
                 "base_url",
@@ -1248,6 +1260,10 @@ def set_default_codex_provider(
     if not path.exists():
         raise FileNotFoundError(f"Codex config was not found: {path}")
     original_text = _read_text_exact(path)
+    from .provider_gateway import gateway_info, select_provider
+
+    if gateway_info(path):
+        return select_provider(normalized, config_path=path)
     parsed = _parse_toml_mapping(original_text)
     current = str(parsed.get("model_provider") or "").strip().casefold()
     raw_model_providers = parsed.get("model_providers")
@@ -1357,6 +1373,9 @@ def clone_provider_with_bearer_key(
         raise FileNotFoundError(f"Codex config was not found: {path}")
     original_text = _read_text_exact(path)
     parsed = _parse_toml_mapping(original_text)
+    from .provider_gateway import PROVIDER_ID, gateway_info, select_provider
+
+    active_gateway = gateway_info(path)
     raw_model_providers = parsed.get("model_providers")
     definitions = (
         raw_model_providers
@@ -1448,7 +1467,8 @@ def clone_provider_with_bearer_key(
     head_end = first_table.start() if first_table else len(candidate_text)
     head = candidate_text[:head_end]
     tail = candidate_text[head_end:]
-    candidate_head = _set_quoted_value(head, "model_provider", new_id, newline)
+    native_default = PROVIDER_ID if active_gateway else new_id
+    candidate_head = _set_quoted_value(head, "model_provider", native_default, newline)
     candidate_head = candidate_head.rstrip("\r\n") + newline
     candidate_text = candidate_head + tail
     _validate_toml(candidate_text)
@@ -1461,7 +1481,7 @@ def clone_provider_with_bearer_key(
     )
     if not isinstance(new_entry, Mapping):
         raise ValueError("克隆后的供应商段写入校验失败。")
-    if str(candidate_parsed.get("model_provider") or "").strip().casefold() != new_id:
+    if str(candidate_parsed.get("model_provider") or "").strip().casefold() != native_default:
         raise ValueError("config.toml 顶层 model_provider 写入后校验失败。")
     previous_env_value = _user_environment_value(env_key)
     env_written = False
@@ -1470,6 +1490,12 @@ def clone_provider_with_bearer_key(
             _set_user_environment_value(env_key, key)
             env_written = True
         _write_text_atomically(path, candidate_text, original_text, private=True)
+        if active_gateway:
+            try:
+                select_provider(new_id, config_path=path)
+            except Exception:
+                _write_text_atomically(path, original_text, candidate_text, private=True)
+                raise
     except Exception:
         if env_written:
             try:
@@ -1486,6 +1512,7 @@ def clone_provider_with_bearer_key(
         "name": f"{source_name}（副本）",
         "environmentKey": env_key,
         "configPath": str(path),
+        "gateway": bool(active_gateway),
     }
 
 
@@ -1643,6 +1670,11 @@ def delete_provider_config(
     default_provider = str(parsed_config.get("model_provider") or "").strip().casefold()
     if default_provider == normalized_provider:
         raise ValueError("默认 Codex App Provider 不支持删除供应商配置。")
+    from .provider_gateway import PROVIDER_ID, gateway_info
+
+    gateway = gateway_info(path)
+    if normalized_provider == PROVIDER_ID or normalized_provider == gateway.get("default_provider"):
+        raise ValueError("HUD 代理身份和默认供应商不能删除，请先切换默认供应商。")
 
     raw_providers = parsed_config.get("model_providers")
     provider_env_key = ""

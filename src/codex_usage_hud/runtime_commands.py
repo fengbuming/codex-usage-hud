@@ -184,6 +184,8 @@ class GeneralCommandPorts:
     set_default_provider: Callable[[str], Mapping[str, object]] | None = None
     clone_provider_with_bearer_key: Callable[..., Mapping[str, object]] | None = None
     save_config_fast: Callable[[Any], None] | None = None
+    gateway_command: Callable[[Mapping[str, object]], Mapping[str, object]] | None = None
+    validate_provider_exit: Callable[[str], None] | None = None
 
 
 def _status(message: str, *, kind: str = "") -> dict[str, object]:
@@ -1455,6 +1457,11 @@ def handle_general_command(
             status["providerSetDefault"] = dict(result)
             status["providerSetDefaultProvider"] = str(provider).strip().lower()
             return status
+        if action in {"providerBindSession", "providerPrepareExit"}:
+            if ports.gateway_command is None:
+                return _status("HUD 统一代理当前不可用。", kind="error")
+            result = ports.gateway_command(command)
+            return {**_status("供应商路由已保存。"), "providerGateway": dict(result)}
         if action == "providerCloneSwitch":
             if ports.clone_provider_with_bearer_key is None:
                 return _status("供应商克隆切换当前不可用。", kind="error")
@@ -2018,6 +2025,8 @@ def handle_general_command(
             ports.request_restart_codex()
             return _status("已请求立即重启 Codex Desktop；HUD 将在重启后重新连接。")
         if action == "exit":
+            if ports.validate_provider_exit is not None:
+                ports.validate_provider_exit(str(command.get("exitToken") or ""))
             ports.request_exit()
             return _status("已请求退出 HUD；后台守护进程也会一并停止。")
         if action == "checkUpdate":
@@ -2455,6 +2464,21 @@ def _handle_renderer_settings_command(
         # afterwards; save_config performs the single authoritative reload.
         return clone_provider_with_bearer_key_config(source, api_key, **proxy_options)
 
+    def gateway_command(command: Mapping[str, object]) -> Mapping[str, object]:
+        from .provider_gateway import prepare_exit, select_provider, session_provider
+
+        provider = str(command.get("provider") or "")
+        if command.get("action") == "providerPrepareExit":
+            return prepare_exit(provider)
+        if command.get("preserveExisting"):
+            current = session_provider(str(command.get("sessionId") or ""))
+            if current:
+                return {"providerId": current, "gateway": True}
+        return select_provider(provider, thread_id=str(command.get("sessionId") or ""),
+                               copied_from=str(command.get("copiedFrom") or ""))
+
+    from .provider_gateway import validate_exit
+
     general_ports = GeneralCommandPorts(
         load_config=load_config,
         save_config=save_config,
@@ -2491,6 +2515,8 @@ def _handle_renderer_settings_command(
         codex_cli_discover=discover_cli,
         codex_cli_launch=launch_cli,
         set_default_provider=set_default_provider,
+        gateway_command=gateway_command,
+        validate_provider_exit=validate_exit,
         clone_provider_with_bearer_key=clone_provider_with_bearer_key,
         save_config_fast=save_config_fast,
     )

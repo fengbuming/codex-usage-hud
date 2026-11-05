@@ -67,6 +67,7 @@ const codexCliQuickLaunchProviderLabelState = () => providerState;
 const closeCodexCliQuickLaunchMenu = () => { codexCliQuickLaunchMenuState.open = false; };
 const closeCodexProviderSwitchMenu = () => { codexProviderSwitchMenuState.open = false; };
 const renderCodexCliQuickLaunchMenu = () => {};
+const installGatewayResumeAdapter = () => {};
 ''' + TEXT[start:end] + r'''
 syncCodexCliQuickLaunchMenu();
 const label = codexProviderSwitchMenuState.toggle;

@@ -107,6 +107,79 @@ _TEXT_PREFIX = r"""
         result: null,
         startedAt: 0,
       };
+      const gatewayCommandRequests = new Map();
+      let gatewayResumeAdapter = null;
+      let gatewayAdapterAttempted = false;
+
+      function codexGatewayCommand(command) {
+        const requestId = typedSettingsRequestId("provider-gateway");
+        return new Promise((resolve, reject) => {
+          const timer = window.setTimeout(() => {
+            gatewayCommandRequests.delete(requestId);
+            reject(new Error("代理操作尚未确认，请重试。"));
+          }, 15000);
+          gatewayCommandRequests.set(requestId, { resolve, reject, timer });
+          if (!submitSettingsCommand({ ...command, requestId }, "", { preserveOverlay: true, quiet: true })) {
+            window.clearTimeout(timer);
+            gatewayCommandRequests.delete(requestId);
+            reject(new Error("代理操作提交失败。"));
+          }
+        });
+      }
+
+      function applyGatewayCommandStatus(status) {
+        const requestId = String(status?.requestId || "");
+        const request = gatewayCommandRequests.get(requestId);
+        if (!request) return;
+        gatewayCommandRequests.delete(requestId);
+        window.clearTimeout(request.timer);
+        if (status.kind === "error") request.reject(new Error(status.message || "代理操作失败。"));
+        else request.resolve(status.providerGateway || {});
+      }
+
+      function installGatewayResumeAdapter() {
+        if (!hudSettingsFromPayload()?.provider_gateway?.active || gatewayAdapterAttempted) return;
+        gatewayAdapterAttempted = true;
+        // Electron freezes its preload bridge. Adapt the live local manager,
+        // the same supported RPC owner used for native config refreshes.
+        resolveCodexProviderRuntime().then(async ({ manager, scope }) => {
+          if (!gatewayAdapterAttempted) return;
+          const original = manager.sendRequest;
+          const wrapped = async function(method, params, ...args) {
+            if (hudSettingsFromPayload()?.provider_gateway?.active && method === "thread/resume" && params?.threadId) {
+              const response = await original.call(this, "thread/read", { threadId: params.threadId, includeTurns: false });
+              const saved = String(response?.thread?.modelProvider || "").trim();
+              if (!saved) throw new Error("无法确认历史会话供应商，请重新打开该会话。");
+              if (saved !== hudSettingsFromPayload().provider_gateway.provider_id) {
+                await codexGatewayCommand({ action: "providerBindSession", provider: saved,
+                  sessionId: params.threadId, preserveExisting: true });
+              }
+              params = { ...params, modelProvider: saved, config: { ...(params.config || {}), model_provider: saved } };
+            }
+            return original.call(this, method, params, ...args);
+          };
+          manager.sendRequest = wrapped;
+          gatewayResumeAdapter = { manager, original, wrapped };
+          // Only takeover invalidates native prewarm. Later upstream switches
+          // are entirely internal to the gateway.
+          await scope?.queryClient?.invalidateQueries?.({ queryKey: ["user-saved-config"] });
+          await manager.clearPrewarmedThreads?.();
+        }).catch((error) => {
+          console.warn("[Codex HUD] History provider adapter unavailable", error);
+        });
+      }
+
+      function disposeGatewayResumeAdapter() {
+        const adapter = gatewayResumeAdapter;
+        if (adapter && adapter.manager.sendRequest === adapter.wrapped) adapter.manager.sendRequest = adapter.original;
+        gatewayResumeAdapter = null;
+        gatewayAdapterAttempted = false;
+        gatewayCommandRequests.forEach(({ reject, timer }) => {
+          window.clearTimeout(timer);
+          reject(new Error("HUD 已关闭，代理操作未确认。"));
+        });
+        gatewayCommandRequests.clear();
+      }
 
       function codexCliLaunchStateKey(optionsValue = codexCliState.options || {}, providerValue = codexCliState.provider) {
         const options = optionsValue || {};
@@ -5425,11 +5498,16 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
       let lastProviderSaveRefreshRequestId = "";
       function applySettingsCommandStatus(payload) {
         const status = payload?.settingsCommandStatus;
+        applyGatewayCommandStatus(status);
         sessionViewDomain.applySearchJump(status?.sessionCleanupSessionJump);
         if (String(status?.action || "") === "providerSetDefault") {
           const failed = String(status?.kind || "") === "error";
           const requestId = String(status?.requestId || "");
           const provider = String(status?.providerSetDefaultProvider || "").trim().toLowerCase();
+          if (!failed && status?.providerSetDefault?.gateway) {
+            finishDefaultProviderSwitch({ requestId, provider, ok: true });
+            return;
+          }
           if (!failed && requestId && provider && requestId === codexProviderSwitchMenuState.pendingRequestId) {
             if (codexProviderSwitchMenuState.refreshPendingRequestId !== requestId) {
               codexProviderSwitchMenuState.refreshPendingRequestId = requestId;
@@ -7067,18 +7145,32 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
         );
       }
 
-      function exitHudFromModal() {
+      async function exitHudFromModal() {
+        const gateway = hudSettingsFromPayload()?.provider_gateway?.active;
+        const provider = document.querySelector('[data-provider-exit-selection="true"]')?.value || "";
+        let exitToken = "";
+        if (gateway) {
+          if (!provider) { setSettingsStatus("请选择退出后使用的供应商。", "error"); return; }
+          try {
+            const result = await codexGatewayCommand({ action: "providerPrepareExit", provider });
+            exitToken = result.exitToken || "";
+            if (!exitToken) throw new Error("直连配置尚未确认，HUD 将继续运行。");
+          } catch (error) {
+            setSettingsStatus(`无法退出：${error?.message || error}`, "error");
+            return;
+          }
+        }
         openSettingsLoading({
           kicker: "正在退出",
           title: "正在停止 HUD",
           body: "HUD 正在退出当前界面，并停止后台守护进程（如果正在运行）。",
         });
         const submitted = submitSettingsCommand(
-          { action: "exit", reason: "settings", expiresAt: Date.now() + 10000 },
+          { action: "exit", reason: "settings", exitToken, expiresAt: Date.now() + 10000 },
           "退出请求已提交，正在停止 HUD...",
           { preserveOverlay: true }
         );
-        if (submitted) {
+        if (submitted && !gateway) {
           ctx.lifecycle.timeout("settings_restart", () => {
             try {
               if (typeof window.__codexUsageHudRemove === "function") {
@@ -7126,13 +7218,19 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
         if (!dialog) return;
         closeSettingsConfirm();
         const layer = document.createElement("div");
+        const settings = hudSettingsFromPayload();
+        const gateway = settings?.provider_gateway?.active;
+        const selected = String(settings.default_provider || settings.app_provider || "");
+        const providers = settingsProviderNames(settings);
+        const exitSelection = gateway ? `<label>退出后使用的供应商 <select data-provider-exit-selection="true">${providers.map((provider) => `<option value="${escapeHtml(provider)}" ${provider === selected ? "selected" : ""}>${escapeHtml(providerDisplayName(settings, provider))}</option>`).join("")}</select></label>` : "";
         layer.className = "codex-usage-hud-settings-confirm-layer";
         layer.dataset.settingsConfirm = "true";
         layer.innerHTML = `
           <div class="codex-usage-hud-settings-confirm-card" role="alertdialog" aria-modal="true" aria-label="确认退出 HUD">
             <div class="codex-usage-hud-settings-confirm-kicker">退出 HUD</div>
             <div class="codex-usage-hud-settings-confirm-title">完全退出并停止守护进程？</div>
-            <div class="codex-usage-hud-settings-confirm-body">这会完全退出 HUD，并停止后台守护进程（如果当前正在运行）。\n\n是否继续？</div>
+            <div class="codex-usage-hud-settings-confirm-body">${gateway ? "退出 HUD 后，统一代理可能断开，正在生成的回复和仍缓存代理地址的会话可能受影响。请先等待回复完成。HUD 会先把 config.toml 恢复为所选供应商的直连配置，保存失败将取消退出。退出后若旧窗口无法发送，请重启 Codex 或重新启动 HUD。" : "这会完全退出 HUD，并停止后台守护进程（如果当前正在运行）。是否继续？"}</div>
+            ${exitSelection}
             <div class="codex-usage-hud-settings-confirm-actions">
               <button type="button" class="codex-usage-hud-settings-action" data-action="settings-exit-cancel" data-variant="ghost">取消</button>
               <button type="button" class="codex-usage-hud-settings-action" data-action="settings-exit-confirm" data-primary="true">退出 HUD</button>
@@ -8370,11 +8468,11 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
               ${closeButton}
             </div>
             <div class="codex-usage-hud-provider-migrate-body">
-              默认已切换到「${escapeHtml(targetName)}」，仅对新会话生效。当前会话仍使用「${escapeHtml(activeName)}」。可立即复制当前会话到「${escapeHtml(targetName)}」并自动切换，副本标题以「(复制)」开头，原会话保留。
+              当前会话使用「${escapeHtml(activeName)}」。是否复制会话并使用「${escapeHtml(targetName)}」继续？副本标题以「(复制)」开头，原会话保留。取消后不会更改当前会话的供应商。
             </div>
             <div class="codex-usage-hud-provider-migrate-actions">
-              <button type="button" data-codex-provider-migrate-dismiss="true" data-variant="ghost">暂不迁移</button>
-              <button type="button" data-codex-provider-migrate-run="true" data-primary="true">迁移到 ${escapeHtml(targetName)}</button>
+              <button type="button" data-codex-provider-migrate-dismiss="true" data-variant="ghost">取消</button>
+              <button type="button" data-codex-provider-migrate-run="true" data-primary="true">复制并使用 ${escapeHtml(targetName)}</button>
             </div>
           </div>
         `;
@@ -8705,18 +8803,28 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
           sourceSessionId: sourceId,
         };
         renderCodexProviderMigrateDialog();
-        codexBridgeRequest("thread/fork", {
+        const gateway = hudSettingsFromPayload()?.provider_gateway?.active;
+        let nativeTarget = target;
+        const fork = () => codexBridgeRequest("thread/fork", {
           threadId: sourceId,
-          modelProvider: target,
+          modelProvider: nativeTarget,
+          ...(gateway ? { config: { model_provider: nativeTarget } } : {}),
           ...(targetEntry.desktopModel ? { model: String(targetEntry.desktopModel) } : {}),
           threadSource: "user",
           ephemeral: false,
-        }).then((response) => {
+        });
+        const operation = gateway
+          ? codexBridgeRequest("thread/read", { threadId: sourceId, includeTurns: false }, 8000).then((response) => {
+            nativeTarget = String(response?.result?.thread?.modelProvider || "").trim();
+            if (response?.error || !nativeTarget) throw new Error("无法确认原会话供应商，未复制会话。");
+            return fork();
+          }) : fork();
+        operation.then(async (response) => {
           const error = response?.error;
           const thread = response?.result?.thread || {};
           const newId = String(thread?.id || response?.result?.threadId || response?.result?.id || "");
           const got = String(thread?.modelProvider || response?.result?.modelProvider || "").trim().toLowerCase();
-          if (error || !newId || (got && got !== target)) {
+          if (error || !newId || (got && got !== nativeTarget)) {
             const rawError = error ? String(error?.message || "未知错误") : "";
             state.result = {
               ok: false,
@@ -8733,6 +8841,12 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
             if (state.layer) renderCodexProviderMigrateDialog();
             if (sessionTransferState.open) renderSessionTransferDialog();
             return;
+          }
+          if (gateway) {
+            // Bind before naming/navigation: a new tab must never send its
+            // first turn to the default or the source's upstream by accident.
+            await codexGatewayCommand({ action: "providerBindSession", provider: target, sessionId: newId, copiedFrom: sourceId });
+            await codexGatewayCommand({ action: "providerSetDefault", provider: target });
           }
           // fork 成功：取原标题 → 命名副本 → 导航切换 → 确认目标会话已打开
           const finish = (detail) => {
@@ -8771,6 +8885,11 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
               error: String(innerError?.message || innerError || "迁移后续处理失败。"),
             });
           });
+        }).catch((error) => {
+          state.result = { ok: false, error: String(error?.message || error) };
+          state.busy = false;
+          if (sessionTransferState.providerForkTask) sessionTransferState.providerForkTask.active = false;
+          if (state.layer) renderCodexProviderMigrateDialog();
         });
       }
 
@@ -8856,8 +8975,14 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
           if (!provider) return;
           const settings = hudSettingsFromPayload();
           const payload = currentPayload() || {};
-          const activeProvider = String(payload.activeSessionProvider || "").trim().toLowerCase();
-          const activeSessionId = String(payload.sessionId || "").trim();
+          const live = typeof readActiveSessionRef === "function" ? readActiveSessionRef() : null;
+          const newSession = live?.newSession || live?.pendingSession || payload.newSession || payload.pendingSession;
+          if (!newSession && live?.sessionId && live.sessionId !== payload.sessionId) {
+            showDefaultProviderSwitchFeedback("正在读取当前会话供应商，请稍后再选择。", true);
+            return;
+          }
+          const activeProvider = newSession ? "" : String(payload.activeSessionProvider || "").trim().toLowerCase();
+          const activeSessionId = newSession ? "" : String(payload.sessionId || "").trim();
           const name = providerDisplayName(settings, provider);
           if (codexProviderSwitchMenuState.pendingRequestId) return;
           const requestId = typedSettingsRequestId("provider-set-default");
@@ -8869,6 +8994,11 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
               activeSessionId,
             }
             : null;
+          if (settings?.provider_gateway?.active && migration) {
+            openCodexProviderMigrateDialog(migration);
+            return;
+          }
+          if (settings?.provider_gateway?.active && activeProvider === provider && activeSessionId) return;
           if (!beginDefaultProviderSwitch({ provider, requestId, migration })) return;
           const submitted = submitSettingsCommand(
             { action: "providerSetDefault", provider, requestId },
@@ -8894,7 +9024,11 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
       }
 
       function codexCliQuickLaunchProviderLabelState() {
-        const active = String(currentPayload()?.activeSessionProvider || "").trim().toLowerCase();
+        const payload = currentPayload() || {};
+        const live = typeof readActiveSessionRef === "function" ? readActiveSessionRef() : null;
+        const newSession = live?.newSession || live?.pendingSession || payload.newSession || payload.pendingSession;
+        const active = newSession || (live?.sessionId && live.sessionId !== payload.sessionId)
+          ? "" : String(payload.activeSessionProvider || "").trim().toLowerCase();
         const pending = String(codexProviderSwitchMenuState.pendingProvider || "")
           .trim().toLowerCase();
         // config.toml 顶层 model_provider 的稳定默认（新会话默认供应商）；
@@ -8989,6 +9123,7 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
       }
 
       function syncCodexCliQuickLaunchMenu() {
+        installGatewayResumeAdapter();
         const providers = codexCliQuickLaunchMenuProviders();
         const menubar = codexDesktopApplicationMenu();
         const existing = document.querySelector('[data-codex-usage-hud-cli-menu-toggle="true"]');
@@ -9141,6 +9276,7 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
       }
 
       function disposeCodexCliQuickLaunchMenu() {
+        disposeGatewayResumeAdapter();
         closeCodexProviderMismatchDialog();
         codexProviderMismatchState.requestId = "";
         codexProviderMismatchState.attempt = null;
