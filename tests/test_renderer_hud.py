@@ -202,17 +202,27 @@ class RendererHudPayloadTests(unittest.TestCase):
         payload = payload_from_snapshot(snapshot).to_json()
 
         label = payload["topProgress"]["collapsed"][0]["label"]
-        self.assertIn("/60%/16.0 tok/s", label)
+        self.assertIn("/16ts", label)
+        self.assertNotIn("%", label)
+        session_progress = payload["topProgress"]["collapsed"][0]
+        self.assertAlmostEqual(session_progress["ratio"], 0.6)
+        self.assertIn("缓存命中 60%", session_progress["tooltip"])
         self.assertNotIn("~", label)
-        self.assertEqual(payload["topDetails"]["sessionMix"], "均速 16.0 tok/s")
+        self.assertEqual(payload["topDetails"]["sessionMix"], "均速 16ts")
         self.assertEqual(payload["outputTokensPerSecond"], 80.0)
-        self.assertIn("16.0 tok/s", payload["payloadDomains"]["currentSession"]["topLine"])
-        self.assertIn("16.0 tok/s", payload["payloadDomains"]["sessionSwitch"]["topLine"])
+        self.assertIn("16ts", payload["payloadDomains"]["currentSession"]["topLine"])
+        self.assertIn("16ts", payload["payloadDomains"]["sessionSwitch"]["topLine"])
         snapshot.request.status = "confirmed"
         self.assertEqual(
             payload_from_snapshot(snapshot).to_json()["topDetails"]["sessionMix"],
-            "均速 16.0 tok/s",
+            "均速 16ts",
         )
+        for speed, expected in ((5.0, "5ts"), (16.5, "16.5ts"), (100.0, "100ts")):
+            with self.subTest(speed=speed):
+                snapshot.session_output_tokens_per_second = speed
+                result = payload_from_snapshot(snapshot).to_json()
+                self.assertEqual(result["topDetails"]["sessionMix"], f"均速 {expected}")
+                self.assertTrue(result["topProgress"]["collapsed"][0]["label"].endswith(f"/{expected}"))
 
     def test_payload_does_not_substitute_historical_average_for_live_tps(self) -> None:
         snapshot = ParsedSession(status="parsed")
@@ -392,22 +402,25 @@ class RendererHudPayloadTests(unittest.TestCase):
         top_line = str(payload["topLine"])
         self.assertNotIn("Live Renderer Thread", str(payload["topLine"]))
         self.assertTrue(top_line.startswith("本会话 14k/"))
-        self.assertIn("本会话 14k/$0.123/", top_line)
+        self.assertIn("本会话 14k/$0.12/", top_line)
         self.assertNotIn("$0.136", top_line)
-        self.assertIn("/61%/— tok/s | 今日", top_line)
-        self.assertIn("今日 50k/$0.500", top_line)
+        self.assertIn("/—ts | 今日", top_line)
+        self.assertIn("今日 50k/$0.50", top_line)
         self.assertIn("本周 200k/$1.50", top_line)
         top_progress = payload["topProgress"]
         self.assertIsInstance(top_progress, dict)
         collapsed_progress = top_progress["collapsed"]
         self.assertEqual([item["tone"] for item in collapsed_progress], ["session", "day", "week"])
         self.assertTrue(collapsed_progress[0]["label"].startswith("本会话 14k/"))
-        self.assertIn("/61%/— tok/s", collapsed_progress[0]["label"])
+        self.assertIn("/—ts", collapsed_progress[0]["label"])
+        self.assertNotIn("%", collapsed_progress[0]["label"])
+        self.assertEqual(collapsed_progress[0]["ratio"], top_progress["cache"]["ratio"])
+        self.assertIn("缓存命中 61%", collapsed_progress[0]["tooltip"])
         self.assertNotIn("rightText", collapsed_progress[0])
         self.assertEqual(collapsed_progress[1]["rightText"], "总 $100.00")
         self.assertEqual(collapsed_progress[2]["rightText"], "总 $400.00")
         self.assertEqual(top_progress["cache"]["label"], "缓存命中 61%")
-        self.assertEqual(top_progress["budget"][0]["label"], "今日 50k/$0.500")
+        self.assertEqual(top_progress["budget"][0]["label"], "今日 50k/$0.50")
         self.assertEqual(top_progress["budget"][0]["rightText"], "总 $100.00")
         self.assertNotIn("overflowRatio", top_progress["budget"][0])
         self.assertNotIn("overflowBadge", top_progress["budget"][0])
@@ -548,14 +561,11 @@ class RendererHudPayloadTests(unittest.TestCase):
         self.assertIn('data-pricing-import-file="true"', renderer_hud.RENDERER_HUD_SCRIPT)
         self.assertIn("unknownPriceModels", renderer_hud.RENDERER_HUD_SCRIPT)
         self.assertIn("settings-add-detected-model", renderer_hud.RENDERER_HUD_SCRIPT)
-        self.assertIn('data-action="settings-exit"', renderer_hud.RENDERER_HUD_SCRIPT)
-        self.assertIn('data-action="settings-exit-confirm"', renderer_hud.RENDERER_HUD_SCRIPT)
-        self.assertIn('data-setting-key="stop_hud_on_lock_screen"', renderer_hud.RENDERER_HUD_SCRIPT)
-        self.assertIn("锁屏后完全退出HUD进程", renderer_hud.RENDERER_HUD_SCRIPT)
-        self.assertLess(
-            renderer_hud.RENDERER_HUD_SCRIPT.index('data-action="settings-exit"'),
-            renderer_hud.RENDERER_HUD_SCRIPT.index('data-setting-key="stop_hud_on_lock_screen"'),
-        )
+        self.assertIn('data-action="settings-manage"', renderer_hud.RENDERER_HUD_SCRIPT)
+        self.assertIn('>重载/退出</button>', renderer_hud.RENDERER_HUD_SCRIPT)
+        self.assertIn('data-action="${exiting ? "settings-exit-confirm" : "settings-reload-confirm"}"', renderer_hud.RENDERER_HUD_SCRIPT)
+        self.assertNotIn('data-setting-key="stop_hud_on_lock_screen"', renderer_hud.RENDERER_HUD_SCRIPT)
+        self.assertNotIn('codex-usage-hud-settings-footnote', renderer_hud.RENDERER_HUD_SCRIPT)
         self.assertIn("退出 HUD", renderer_hud.RENDERER_HUD_SCRIPT)
         self.assertIn("版本更新", renderer_hud.RENDERER_HUD_SCRIPT)
         self.assertIn("settings-check-update", renderer_hud.RENDERER_HUD_SCRIPT)
@@ -696,7 +706,7 @@ class RendererHudPayloadTests(unittest.TestCase):
         self.assertIn("ctx.bindings.available(settingsCommandBindingName)", renderer_hud.RENDERER_HUD_SCRIPT)
         self.assertIn("ctx.bindings.send(settingsCommandBindingName, payload)", renderer_hud.RENDERER_HUD_SCRIPT)
         self.assertIn('setSettingsStatus(state.message || state.title || "", state.error ? "error" : "")', renderer_hud.RENDERER_HUD_SCRIPT)
-        self.assertIn("window.__codexUsageHudRemove()", renderer_hud.RENDERER_HUD_SCRIPT)
+        self.assertIn("window.__codexUsageHudRemove =", renderer_hud.RENDERER_HUD_SCRIPT)
         self.assertIn("expiresAt: Date.now() + 10000", renderer_hud.RENDERER_HUD_SCRIPT)
         self.assertIn("navigator.clipboard", renderer_hud.RENDERER_HUD_SCRIPT)
         self.assertIn("requestRowDetails", renderer_hud.RENDERER_HUD_SCRIPT)
@@ -828,14 +838,16 @@ class RendererHudPayloadTests(unittest.TestCase):
             'rail.appendChild(progressTextLayer("codex-usage-hud-progress-track-text"));',
             renderer_hud.RENDERER_HUD_SCRIPT,
         )
-        self.assertNotIn(
+        self.assertIn(
             "codex-usage-hud-progress-fill-text",
             renderer_hud.RENDERER_HUD_SCRIPT,
         )
         self.assertIn("codex-usage-hud-progress-text", renderer_hud.RENDERER_HUD_SCRIPT)
         self.assertNotIn("codex-usage-hud-progress-total", renderer_hud.RENDERER_HUD_SCRIPT)
         self.assertNotIn("codex-usage-hud-progress-label", renderer_hud.RENDERER_HUD_SCRIPT)
-        self.assertIn("mix-blend-mode: difference;", renderer_hud.RENDERER_HUD_SCRIPT)
+        self.assertNotIn("mix-blend-mode: difference;", renderer_hud.RENDERER_HUD_SCRIPT)
+        self.assertIn('filledText.setAttribute("aria-hidden", "true")', renderer_hud.RENDERER_HUD_SCRIPT)
+        self.assertIn("--codex-usage-hud-progress-fill-width", renderer_hud.RENDERER_HUD_SCRIPT)
         self.assertIn("function refreshCollapsedProgressStrip(node)", renderer_hud.RENDERER_HUD_SCRIPT)
         self.assertIn("const collapsedTailPeekWidth = 40;", renderer_hud.RENDERER_HUD_SCRIPT)
         self.assertIn("tailShare > collapsedTailPeekWidth", renderer_hud.RENDERER_HUD_SCRIPT)
@@ -929,12 +941,12 @@ class RendererHudPayloadTests(unittest.TestCase):
         top_details = payload["topDetails"]
         self.assertIsInstance(top_details, dict)
         self.assertEqual(top_details["title"], "Live Renderer Thread")
-        self.assertEqual(top_details["sessionCost"], "$0.123")
+        self.assertEqual(top_details["sessionCost"], "$0.12")
         self.assertEqual(top_details["sessionTokens"], "12k")
         self.assertEqual(top_details["taskOrdinal"], "第3次需求")
         self.assertEqual(top_details["taskOrdinalSession"], "")
         self.assertEqual(top_details["taskOrdinalActivity"], "第3次需求")
-        self.assertEqual(top_details["sessionMix"], "均速 — tok/s")
+        self.assertEqual(top_details["sessionMix"], "均速 —ts")
         self.assertEqual(top_details["sessionAverage"], "均值 n/a")
         self.assertIn("↑↻ $", top_details["sessionComposition"])
         self.assertNotIn("=", top_details["sessionComposition"])
@@ -1370,7 +1382,7 @@ class RendererHudPayloadTests(unittest.TestCase):
         top_details = payload["topDetails"]
         self.assertEqual(top_details["title"], "新会话")
         self.assertEqual(top_details["session"], "新会话 | 行 0 | 确认 0")
-        self.assertEqual(top_details["sessionCost"], "$0.0000")
+        self.assertEqual(top_details["sessionCost"], "$0.00")
         self.assertEqual(top_details["sessionTokens"], "0")
         self.assertEqual(top_details["sessionRounds"], "0 轮确认")
         self.assertEqual(top_details["sessionAverage"], "均值 n/a")
@@ -3173,7 +3185,7 @@ console.log(JSON.stringify(results));
         self.assertTrue(any("等待结束" in title for title in trail_titles))
         self.assertIn("shell_command", str(top_details["activityTrail"]))
         details = payload["requestRowDetails"]
-        self.assertEqual(details[0]["prefix"].strip(), "#2 ~$0.020")
+        self.assertEqual(details[0]["prefix"].strip(), "#2 ~$0.02")
         self.assertTrue(details[0]["running"])
         self.assertTrue(str(details[0]["time"]).strip().endswith("s"))
         self.assertTrue(str(details[0]["startedAt"]))
@@ -3434,8 +3446,8 @@ console.log(JSON.stringify(results));
         self.assertEqual(top_details["activityGapLabel"], "处理轮次")
         self.assertEqual(top_details["activityGap"], "2轮")
         self.assertEqual(top_details["activityLastLabel"], "处理花费")
-        self.assertEqual(top_details["activityLast"], "$0.003")
-        self.assertEqual(top_details["activityLastTooltip"], "180Tokens/$0.003/80%")
+        self.assertEqual(top_details["activityLast"], "$0.00")
+        self.assertEqual(top_details["activityLastTooltip"], "180Tokens/$0.00/80%")
 
     def test_payload_exposes_completed_task_activity_history_for_navigation(self) -> None:
         started = datetime(2026, 6, 5, 13, 0, 0).astimezone()

@@ -31,8 +31,8 @@ TEXT = r"""
             --codex-usage-hud-progress-track: #262c33;
             --codex-usage-hud-progress-track-border: #3b4149;
             --codex-usage-hud-progress-track-text: #c1c7d0;
-            --codex-usage-hud-progress-cache: #9ccbff;
-            --codex-usage-hud-progress-cache-end: #5ea7ff;
+            --codex-usage-hud-progress-cache: #b5a0d4;
+            --codex-usage-hud-progress-cache-end: #9876c5;
             --codex-usage-hud-progress-cache-text: #07131f;
             --codex-usage-hud-progress-day: #f3d27a;
             --codex-usage-hud-progress-day-end: #f3d37f;
@@ -812,7 +812,7 @@ TEXT = r"""
             border: 1px solid rgba(255,255,255,.06);
             background: linear-gradient(180deg, rgba(255,255,255,.032), rgba(255,255,255,0)), #111822;
             overflow: hidden;
-            box-shadow: inset 0 1px 0 rgba(255,255,255,.04), inset 0 -8px 16px rgba(0,0,0,.16);
+            box-shadow: none;
           }
           #${rootId} .codex-usage-hud-progress-track-text {
             position: absolute;
@@ -874,9 +874,14 @@ TEXT = r"""
           #${rootId} .codex-usage-hud-progress-track-text {
             /* Keep labels above the overflow sub-rail and its anchor. */
             z-index: 6;
-            color: #ffffff;
-            mix-blend-mode: difference;
+            color: var(--codex-usage-hud-progress-track-ink, #ffffff);
+            clip-path: inset(0 0 0 var(--codex-usage-hud-progress-fill-width, 0%));
+            mix-blend-mode: normal;
             pointer-events: none;
+          }
+          #${rootId} .codex-usage-hud-progress-track-text.codex-usage-hud-progress-fill-text {
+            color: var(--codex-usage-hud-progress-fill-ink, #000000);
+            clip-path: inset(0 calc(100% - var(--codex-usage-hud-progress-fill-width, 0%)) 0 0);
           }
           #${rootId} .codex-usage-hud-progress-fill {
             position: absolute;
@@ -886,24 +891,6 @@ TEXT = r"""
             z-index: 2;
             border-radius: inherit;
             overflow: hidden;
-            pointer-events: none;
-          }
-          #${rootId} .codex-usage-hud-progress-fill::before {
-            content: "";
-            position: absolute;
-            inset: 0;
-            background: linear-gradient(180deg, rgba(255,255,255,.26), rgba(255,255,255,.07) 28%, rgba(255,255,255,0) 52%);
-            pointer-events: none;
-          }
-          #${rootId} .codex-usage-hud-progress-fill::after {
-            content: "";
-            position: absolute;
-            top: 4px;
-            right: 7px;
-            width: min(64px, 42%);
-            height: calc(100% - 8px);
-            border-radius: inherit;
-            background: linear-gradient(90deg, rgba(255,255,255,0), rgba(255,255,255,.18));
             pointer-events: none;
           }
           #${rootId} .codex-usage-hud-progress-rail[data-overflow="true"] {
@@ -1009,12 +996,12 @@ TEXT = r"""
             font-size: 10px;
           }
           #${rootId} .codex-usage-hud-progress-rail[data-tone="cache"] .codex-usage-hud-progress-fill {
-            background: linear-gradient(90deg, #9ccbff, #5ea7ff);
-            box-shadow: 0 10px 22px rgba(94,167,255,.18);
+            background: linear-gradient(90deg, var(--codex-usage-hud-cache-fill, #b5a0d4), var(--codex-usage-hud-cache-fill-end, #9876c5));
+            box-shadow: 0 10px 22px color-mix(in srgb, var(--codex-usage-hud-cache-fill-end, #9876c5) 18%, transparent);
           }
           #${rootId} .codex-usage-hud-progress-rail[data-tone="session"] {
-            border-color: rgba(156,203,255,.14);
-            background: linear-gradient(180deg, rgba(156,203,255,.07), rgba(255,255,255,0)), #111822;
+            border-color: color-mix(in srgb, var(--codex-usage-hud-cache-fill, #b5a0d4) 18%, transparent);
+            background: var(--codex-usage-hud-progress-track);
           }
           #${rootId} .codex-usage-hud-progress-rail[data-tone="day"] .codex-usage-hud-progress-fill {
             background: linear-gradient(90deg, var(--codex-usage-hud-progress-day), var(--codex-usage-hud-progress-day-end));
@@ -3653,33 +3640,11 @@ TEXT = r"""
             font-size: 11px;
             overflow-wrap: anywhere;
           }
-          #${rootId} .codex-usage-hud-settings-footnote {
-            grid-column: 1 / -1;
-            display: flex;
-            flex-wrap: wrap;
-            align-items: center;
-            justify-content: space-between;
-            gap: 10px;
-            margin-top: 2px;
-          }
-          #${rootId} .codex-usage-hud-settings-footnote .codex-usage-hud-settings-status {
-            text-align: right;
-          }
-          #${rootId} .codex-usage-hud-settings-lock-toggle {
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            min-width: 0;
-            color: var(--codex-usage-hud-request-muted, #a9bcd2);
-            font-size: 11px;
-            cursor: pointer;
-          }
-          #${rootId} .codex-usage-hud-settings-lock-toggle input {
+          #${rootId} .codex-usage-hud-settings-dialog[data-active-tab="settings"] .codex-usage-hud-settings-actions > div:last-child {
             flex: 0 0 auto;
-            width: 14px;
-            height: 14px;
-            margin: 0;
-            accent-color: var(--codex-usage-hud-accent, #f3d27a);
+            width: auto;
+            margin-left: auto;
+            align-self: flex-end;
           }
           #${rootId} .codex-usage-hud-settings-status[data-kind="error"],
           #${rootId} .codex-usage-hud-settings-status[data-kind="warning"] {
@@ -5069,6 +5034,113 @@ TEXT = r"""
             line-height: 1;
             cursor: pointer;
             z-index: 1;
+          }
+          #${rootId} .codex-usage-hud-gateway-control {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 16px;
+            padding: 12px 0;
+            border-top: 1px solid var(--codex-usage-hud-divider, #393b40);
+          }
+          #${rootId} .codex-usage-hud-gateway-control strong { display: block; font-size: 12px; }
+          #${rootId} .codex-usage-hud-gateway-control span {
+            display: block;
+            margin-top: 4px;
+            font-size: 11px;
+            color: var(--codex-usage-hud-muted, #8a93a0);
+          }
+          #${rootId} .codex-usage-hud-gateway-switch {
+            flex-shrink: 0;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            min-height: 28px;
+            padding: 4px 10px;
+            border: 1px solid var(--codex-usage-hud-divider, #393b40);
+            border-radius: 16px;
+            background: transparent;
+            color: var(--codex-usage-hud-muted, #8a93a0);
+            cursor: pointer;
+            transition: background .12s ease, color .12s ease;
+          }
+          #${rootId} .codex-usage-hud-gateway-switch::before {
+            content: "";
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: currentColor;
+          }
+          #${rootId} .codex-usage-hud-gateway-switch[aria-checked="true"] {
+            color: var(--codex-usage-hud-accent, #f3d27a);
+            background: color-mix(in srgb, var(--codex-usage-hud-accent, #f3d27a) 8%, transparent);
+          }
+          #${rootId} .codex-usage-hud-management-card {
+            width: min(460px, 100%);
+            max-height: 100%;
+            overflow-y: auto;
+            gap: 0;
+            padding: 0;
+            border-color: var(--codex-usage-hud-divider, #393b40);
+            background: var(--codex-usage-hud-panel-surface, #1d1e20);
+          }
+          #${rootId} .codex-usage-hud-management-header {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            padding: 18px 20px 14px;
+            font-size: 14px;
+          }
+          #${rootId} .codex-usage-hud-management-header span {
+            color: var(--codex-usage-hud-muted, #8a93a0);
+            font-size: 11px;
+          }
+          #${rootId} .codex-usage-hud-management-tabs { display: flex; gap: 4px; margin: 0 20px; }
+          #${rootId} .codex-usage-hud-management-tabs button {
+            flex: 1;
+            padding: 8px 12px;
+            border: 0;
+            border-bottom: 2px solid transparent;
+            background: transparent;
+            color: var(--codex-usage-hud-muted, #8a93a0);
+            cursor: pointer;
+            transition: color .12s ease, border-color .12s ease;
+          }
+          #${rootId} .codex-usage-hud-management-tabs button[aria-pressed="true"] {
+            color: var(--codex-usage-hud-accent, #f3d27a);
+            border-bottom-color: currentColor;
+          }
+          #${rootId} .codex-usage-hud-management-body { padding: 18px 20px; font-size: 12px; line-height: 1.65; }
+          #${rootId} .codex-usage-hud-management-body h3 { margin: 0 0 4px; font-size: 16px; }
+          #${rootId} .codex-usage-hud-management-body p { margin: 0 0 14px; }
+          #${rootId} .codex-usage-hud-management-field { display: grid; gap: 6px; margin: 16px 0; font-size: 11px; }
+          #${rootId} .codex-usage-hud-management-field select {
+            box-sizing: border-box;
+            width: 100%;
+            min-width: 0;
+            min-height: 34px;
+            padding: 6px 10px;
+            border: 1px solid var(--codex-usage-hud-panel-border, #393b40);
+            border-radius: 5px;
+            background: var(--codex-usage-hud-surface, #14171b);
+            color: var(--codex-usage-hud-text, #e8eef7);
+            font: inherit;
+          }
+          #${rootId} .codex-usage-hud-management-note { color: var(--codex-usage-hud-muted, #8a93a0); font-size: 11px; }
+          #${rootId} [data-hud-management-status="true"] { overflow-wrap: anywhere; }
+          #${rootId} [data-hud-management-status="true"][data-kind="error"] { color: var(--codex-usage-hud-warning, #ffb86b); }
+          #${rootId} .codex-usage-hud-management-card > .codex-usage-hud-settings-confirm-actions {
+            margin: 0;
+            padding: 12px 20px;
+            border-top: 1px solid var(--codex-usage-hud-divider, #393b40);
+          }
+          #${rootId} .codex-usage-hud-management-card .codex-usage-hud-settings-action[data-danger="true"] { color: #ff9298; }
+          #${rootId} [data-hud-management="true"][data-busy="true"] button { opacity: .55; cursor: wait; }
+          @media (prefers-reduced-motion: reduce) {
+            #${rootId} .codex-usage-hud-gateway-switch,
+            #${rootId} .codex-usage-hud-management-tabs button { transition: none; }
           }
           #${rootId} .codex-usage-hud-settings-confirm-close:hover {
             background: color-mix(in srgb, var(--codex-usage-hud-panel-border, #2e3846) 72%, #ffffff 28%);
@@ -6700,12 +6772,12 @@ TEXT = r"""
           }
           #${rootId} .codex-usage-hud-progress-rail {
             border-color: var(--codex-usage-hud-progress-track-border);
-            background: linear-gradient(180deg, rgba(255,255,255,.032), rgba(255,255,255,0)), var(--codex-usage-hud-progress-track);
+            background: var(--codex-usage-hud-progress-track);
             isolation: isolate;
           }
           #${rootId} .codex-usage-hud-progress-rail[data-tone="session"] .codex-usage-hud-progress-fill,
           #${rootId} .codex-usage-hud-progress-rail[data-tone="cache"] .codex-usage-hud-progress-fill {
-            background: linear-gradient(90deg, var(--codex-usage-hud-progress-cache), var(--codex-usage-hud-progress-cache-end));
+            background: linear-gradient(90deg, var(--codex-usage-hud-cache-fill, var(--codex-usage-hud-progress-cache)), var(--codex-usage-hud-cache-fill-end, var(--codex-usage-hud-progress-cache-end)));
           }
           #${rootId} .codex-usage-hud-progress-rail[data-tone="day"] .codex-usage-hud-progress-fill {
             background: linear-gradient(90deg, var(--codex-usage-hud-progress-day), var(--codex-usage-hud-progress-day-end));

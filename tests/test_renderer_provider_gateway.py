@@ -126,6 +126,8 @@ const document={querySelector(){return {value:'beta'};}};
 function hudSettingsFromPayload(){return {provider_gateway:{active:true}};}
 function codexGatewayCommand(command){assert.equal(command.provider,'beta');return new Promise((a,b)=>{release=a;reject=b;});}
 function setSettingsStatus(message){status.push(message);}
+function hudManagementStatus(message){status.push(message);}
+function hudManagementBusy(){}
 function openSettingsLoading(){}
 function submitSettingsCommand(command){submitted.push(command);return true;}
 const ctx={lifecycle:{timeout(){throw new Error('cannot hide HUD before confirmed exit');}}};

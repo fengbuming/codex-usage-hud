@@ -1457,7 +1457,7 @@ def handle_general_command(
             status["providerSetDefault"] = dict(result)
             status["providerSetDefaultProvider"] = str(provider).strip().lower()
             return status
-        if action in {"providerBindSession", "providerPrepareExit"}:
+        if action in {"providerBindSession", "providerPrepareExit", "providerGatewayToggle"}:
             if ports.gateway_command is None:
                 return _status("HUD 统一代理当前不可用。", kind="error")
             result = ports.gateway_command(command)
@@ -1896,6 +1896,8 @@ def handle_general_command(
             settings_payload = command.get("settings")
             previous_config = ports.load_config()
             config = runtime_settings.config_from_payload(previous_config, settings_payload)
+            if config.provider_gateway_enabled != previous_config.provider_gateway_enabled:
+                raise ValueError("请使用供应商请求代理开关更改接管状态。")
             if _pricing_version_state_changed(previous_config, config):
                 raise ValueError("价格版本只能通过保存价格或导入预览流程写入。")
             if action == "save" and _price_updates(previous_config, config):
@@ -2024,7 +2026,8 @@ def handle_general_command(
                 raise ValueError("开发重载进程身份不匹配，HUD 将继续运行。")
             from .development_reload import gateway_client, proxy_health
 
-            if proxy_health(gateway_client())["pid"] == os.getpid():
+            client = gateway_client(required=False)
+            if client is not None and proxy_health(client)["pid"] == os.getpid():
                 raise ValueError("无法确认独立代理身份，HUD 将继续运行。")
             ports.request_exit()
             return _status("正在交接 HUD 源码重载，独立代理继续运行。")
@@ -2489,6 +2492,13 @@ def _handle_renderer_settings_command(
         from .provider_gateway import prepare_exit, select_provider, session_provider
 
         provider = str(command.get("provider") or "")
+        if command.get("action") == "providerGatewayToggle":
+            from .provider_gateway_settings import set_gateway_enabled
+
+            result = set_gateway_enabled(settings_store, command.get("enabled"), provider=provider)
+            context.settings_mtime = None
+            context.reload_user_config(include_history=False)
+            return result
         if command.get("action") == "providerPrepareExit":
             return prepare_exit(provider)
         if command.get("preserveExisting"):

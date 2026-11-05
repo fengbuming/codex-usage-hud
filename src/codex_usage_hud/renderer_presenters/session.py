@@ -250,7 +250,6 @@ def top_session_usage_summary(
     is_pending_session: SessionFlagFn,
     display_tokens_fn: DisplayTokensFn,
     usage_money: UsageMoneyFn,
-    top_cache_hit_rate_label: Callable[[ParsedSession], str],
     session_speed_label: Callable[[ParsedSession], str],
 ) -> str:
     if is_new_session(snapshot):
@@ -277,7 +276,6 @@ def top_session_usage_summary(
         total_cost = thread_cost if thread_cost is not None else family_cost
     return (
         f"本会话 {usage_money(total_tokens, total_cost)}"
-        f"/{top_cache_hit_rate_label(snapshot)}"
         f"/{session_speed_label(snapshot)}"
     )
 

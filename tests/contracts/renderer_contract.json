@@ -6,8 +6,8 @@
   },
   "currentBundle": {
     "phase": "P6.7",
-    "sha256": "0c9ab8617bf79a795dabba32b0aa02f0d1fae57fc93a41541682a11e70b32351",
-    "byteLength": 1544040
+    "sha256": "b0e76a957c960e3e815b2798f976eff65221cc1f620542a060a41223013d521f",
+    "byteLength": 1559646
   },
   "sha256": "f83d65265c55143fa775f509f09ce109c2aa75a03946b42cf462cb6cbd4ea637",
   "byteLength": 548705,
@@ -44,7 +44,7 @@
     "mutationObservers": 11,
     "resizeObservers": 3,
     "setIntervals": 6,
-    "setTimeouts": 48,
+    "setTimeouts": 47,
     "kernelSetIntervals": 1,
     "kernelSetTimeouts": 11
   },
@@ -144,12 +144,12 @@
     "session_cleanup_scan_watchdog", "storage", "session_index_control_watchdog",
     "background_usage_policy", "background_usage_request", "background_usage_fetch",
     "codex_cli_launch_timeout", "codex_cli_launch_min_visible", "session_index_status_watchdog",
-    "settings_restart", "native_title_restore", "native_title_restore", "native_title_reveal",
-    "layout_settle", "layout_settle", "layout_settle", "composer_layout", "layout_preview",
-    "layout_bootstrap", "layout_bootstrap", "composer_attachments", "layout_report",
-    "active_session", "active_session", "active_session", "active_session",
-    "active_session_bootstrap", "session_cleanup_search", "session_transfer_selection",
-    "session_transfer_select_all", "session_transfer_selection", "stale_guard"
+    "native_title_restore", "native_title_restore", "native_title_reveal", "layout_settle",
+    "layout_settle", "layout_settle", "composer_layout", "layout_preview", "layout_bootstrap",
+    "layout_bootstrap", "composer_attachments", "layout_report", "active_session",
+    "active_session", "active_session", "active_session", "active_session_bootstrap",
+    "session_cleanup_search", "session_transfer_selection", "session_transfer_select_all",
+    "session_transfer_selection", "stale_guard"
   ],
   "timeoutInventory": [
     {"owner": "model_picker", "creation": "ctx.lifecycle.timeout(\"model_picker\", patchCodexModelPicker, delay)", "cleanup": "ctx.lifecycle.clearTimeout(timer)"},

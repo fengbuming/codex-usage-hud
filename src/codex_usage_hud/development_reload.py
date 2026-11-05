@@ -21,7 +21,7 @@ from .provider_proxy_service import ProviderProxyServiceClient, _CREATE_BREAKAWA
 from .runtime_paths import runtime_file_path
 
 
-def gateway_client() -> ProviderProxyServiceClient:
+def gateway_client(*, required: bool = True) -> ProviderProxyServiceClient | None:
     from .provider_gateway import gateway_info
 
     info = gateway_info()
@@ -31,6 +31,8 @@ def gateway_client() -> ProviderProxyServiceClient:
     client = ProviderProxyServiceClient(url.port or 57324, state_path=runtime_file_path("provider-gateway-service.json"))
     client.state = _read_state(client.state_path, client.port)
     if not client.state:
+        if not required and not info:
+            return None
         raise RuntimeError("No authenticated gateway service state is available; nothing was stopped.")
     return client
 
@@ -158,7 +160,7 @@ def launch_hud_reload() -> dict:
 def restart_hud(client, project_root: Path, *, timeout: float = 20, wait_settings_close: bool = False) -> dict:
     from .runtime_paths import hud_lock_path
 
-    proxy = proxy_health(client)
+    proxy = proxy_health(client) if client is not None else {"pid": None}
     pid_path = hud_lock_path()
     pid = instance_lock.read_pid(pid_path)
     if not pid or pid == proxy["pid"] or pid == os.getpid():
@@ -185,7 +187,7 @@ def restart_hud(client, project_root: Path, *, timeout: float = 20, wait_setting
     if instance_lock.process_exists(pid):
         # One-time compatibility with older HUDs that do not know the handoff
         # command. Only the verified main PID may be stopped, never its helper.
-        if instance_lock.read_pid(pid_path) != pid or proxy_health(client)["pid"] != proxy["pid"]:
+        if instance_lock.read_pid(pid_path) != pid or (client is not None and proxy_health(client)["pid"] != proxy["pid"]):
             raise RuntimeError("Process identities changed; the HUD was left running.")
         if not instance_lock.terminate_process(pid):
             raise RuntimeError("Unable to stop the HUD main process; proxy was left running.")
@@ -214,7 +216,7 @@ def restart_hud(client, project_root: Path, *, timeout: float = 20, wait_setting
             except (OSError, RuntimeError, ValueError, KeyError):
                 ready = {}
             if ready.get("bridge") and _bridge_matches_pid(ready["bridge"], current):
-                if proxy_health(client)["pid"] != proxy["pid"]:
+                if client is not None and proxy_health(client)["pid"] != proxy["pid"]:
                     raise RuntimeError("Proxy identity changed during HUD reload.")
                 return {"hudPid": current, "proxyPid": proxy["pid"], "log": str(log_path)}
         if process.poll() is not None:
@@ -233,7 +235,7 @@ def main(argv=None) -> int:
     parser.add_argument("--wait-settings-close", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     try:
-        client = gateway_client()
+        client = gateway_client() if args.status or args.proxy_only or args.all else gateway_client(required=False)
         root = Path(__file__).resolve().parents[2]
         if args.status:
             result = proxy_health(client)

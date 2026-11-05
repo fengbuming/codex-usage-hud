@@ -24,10 +24,6 @@ def short_num(value: int | None) -> str:
 
 def format_money(value: float | None) -> str:
     amount = max(0.0, float(value or 0.0))
-    if amount < 0.01:
-        return f"${amount:.4f}"
-    if amount < 1:
-        return f"${amount:.3f}"
     return f"${amount:.2f}"
 
 
@@ -43,8 +39,6 @@ def format_realtime_money(
 def format_fixed_money(value: float | None, estimated: bool) -> str:
     amount = max(0.0, float(value or 0.0))
     marker = "~" if estimated else ""
-    if amount < 1:
-        return f"{marker}${amount:.3f}"
     if amount < 100:
         return f"{marker}${amount:.2f}"
     return f"{marker}${amount:.1f}"

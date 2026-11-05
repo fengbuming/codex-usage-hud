@@ -495,5 +495,8 @@ def validate_exit(token: str, *, config_path: Path | None = None) -> None:
         return
     if metadata.get("active", True):
         raise ValueError("退出会断开 HUD 代理。请先选择退出后使用的供应商并确认退出。")
+    if not token:
+        # A disabled gateway no longer needs an exit-time restoration handshake.
+        return
     if not token or not secrets.compare_digest(token, hashlib.sha256(path.read_bytes()).hexdigest()):
         raise ValueError("退出配置已变化，请重新选择退出后使用的供应商。")

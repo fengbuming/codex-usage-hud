@@ -410,6 +410,8 @@ def run_daemon(args: argparse.Namespace) -> int:
     # this HUD process is stopped.
     def activate_providers():
         try:
+            if not UserConfigStore().load().provider_gateway_enabled:
+                return
             from .codex_provider_config import default_codex_config_path
             from .provider_proxy import provider_proxy_relay
 

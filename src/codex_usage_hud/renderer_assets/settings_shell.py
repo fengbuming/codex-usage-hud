@@ -1794,6 +1794,7 @@ _TEXT_PREFIX = r"""
           app_provider: "",
           support_url: "https://github.com/fengbuming/codex-usage-hud",
           stop_hud_on_lock_screen: false,
+          provider_gateway_enabled: false,
           rest_reminder_enabled: false,
           rest_reminder_interval_minutes: 45,
           rest_reminder_break_minutes: 2,
@@ -3854,6 +3855,7 @@ _TEXT_PREFIX = r"""
             <div class="codex-usage-hud-settings-actions">
               <div class="codex-usage-hud-settings-status" data-settings-status="true">${escapeHtml(status || defaultStatus)}</div>
               <div>
+                ${activeTab === "settings" ? '<button type="button" class="codex-usage-hud-settings-action" data-action="settings-manage" data-variant="ghost">重载/退出</button>' : ""}
                 ${activeTab === "settings" ? '<button type="button" class="codex-usage-hud-settings-action" data-action="settings-restart" hidden>立即重启 HUD</button>' : activeTab === "backgroundUsage" ? '<button type="button" class="codex-usage-hud-settings-action" data-action="background-usage-refresh">刷新</button> <button type="button" class="codex-usage-hud-settings-action" data-action="settings-close" data-primary="true">关闭</button>' : activeTab === "about" ? '<button type="button" class="codex-usage-hud-settings-action" data-action="settings-check-update">检查更新</button> <button type="button" class="codex-usage-hud-settings-action" data-action="settings-install-update" data-primary="true" disabled>安装更新</button>' : '<button type="button" class="codex-usage-hud-settings-action" data-action="settings-close" data-primary="true">关闭</button>'}
               </div>
             </div>
@@ -3974,17 +3976,12 @@ _TEXT_PREFIX = r"""
                 </div>
               </div>
             </div>
+            <div class="codex-usage-hud-gateway-control">
+              <div><strong>供应商请求代理</strong><span>${settings.provider_gateway?.active ? "已开启 · 由 HUD 统一转发请求" : "已关闭 · 使用 Codex 供应商配置"}</span></div>
+              <button type="button" class="codex-usage-hud-gateway-switch" role="switch" aria-label="供应商请求代理" aria-checked="${!!settings.provider_gateway?.active}" data-action="settings-gateway-toggle">${settings.provider_gateway?.active ? "开启" : "关闭"}</button>
+            </div>
             <div class="codex-usage-hud-provider-editor" data-provider-editor="true" data-active-provider="${escapeHtml(settingsProviderDraft?.activeProvider || "")}">
               ${settingsProviderEditorHtml(settings)}
-            </div>
-            <div class="codex-usage-hud-settings-footnote">
-              <button type="button" class="codex-usage-hud-settings-action" data-action="settings-reload" data-variant="ghost">重载</button>
-              <button type="button" class="codex-usage-hud-settings-action" data-action="settings-exit" data-variant="ghost">退出 HUD</button>
-              <label class="codex-usage-hud-settings-lock-toggle" title="默认锁屏/睡眠时已自动暂停对 Codex 的一切活动（HUD 保留，解锁恢复）。勾选此项则完全退出 HUD 进程，解锁后由守护重启">
-                <input type="checkbox" data-setting-key="stop_hud_on_lock_screen" ${settings.stop_hud_on_lock_screen ? "checked" : ""} aria-label="锁屏后完全退出HUD进程">
-                <span>锁屏后完全退出HUD进程</span>
-              </label>
-              <div class="codex-usage-hud-settings-status">配置文件：${escapeHtml(path || "未提供")} ${bridge ? "" : "（桥接未连接）"}</div>
             </div>
           </div>
         `;
@@ -5500,6 +5497,11 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
       function applySettingsCommandStatus(payload) {
         const status = payload?.settingsCommandStatus;
         applyGatewayCommandStatus(status);
+        if (status?.action === "exit" && status.kind === "error") {
+          closeSettingsConfirm();
+          openSettingsManagement("exit");
+          hudManagementStatus(status.message || "退出失败，HUD 继续运行。", "error");
+        }
         sessionViewDomain.applySearchJump(status?.sessionCleanupSessionJump);
         if (String(status?.action || "") === "providerSetDefault") {
           const failed = String(status?.kind || "") === "error";
@@ -5901,6 +5903,7 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
 
       function closeSettingsConfirm() {
         const layer = document.querySelector(`#${settingsModalId} [data-settings-confirm="true"]`);
+        if (layer?.dataset.hudManagement === "true" && layer.dataset.busy === "true") return;
         if (layer && pricingWorkflowState.providerModelsDialog === layer) {
           pricingWorkflowState.providerModelsDialog = null;
           pricingWorkflowState.providerModelsRequestId = "";
@@ -7125,35 +7128,120 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
         );
       }
 
-      function openSettingsReloadConfirm() {
-        const dialog = settingsDialogRoot();
-        if (!dialog) return;
+      function hudManagementDraftsPending() {
         captureSettingsProviderForm();
-        if (settingsDirtyProviders.size || codexProviderDirty.size) {
-          setSettingsStatus("请先应用或取消未保存的修改，再重载。", "error");
-          return;
-        }
+        if (!settingsDirtyProviders.size && !codexProviderDirty.size) return false;
+        setSettingsStatus("请先应用或取消未保存的修改，再管理 HUD 或切换代理。", "error");
+        return true;
+      }
+
+      function hudDirectProviderSelection(settings) {
+        const selected = String(settings.provider_gateway?.default_provider || settings.default_provider || settings.app_provider || "");
+        const providers = settingsProviderNames(settings).filter((provider) => provider !== "codex_hud");
+        return `<label class="codex-usage-hud-management-field">接下来使用的供应商<select data-provider-exit-selection="true" aria-label="直连供应商">${providers.map((provider) => `<option value="${escapeHtml(provider)}" ${provider === selected ? "selected" : ""}>${escapeHtml(providerDisplayName(settings, provider))}</option>`).join("")}</select></label>`;
+      }
+
+      function hudManagementStatus(message, kind = "") {
+        const node = document.querySelector('[data-hud-management-status="true"]');
+        if (node) { node.textContent = message; node.dataset.kind = kind; }
+        setSettingsStatus(message, kind);
+      }
+
+      function hudManagementBusy(busy) {
+        const layer = document.querySelector('[data-hud-management="true"]');
+        if (!layer) return;
+        layer.dataset.busy = String(busy);
+        layer.querySelectorAll("button, select").forEach((node) => { node.disabled = busy; });
+      }
+
+      function openSettingsManagement(view = "reload") {
+        const dialog = settingsDialogRoot();
+        if (!dialog || hudManagementDraftsPending()) return;
         closeSettingsConfirm();
+        const settings = hudSettingsFromPayload();
+        const gateway = !!settings.provider_gateway?.active;
+        const exiting = view === "exit";
         const layer = document.createElement("div");
         layer.className = "codex-usage-hud-settings-confirm-layer";
         layer.dataset.settingsConfirm = "true";
-        layer.innerHTML = `
-          <div class="codex-usage-hud-settings-confirm-card" role="alertdialog" aria-modal="true" aria-label="重载 HUD">
-            <div class="codex-usage-hud-settings-confirm-title">选择重载范围</div>
-            <div class="codex-usage-hud-settings-confirm-body">
-              <label>重载范围 <select data-hud-reload-mode="true" aria-label="重载范围">
-                <option value="hud">HUD 界面与主程序</option>
-                <option value="proxy">代理处理逻辑</option>
-                <option value="all">HUD 与代理处理逻辑</option>
-              </select></label>
-              <p>HUD 重载时界面短暂重连，代理保持运行。代理热重载保留已有请求，后续请求使用新代码；新逻辑若有问题，仍可能影响后续请求。不会重启 Codex。</p>
-            </div>
-            <div class="codex-usage-hud-settings-confirm-actions">
-              <button type="button" class="codex-usage-hud-settings-action" data-action="settings-reload-cancel" data-variant="ghost">取消</button>
-              <button type="button" class="codex-usage-hud-settings-action" data-action="settings-reload-confirm" data-primary="true">重载</button>
-            </div>
-          </div>`;
+        layer.dataset.hudManagement = "true";
+        const body = exiting ? `
+          <h3>退出 HUD</h3>
+          <p>关闭 HUD 界面并停止后台守护进程。</p>
+          ${gateway ? hudDirectProviderSelection(settings) + '<p class="codex-usage-hud-management-note">先等待回复完成。退出前保存直连配置；保存失败会保留 HUD。旧窗口仍可能需要重新打开 Codex。</p>' : '<p class="codex-usage-hud-management-note">供应商请求代理已关闭，无需切换供应商。</p>'}
+        ` : `
+          <h3>重载 HUD</h3>
+          <p>载入最新代码，Codex 保持打开。</p>
+          <label class="codex-usage-hud-management-field">重载范围<select data-hud-reload-mode="true" aria-label="重载范围">
+            <option value="hud">HUD 界面与主程序</option>
+            ${gateway ? '<option value="proxy">仅代理处理逻辑</option><option value="all">HUD 与代理处理逻辑</option>' : ''}
+          </select></label>
+          <p class="codex-usage-hud-management-note">界面会短暂重连。${gateway ? "独立代理继续运行，已有请求继续完成；代理重载只影响后续请求。" : "供应商请求代理已关闭，只重载 HUD。"}</p>
+        `;
+        layer.innerHTML = `<div class="codex-usage-hud-settings-confirm-card codex-usage-hud-management-card" role="dialog" aria-modal="true" aria-label="管理 HUD">
+          <div class="codex-usage-hud-management-header"><strong>管理 HUD</strong><span>${gateway ? "请求代理已开启" : "请求代理已关闭"}</span></div>
+          <div class="codex-usage-hud-management-tabs" role="group" aria-label="管理操作">
+            <button type="button" data-action="settings-manage-reload" aria-pressed="${!exiting}">重载</button>
+            <button type="button" data-action="settings-manage-exit" aria-pressed="${exiting}">退出</button>
+          </div>
+          <div class="codex-usage-hud-management-body">${body}<div data-hud-management-status="true" role="status" aria-live="polite"></div></div>
+          <div class="codex-usage-hud-settings-confirm-actions">
+            <button type="button" class="codex-usage-hud-settings-action" data-action="settings-reload-cancel" data-variant="ghost">取消</button>
+            <button type="button" class="codex-usage-hud-settings-action" data-action="${exiting ? "settings-exit-confirm" : "settings-reload-confirm"}" ${exiting ? 'data-danger="true"' : 'data-primary="true"'}>${exiting ? (gateway ? "保存直连并退出" : "退出 HUD") : "重载"}</button>
+          </div></div>`;
         dialog.appendChild(layer);
+        layer.querySelector('[data-action="settings-reload-cancel"]')?.focus();
+      }
+
+      function openSettingsReloadConfirm() {
+        openSettingsManagement("reload");
+      }
+
+      function openSettingsGatewayConfirm() {
+        const dialog = settingsDialogRoot();
+        if (!dialog || hudManagementDraftsPending()) return;
+        closeSettingsConfirm();
+        const settings = hudSettingsFromPayload();
+        const enabled = !settings.provider_gateway?.active;
+        const layer = document.createElement("div");
+        layer.className = "codex-usage-hud-settings-confirm-layer";
+        layer.dataset.settingsConfirm = "true";
+        layer.dataset.hudManagement = "true";
+        layer.innerHTML = `<div class="codex-usage-hud-settings-confirm-card codex-usage-hud-management-card" role="dialog" aria-modal="true" aria-label="供应商请求代理">
+          <div class="codex-usage-hud-management-header"><strong>${enabled ? "开启" : "关闭"}供应商请求代理</strong></div>
+          <div class="codex-usage-hud-management-body">
+            <p>${enabled ? "由 HUD 本机网关转发供应商请求，并按会话保留供应商路由。此功能默认关闭。" : "恢复所选供应商的配置，HUD 界面和用量统计继续运行。"}</p>
+            ${enabled ? '' : hudDirectProviderSelection(settings)}
+            <p class="codex-usage-hud-management-note">${enabled ? "会保存当前配置的备份。Codex 需重新加载配置后使用代理；不会自动重启。" : "请先等待回复完成。已有连接保留；旧窗口可能仍缓存代理地址，需要重新打开 Codex。"}</p>
+            <div data-hud-management-status="true" role="status" aria-live="polite"></div>
+          </div>
+          <div class="codex-usage-hud-settings-confirm-actions">
+            <button type="button" class="codex-usage-hud-settings-action" data-action="settings-reload-cancel" data-variant="ghost">取消</button>
+            <button type="button" class="codex-usage-hud-settings-action" data-action="settings-gateway-confirm" data-enabled="${enabled}" data-primary="true">${enabled ? "开启代理" : "保存并关闭代理"}</button>
+          </div></div>`;
+        dialog.appendChild(layer);
+        layer.querySelector('[data-action="settings-reload-cancel"]')?.focus();
+      }
+
+      async function toggleSettingsGateway(enabled) {
+        if (document.querySelector('[data-hud-management="true"]')?.dataset?.busy === "true") return;
+        hudManagementBusy(true);
+        hudManagementStatus("正在保存代理设置…");
+        const provider = document.querySelector('[data-provider-exit-selection="true"]')?.value || "";
+        try {
+          const result = await codexGatewayCommand({ action: "providerGatewayToggle", enabled, provider });
+          const settings = currentPayload()?.settings;
+          if (!settings) throw new Error("设置状态暂不可用，请重新打开设置。");
+          settings.provider_gateway_enabled = result.enabled;
+          settings.provider_gateway = { ...settings.provider_gateway, active: result.gateway };
+          hudManagementBusy(false);
+          closeSettingsConfirm();
+          renderSettingsModal();
+          setSettingsStatus(`${result.enabled ? "代理已开启" : "代理已关闭"}。请让 Codex 重新加载配置；旧窗口如无法发送，请重新打开 Codex。`);
+        } catch (error) {
+          hudManagementBusy(false);
+          hudManagementStatus(`无法切换代理：${error?.message || error}`, "error");
+        }
       }
 
       async function reloadHudFromModal() {
@@ -7161,15 +7249,18 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
         const mode = selection?.value || "";
         if (!['hud', 'proxy', 'all'].includes(mode) || selection.disabled) return;
         selection.disabled = true;
-        setSettingsStatus("正在确认重载，请稍候...");
+        hudManagementBusy(true);
+        hudManagementStatus("正在确认重载，请稍候...");
         try {
           await codexGatewayCommand({ action: "developmentReload", mode });
+          hudManagementBusy(false);
           closeSettingsConfirm();
           if (mode === "proxy") setSettingsStatus("代理处理逻辑已重载，已有请求继续完成。");
           else closeSettingsModal({ force: true });
         } catch (error) {
+          hudManagementBusy(false);
           selection.disabled = false;
-          setSettingsStatus(`无法重载：${error?.message || error}`, "error");
+          hudManagementStatus(`无法重载：${error?.message || error}`, "error");
         }
       }
 
@@ -7195,20 +7286,25 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
       }
 
       async function exitHudFromModal() {
+        if (document.querySelector('[data-hud-management="true"]')?.dataset?.busy === "true") return;
         const gateway = hudSettingsFromPayload()?.provider_gateway?.active;
         const provider = document.querySelector('[data-provider-exit-selection="true"]')?.value || "";
         let exitToken = "";
         if (gateway) {
-          if (!provider) { setSettingsStatus("请选择退出后使用的供应商。", "error"); return; }
+          if (!provider) { hudManagementStatus("请选择退出后使用的供应商。", "error"); return; }
+          hudManagementBusy(true);
+          hudManagementStatus("正在保存直连配置…");
           try {
             const result = await codexGatewayCommand({ action: "providerPrepareExit", provider });
             exitToken = result.exitToken || "";
             if (!exitToken) throw new Error("直连配置尚未确认，HUD 将继续运行。");
           } catch (error) {
-            setSettingsStatus(`无法退出：${error?.message || error}`, "error");
+            hudManagementBusy(false);
+            hudManagementStatus(`无法退出：${error?.message || error}`, "error");
             return;
           }
         }
+        hudManagementBusy(false);
         openSettingsLoading({
           kicker: "正在退出",
           title: "正在停止 HUD",
@@ -7219,17 +7315,10 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
           "退出请求已提交，正在停止 HUD...",
           { preserveOverlay: true }
         );
-        if (submitted && !gateway) {
-          ctx.lifecycle.timeout("settings_restart", () => {
-            try {
-              if (typeof window.__codexUsageHudRemove === "function") {
-                window.__codexUsageHudRemove();
-                return;
-              }
-            } catch (_) {}
-            document.getElementById(rootId)?.remove();
-            document.getElementById(styleId)?.remove();
-          }, 120);
+        if (!submitted) {
+          closeSettingsConfirm();
+          openSettingsManagement("exit");
+          hudManagementStatus("退出命令未提交，HUD 继续运行。请确认桥接连接后重试。", "error");
         }
       }
 
@@ -7263,30 +7352,7 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
       }
 
       function openSettingsExitConfirm() {
-        const dialog = settingsDialogRoot();
-        if (!dialog) return;
-        closeSettingsConfirm();
-        const layer = document.createElement("div");
-        const settings = hudSettingsFromPayload();
-        const gateway = settings?.provider_gateway?.active;
-        const selected = String(settings.default_provider || settings.app_provider || "");
-        const providers = settingsProviderNames(settings);
-        const exitSelection = gateway ? `<label>退出后使用的供应商 <select data-provider-exit-selection="true">${providers.map((provider) => `<option value="${escapeHtml(provider)}" ${provider === selected ? "selected" : ""}>${escapeHtml(providerDisplayName(settings, provider))}</option>`).join("")}</select></label>` : "";
-        layer.className = "codex-usage-hud-settings-confirm-layer";
-        layer.dataset.settingsConfirm = "true";
-        layer.innerHTML = `
-          <div class="codex-usage-hud-settings-confirm-card" role="alertdialog" aria-modal="true" aria-label="确认退出 HUD">
-            <div class="codex-usage-hud-settings-confirm-kicker">退出 HUD</div>
-            <div class="codex-usage-hud-settings-confirm-title">完全退出并停止守护进程？</div>
-            <div class="codex-usage-hud-settings-confirm-body">${gateway ? "退出 HUD 后，统一代理可能断开，正在生成的回复和仍缓存代理地址的会话可能受影响。请先等待回复完成。HUD 会先把 config.toml 恢复为所选供应商的直连配置，保存失败将取消退出。退出后若旧窗口无法发送，请重启 Codex 或重新启动 HUD。" : "这会完全退出 HUD，并停止后台守护进程（如果当前正在运行）。是否继续？"}</div>
-            ${exitSelection}
-            <div class="codex-usage-hud-settings-confirm-actions">
-              <button type="button" class="codex-usage-hud-settings-action" data-action="settings-exit-cancel" data-variant="ghost">取消</button>
-              <button type="button" class="codex-usage-hud-settings-action" data-action="settings-exit-confirm" data-primary="true">退出 HUD</button>
-            </div>
-          </div>
-        `;
-        dialog.appendChild(layer);
+        openSettingsManagement("exit");
       }
 
       function runUpdateAction() {
@@ -9498,6 +9564,9 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
       commitPricingImport,
       copyPricingExample,
       restartHudFromModal,
+      openSettingsManagement,
+      openSettingsGatewayConfirm,
+      toggleSettingsGateway,
       openSettingsReloadConfirm,
       reloadHudFromModal,
       restartCodexFromModal,
@@ -9653,6 +9722,9 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
     commitPricingImport,
     copyPricingExample,
     restartHudFromModal,
+    openSettingsManagement,
+    openSettingsGatewayConfirm,
+    toggleSettingsGateway,
     openSettingsReloadConfirm,
     reloadHudFromModal,
     restartCodexFromModal,

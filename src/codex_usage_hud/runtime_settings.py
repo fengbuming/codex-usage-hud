@@ -110,7 +110,7 @@ def partial_domains_for_command(
     # that closes the clone loading overlay.
     if action == "providerCloneSwitch":
         return {"settings"}
-    if action in {"providerSetDefault", "providerBindSession", "providerPrepareExit"}:
+    if action in {"providerSetDefault", "providerBindSession", "providerPrepareExit", "providerGatewayToggle"}:
         return {"settings"}
     # Confirming an official price update changes pricing tables, but the
     # visible session snapshot already contains all usage data. Reapply the

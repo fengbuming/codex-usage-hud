@@ -198,6 +198,7 @@ def payload_from_snapshot(
     settings_payload["provider_gateway"] = {
         "active": bool(gateway), "provider_id": gateway.get("provider_id", ""),
         "endpoint": gateway.get("endpoint", ""),
+        "default_provider": gateway.get("default_provider", ""),
     }
     output_speed, output_speed_mode = _output_speed_projection(snapshot)
     return RendererHudPayload(
@@ -664,13 +665,15 @@ def _top_session_usage_summary(snapshot: ParsedSession, session_cost: float | No
         is_pending_session=_is_pending_session_snapshot,
         display_tokens_fn=_display_tokens,
         usage_money=_format_usage_money,
-        top_cache_hit_rate_label=_top_session_cache_hit_rate_label,
         session_speed_label=_session_output_speed_label,
     )
 
 
 def _session_output_speed_label(snapshot: ParsedSession) -> str:
-    return format_session_output_speed(snapshot)
+    number = format_session_output_speed(snapshot).removesuffix(" tok/s")
+    if "." in number:
+        number = number.rstrip("0").rstrip(".")
+    return f"{number}ts"
 
 
 def _top_cache_progress_label(snapshot: ParsedSession) -> str:
@@ -802,8 +805,12 @@ def _top_progress(snapshot: ParsedSession) -> dict[str, object]:
     )
     session = _top_progress_metric(
         _top_session_usage_summary(snapshot),
-        0.0,
+        cache_ratio if cache_ratio is not None else 0.0,
         "session",
+    )
+    session["tooltip"] = (
+        f"{session['label']} | {_top_cache_progress_label(snapshot)}"
+        " | ts = Tokens/s"
     )
     cache = _top_progress_metric(
         _top_cache_progress_label(snapshot),

@@ -291,6 +291,7 @@ class UserConfig:
     quick_launch_providers: list[str] = field(default_factory=list)
     support_url: str = DEFAULT_SUPPORT_URL
     stop_hud_on_lock_screen: bool = DEFAULT_STOP_HUD_ON_LOCK_SCREEN
+    provider_gateway_enabled: bool = False
     rest_reminder_enabled: bool = DEFAULT_REST_REMINDER_ENABLED
     rest_reminder_interval_minutes: int = DEFAULT_REST_REMINDER_INTERVAL_MINUTES
     rest_reminder_break_minutes: int = DEFAULT_REST_REMINDER_BREAK_MINUTES
@@ -409,6 +410,7 @@ class UserConfig:
             quick_launch_providers=quick_launch_providers,
             support_url=_optional_str(value.get("support_url")) or DEFAULT_SUPPORT_URL,
             stop_hud_on_lock_screen=stop_hud_on_lock_screen,
+            provider_gateway_enabled=_optional_bool(value.get("provider_gateway_enabled")) is True,
             rest_reminder_enabled=_optional_bool(value.get("rest_reminder_enabled"))
             if value.get("rest_reminder_enabled") is not None
             else defaults.rest_reminder_enabled,
@@ -491,6 +493,7 @@ class UserConfig:
             "quick_launch_providers": list(self.quick_launch_providers),
             "support_url": self.support_url,
             "stop_hud_on_lock_screen": bool(self.stop_hud_on_lock_screen),
+            "provider_gateway_enabled": bool(self.provider_gateway_enabled),
             "rest_reminder_enabled": bool(self.rest_reminder_enabled),
             "rest_reminder_interval_minutes": int(self.rest_reminder_interval_minutes),
             "rest_reminder_break_minutes": int(self.rest_reminder_break_minutes),

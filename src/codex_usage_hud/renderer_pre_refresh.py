@@ -454,7 +454,7 @@ class RendererPreRefreshExecutor:
             previous_config,
             current_config,
         )
-        if action in {"providerSetDefault", "providerBindSession", "providerPrepareExit", "developmentReload"}:
+        if action in {"providerSetDefault", "providerBindSession", "providerPrepareExit", "providerGatewayToggle", "developmentReload"}:
             # Deliver the acknowledgement even when concurrent session/file
             # work still requires a full snapshot. Never leave the menu busy
             # solely because that work prevented partial-snapshot replacement.

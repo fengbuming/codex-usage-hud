@@ -23,10 +23,13 @@ def test_common_formatters_preserve_renderer_boundaries() -> None:
     assert common.short_num(-12_000) == "-12k"
     assert common.short_num(1_234) == "1,234"
     assert common.short_num(2_500_000) == "2.5M"
-    assert common.format_money(None) == "$0.0000"
-    assert common.format_money(0.01) == "$0.010"
+    assert common.format_money(None) == "$0.00"
+    assert common.format_money(0.01) == "$0.01"
+    assert common.format_money(0.009) == "$0.01"
+    assert common.format_money(0.1234) == "$0.12"
     assert common.format_money(1.0) == "$1.00"
-    assert common.format_realtime_money(0.5, True) == "~$0.500"
+    assert common.format_realtime_money(0.5, True) == "~$0.50"
+    assert common.format_fixed_money(0.009, True) == "~$0.01"
     assert common.format_fixed_money(125.0, True) == "~$125.0"
     assert common.format_usage_money(12_345, 1.25) == "12k/$1.25"
     assert common.fixed_token_total(295_000) == "295k"
@@ -201,7 +204,7 @@ def test_request_presenter_preserves_round_order_and_dynamic_widths() -> None:
         cost_estimator=estimator,
     )
 
-    assert entry.startswith("#33 $0.094 20:36:26 ↑101k")
+    assert entry.startswith("#33 $0.09 20:36:26 ↑101k")
     assert "◎48%" in entry
     assert entry.endswith("↻93k ∑295k")
     assert widths.index == 2
@@ -294,4 +297,4 @@ def test_activity_round_detail_keeps_cost_and_token_order() -> None:
         compact=lambda value, limit: str(value)[:limit],
     )
 
-    assert detail == "$0.250 · ∑1,100 · ↑1,000 ↻200 ↓80 ◇20"
+    assert detail == "$0.25 · ∑1,100 · ↑1,000 ↻200 ↓80 ◇20"

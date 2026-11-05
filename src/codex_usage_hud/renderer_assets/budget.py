@@ -291,7 +291,92 @@ TEXT = r"""
     return clamp(number, 0, 1);
   }
 
-  function progressRail(metric) {
+  function cacheProgressColors(value, tokens = {}) {
+    const ratio = normalizeProgressRatio(value);
+    function hue(hex) {
+      if (!/^#[0-9a-f]{6}$/i.test(String(hex || ""))) return null;
+      const [r, g, b] = [1, 3, 5].map((offset) => parseInt(hex.slice(offset, offset + 2), 16) / 255);
+      const max = Math.max(r, g, b), min = Math.min(r, g, b), delta = max - min;
+      if (delta < .08) return null;
+      const sector = max === r ? (g - b) / delta : max === g ? (b - r) / delta + 2 : (r - g) / delta + 4;
+      return (sector * 60 + 360) % 360;
+    }
+    // Cache is accumulated, reusable memory: misty violet gains clarity as
+    // hits accumulate. Keep its hue separate from the two budget tabs, even
+    // when a custom Codex theme makes those tabs purple.
+    const budgetHues = [tokens.progressDay || "#f3d27a", tokens.progressDayEnd,
+      tokens.progressWeek || "#b5dd92", tokens.progressWeekEnd].map(hue).filter((value) => value !== null);
+    const distance = (a, b) => Math.min(Math.abs(a - b), 360 - Math.abs(a - b));
+    const candidates = [270, 300, 240, 195, 330, 30, 150];
+    const separation = (candidate) => Math.min(180, ...budgetHues.map((other) => distance(candidate, other)));
+    const selected = candidates.find((candidate) => separation(candidate) >= 42)
+      ?? candidates.reduce((best, candidate) => separation(candidate) > separation(best) ? candidate : best, 270);
+    const saturation = Math.round(18 + ratio * 50);
+    const lightness = Math.round(48 + ratio * 24);
+    return {
+      start: `hsl(${selected} ${saturation}% ${lightness}%)`,
+      end: `hsl(${(selected + 8) % 360} ${saturation + 8}% ${lightness - 6}%)`,
+    };
+  }
+
+  const progressPaletteCache = new Map();
+
+  function progressColorRgb(value, fallback = [128, 128, 128]) {
+    const hex = String(value || "").match(/^#([0-9a-f]{3}|[0-9a-f]{6})$/i);
+    if (hex) {
+      const expanded = hex[1].length === 3 ? [...hex[1]].map((digit) => digit + digit).join("") : hex[1];
+      return [0, 2, 4].map((offset) => parseInt(expanded.slice(offset, offset + 2), 16));
+    }
+    const hsl = String(value || "").match(/^hsl\(([\d.]+) ([\d.]+)% ([\d.]+)%\)$/);
+    if (!hsl) return fallback;
+    const h = Number(hsl[1]) / 360, s = Number(hsl[2]) / 100, l = Number(hsl[3]) / 100;
+    const channel = (n) => {
+      const k = (n + h * 12) % 12;
+      return Math.round(255 * (l - s * Math.min(l, 1 - l) * Math.max(-1, Math.min(k - 3, 9 - k, 1))));
+    };
+    return [channel(0), channel(8), channel(4)];
+  }
+
+  function progressLuminance(rgb) {
+    return rgb.reduce((sum, channel, index) => {
+      const value = channel / 255;
+      return sum + [0.2126, 0.7152, 0.0722][index]
+        * (value <= .04045 ? value / 12.92 : ((value + .055) / 1.055) ** 2.4);
+    }, 0);
+  }
+
+  function readableProgressPalette(start, end) {
+    const key = `${start}|${end}`;
+    if (progressPaletteCache.has(key)) return progressPaletteCache.get(key);
+    const first = progressColorRgb(start), last = progressColorRgb(end);
+    const blend = (a, b, ratio) => a.map((value, index) => Math.round(value + (b[index] - value) * ratio));
+    const contrast = (a, b, lightInk) => Math.min(...Array.from({ length: 17 }, (_, index) => {
+      const luminance = progressLuminance(blend(a, b, index / 16));
+      return lightInk ? 1.05 / (luminance + .05) : (luminance + .05) / .05;
+    }));
+    const lightInk = contrast(first, last, true) >= contrast(first, last, false);
+    const target = lightInk ? [0, 0, 0] : [255, 255, 255];
+    let amount = 0;
+    // Keep the chosen hue. Only nudge a marginal gradient toward light/dark
+    // enough for small text, with headroom above WCAG's 4.5:1 minimum.
+    if (contrast(first, last, lightInk) < 4.8) {
+      let lo = 0, hi = 1;
+      for (let step = 0; step < 12; step++) {
+        const mid = (lo + hi) / 2;
+        if (contrast(blend(first, target, mid), blend(last, target, mid), lightInk) >= 4.8) hi = mid;
+        else lo = mid;
+      }
+      amount = hi;
+    }
+    const css = (rgb) => `rgb(${rgb.join(", ")})`;
+    const palette = { start: css(blend(first, target, amount)), end: css(blend(last, target, amount)),
+      ink: lightInk ? "#ffffff" : "#000000" };
+    if (progressPaletteCache.size >= 64) progressPaletteCache.delete(progressPaletteCache.keys().next().value);
+    progressPaletteCache.set(key, palette);
+    return palette;
+  }
+
+  function progressRail(metric, themeTokens = {}) {
     const rail = document.createElement("span");
     rail.className = "codex-usage-hud-progress-rail";
     rail.dataset.tone = String(metric?.tone || "day");
@@ -301,6 +386,25 @@ TEXT = r"""
     const overflowBadgeCompact = String(metric?.overflowBadgeCompact || "");
     const overflowBadgeIcon = String(metric?.overflowBadgeIcon || "");
     const ratio = normalizeProgressRatio(metric?.ratio);
+    let colors;
+    if (["session", "cache"].includes(rail.dataset.tone)) {
+      colors = cacheProgressColors(ratio, themeTokens);
+      rail.style.setProperty("--codex-usage-hud-cache-fill", colors.start);
+      rail.style.setProperty("--codex-usage-hud-cache-fill-end", colors.end);
+    } else {
+      const defaults = { day: ["#f3d27a", "#f3d37f"], week: ["#b5dd92", "#aede95"], error: ["#ff875a", "#ff6b6b"] };
+      const tone = rail.dataset.tone;
+      const prefix = tone === "week" ? "progressWeek" : tone === "error" ? "progressOverflow" : "progressDay";
+      const fallback = defaults[tone] || defaults.day;
+      colors = { start: themeTokens[prefix] || fallback[0],
+        end: themeTokens[tone === "error" ? "error" : `${prefix}End`] || fallback[1] };
+    }
+    const palette = readableProgressPalette(colors.start, colors.end);
+    const track = progressColorRgb(themeTokens.progressTrack || "#262c33");
+    rail.style.setProperty("--codex-usage-hud-progress-track-ink", progressLuminance(track) > .179 ? "#000000" : "#ffffff");
+    rail.style.setProperty("--codex-usage-hud-progress-fill-ink", palette.ink);
+    const fillWidth = `${Math.round(ratio * 1000) / 10}%`;
+    rail.style.setProperty("--codex-usage-hud-progress-fill-width", fillWidth);
     const overflowRatio = normalizeProgressRatio(metric?.overflowRatio);
     const hasOverflow = overflowRatio > 0;
     if (hasOverflow) rail.dataset.overflow = "true";
@@ -315,7 +419,7 @@ TEXT = r"""
     else delete rail.dataset.overflowBadgeCompact;
     const fullText = rightText ? `${label} / ${rightText}` : label;
     const badgeTooltip = [overflowBadgeIcon, overflowBadge].filter(Boolean).join(" ");
-    const tooltip = overflowBadge ? `${fullText || label} | ${badgeTooltip}` : fullText;
+    const tooltip = String(metric?.tooltip || (overflowBadge ? `${fullText || label} | ${badgeTooltip}` : fullText));
     rail.title = tooltip;
     rail.setAttribute("aria-label", tooltip);
 
@@ -351,9 +455,13 @@ TEXT = r"""
 
     const fill = document.createElement("span");
     fill.className = "codex-usage-hud-progress-fill";
-    fill.style.width = `${Math.round(ratio * 1000) / 10}%`;
+    fill.style.width = fillWidth;
+    fill.style.background = `linear-gradient(90deg in srgb, ${palette.start}, ${palette.end})`;
     rail.appendChild(fill);
     rail.appendChild(progressTextLayer("codex-usage-hud-progress-track-text"));
+    const filledText = progressTextLayer("codex-usage-hud-progress-track-text codex-usage-hud-progress-fill-text");
+    filledText.setAttribute("aria-hidden", "true");
+    rail.appendChild(filledText);
     if (hasOverflow) {
       const overflow = document.createElement("span");
       overflow.className = "codex-usage-hud-progress-overflow";
@@ -385,7 +493,7 @@ TEXT = r"""
     return rail;
   }
 
-  function renderProgressList(container, metrics) {
+  function renderProgressList(container, metrics, themeTokens = {}) {
     if (!container) return false;
     const items = Array.isArray(metrics) ? metrics.filter((item) => item && item.label) : [];
     container.querySelectorAll(":scope > .codex-usage-hud-progress-rail").forEach((rail) => {
@@ -395,7 +503,7 @@ TEXT = r"""
     if (items.length > 0) container.dataset.count = String(items.length);
     else delete container.dataset.count;
     for (const item of items) {
-      const rail = progressRail(item);
+      const rail = progressRail(item, themeTokens);
       container.appendChild(rail);
       badgeResizeObserver?.observe(rail);
     }
@@ -411,12 +519,13 @@ TEXT = r"""
 
   function renderTopProgress(root, payload) {
     const progress = payload?.topProgress || {};
+    const themeTokens = payload?.theme?.tokens || {};
     const main = root.querySelector(`.${topClass} .codex-usage-hud-main`);
     const collapsed = root.querySelector('[data-field="topCollapsedProgress"]');
-    const hasCollapsed = renderProgressList(collapsed, progress.collapsed || []);
+    const hasCollapsed = renderProgressList(collapsed, progress.collapsed || [], themeTokens);
     if (main) main.dataset.progress = hasCollapsed ? "true" : "false";
-    renderProgressList(root.querySelector('[data-field="topCacheProgress"]'), progress.cache ? [progress.cache] : []);
-    renderProgressList(root.querySelector('[data-field="topBudgetProgress"]'), progress.budget || []);
+    renderProgressList(root.querySelector('[data-field="topCacheProgress"]'), progress.cache ? [progress.cache] : [], themeTokens);
+    renderProgressList(root.querySelector('[data-field="topBudgetProgress"]'), progress.budget || [], themeTokens);
     // The three lists share one coalesced budget frame. Refresh the entire
     // domain last, so the collapsed strip cannot lose its callback to a list.
     ctx.lifecycle.frame("budget", () => refresh(root));
@@ -466,6 +575,7 @@ TEXT = r"""
       stopFontWatch?.();
       stopFontWatch = null;
       badgeLayoutCache = new WeakMap();
+      progressPaletteCache.clear();
       return wasInstalled;
     }
 

@@ -170,7 +170,7 @@ def test_development_stop_requires_exact_main_pid_and_preserves_proxy(monkeypatc
     from codex_usage_hud.config import UserConfig
     from codex_usage_hud.runtime_commands import _handle_renderer_settings_command
 
-    monkeypatch.setattr(reload, "gateway_client", lambda: object())
+    monkeypatch.setattr(reload, "gateway_client", lambda **_kwargs: object())
     monkeypatch.setattr(reload, "proxy_health", lambda _client: {"pid": os.getpid() + 1})
     context = SimpleNamespace(user_config=UserConfig.defaults())
     restart, stop = Event(), Event()
@@ -210,10 +210,45 @@ def test_settings_all_does_not_restart_hud_when_proxy_reload_fails(monkeypatch):
     from codex_usage_hud.config import UserConfig
     from codex_usage_hud.runtime_commands import _handle_renderer_settings_command
 
-    monkeypatch.setattr(reload, "gateway_client", lambda: object())
+    monkeypatch.setattr(reload, "gateway_client", lambda **_kwargs: object())
     monkeypatch.setattr(reload, "reload_proxy", MagicMock(side_effect=RuntimeError("keep old proxy")))
     launch = MagicMock()
     monkeypatch.setattr(reload, "launch_hud_reload", launch)
     status = _handle_renderer_settings_command({"action": "developmentReload", "mode": "all"}, SimpleNamespace(user_config=UserConfig.defaults()), Event(), Event())
     assert status["kind"] == "error"
     launch.assert_not_called()
+
+
+def test_hud_source_reload_works_without_a_gateway(hud_reload):
+    root, _, health, stop, terminate, launch = hud_reload
+    result = reload.restart_hud(None, root)
+    assert result["hudPid"] == 3000 and result["proxyPid"] is None
+    health.assert_not_called()
+    stop.assert_called_once()
+    terminate.assert_not_called()
+    launch.assert_called_once()
+
+
+def test_optional_gateway_client_does_not_start_a_helper(tmp_path, monkeypatch):
+    monkeypatch.setattr("codex_usage_hud.provider_gateway.gateway_info", lambda: {})
+    monkeypatch.setattr(reload, "runtime_file_path", lambda name: tmp_path / name)
+    assert reload.gateway_client(required=False) is None
+    with pytest.raises(RuntimeError, match="No authenticated"):
+        reload.gateway_client()
+
+
+def test_development_handoff_without_gateway_requests_only_hud_exit(monkeypatch):
+    import os
+    from threading import Event
+    from codex_usage_hud.runtime_commands import _handle_renderer_settings_command
+
+    monkeypatch.setattr(reload, "gateway_client", lambda **_kwargs: None)
+    health = MagicMock(side_effect=AssertionError("no proxy should be contacted"))
+    monkeypatch.setattr(reload, "proxy_health", health)
+    stop = Event()
+    status = _handle_renderer_settings_command(
+        {"action": "developmentStop", "expectedPid": os.getpid(), "preserveProxy": True},
+        SimpleNamespace(), Event(), stop,
+    )
+    assert status["kind"] != "error" and stop.is_set()
+    health.assert_not_called()
