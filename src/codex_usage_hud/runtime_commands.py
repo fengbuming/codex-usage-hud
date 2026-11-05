@@ -2019,6 +2019,27 @@ def handle_general_command(
         if action == "restart":
             ports.request_restart()
             return _status("已请求重启 HUD；daemon 模式会自动恢复。")
+        if action == "developmentStop":
+            if command.get("expectedPid") != os.getpid() or command.get("preserveProxy") is not True:
+                raise ValueError("开发重载进程身份不匹配，HUD 将继续运行。")
+            from .development_reload import gateway_client, proxy_health
+
+            if proxy_health(gateway_client())["pid"] == os.getpid():
+                raise ValueError("无法确认独立代理身份，HUD 将继续运行。")
+            ports.request_exit()
+            return _status("正在交接 HUD 源码重载，独立代理继续运行。")
+        if action == "developmentReload":
+            mode = str(command.get("mode") or "")
+            if mode not in {"hud", "proxy", "all"}:
+                raise ValueError("请选择有效的重载范围。")
+            from .development_reload import gateway_client, launch_hud_reload, reload_proxy
+
+            result = {"mode": mode}
+            if mode in {"proxy", "all"}:
+                result["proxy"] = reload_proxy(gateway_client(), Path(__file__).parent)
+            if mode in {"hud", "all"}:
+                result.update(launch_hud_reload())
+            return {**_status("重载请求已确认。"), "developmentReload": result}
         if action == "restartCodex":
             if ports.request_restart_codex is None:
                 return _status("当前运行模式不支持立即重启 Codex Desktop。", kind="error")

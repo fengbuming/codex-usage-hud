@@ -21,9 +21,16 @@ import secrets
 import select
 import socket
 import sqlite3
+import uuid
 from socketserver import TCPServer
 from threading import RLock, Thread
 from urllib.parse import SplitResult, urlsplit
+
+from .provider_gateway_auth import GATEWAY_AUTH_HEADER, GATEWAY_PATH_ID, gateway_authorized
+from .provider_proxy_diagnostics import (
+    HUD_REQUEST_HEADER, SseDiagnostics, diagnostic_text, error_body_chunks,
+    sample_error_body, upstream_request_id,
+)
 
 MARKER = "# codex-hud-proxy: "
 _METADATA = re.compile(r"(?m)^# codex-hud-proxy: (.+)\r?$")
@@ -196,10 +203,21 @@ class ProviderProxyRelay:
                             ("base_url", "enabled", "port", "token", "model", "models") if key in previous}, config_path)
             self._start()
             token = str(metadata.get("token") or secrets.token_urlsafe(24))
+            if token == GATEWAY_PATH_ID:
+                raise ValueError("The HUD gateway path cannot be used as a secret token.")
             metadata["token"] = token
+            path_id = metadata.get("path_id")
+            if path_id:
+                if path_id != GATEWAY_PATH_ID or not metadata.get("gateway_config"):
+                    raise ValueError("Readable routes are reserved for the HUD gateway.")
+                existing = self.routes.get(path_id)
+                if existing and Path(existing["gateway_config"]).resolve() != config_path.resolve():
+                    raise ValueError("The readable HUD route already belongs to another config.")
             self.routes[token] = dict(metadata)
+            if path_id:
+                self.routes[path_id] = dict(metadata)
             self.config_paths.add(config_path)
-            return f"http://127.0.0.1:{self.server.server_port}/{token}{upstream.path.rstrip('/')}"
+            return f"http://127.0.0.1:{self.server.server_port}/{path_id or token}{upstream.path.rstrip('/')}"
 
     def config_base_url(self, metadata: dict, config_path: Path) -> str:
         """Select the persisted URL and retain any existing relay endpoints."""
@@ -288,14 +306,21 @@ class ProviderProxyRelay:
             def log_message(self, *_args):
                 pass
 
-            def _send_relay_failure(self, error):
-                detail = ("Codex HUD provider relay did not receive an upstream HTTP response.\n"
+            def _send_relay_failure(self, error, route=None, upstream_id="", upstream_status=None):
+                context = diagnostic_text(route or {}, self.hud_request_id, upstream_id, upstream_status)
+                explanation = ("Codex HUD provider relay could not read the upstream HTTP response."
+                               if upstream_status is not None else
+                               "Codex HUD provider relay did not receive an upstream HTTP response.")
+                detail = (f"[Codex HUD] {context}\n"
+                          f"{explanation}\n"
                           f"{type(error).__name__}: {error}\n").encode("utf-8", errors="replace")
+                _LOGGER.warning("provider_relay_failure %s error=%s", context, type(error).__name__)
                 try:
                     self.send_response_only(502, "Bad Gateway")
                     self.send_header("Content-Type", "text/plain; charset=utf-8")
                     self.send_header("Content-Length", str(len(detail)))
                     self.send_header("Connection", "close")
+                    self.send_header(HUD_REQUEST_HEADER, self.hud_request_id)
                     self.end_headers()
                     self.wfile.write(detail)
                     self.wfile.flush()
@@ -303,12 +328,17 @@ class ProviderProxyRelay:
                     pass
 
             def _forward(self):
+                self.hud_request_id = "hud_" + uuid.uuid4().hex
                 path = urlsplit(self.path)
                 token, _, suffix = path.path.lstrip("/").partition("/")
                 with relay.lock:
                     route = relay.routes.get(token)
                 if not route:
                     self.send_error(404)
+                    return
+                if token == GATEWAY_PATH_ID and not gateway_authorized(self.headers, str(route.get("token") or "")):
+                    self.send_error(401, "HUD gateway authentication required")
+                    self.close_connection = True
                     return
                 gateway = bool(route.get("gateway_config"))
                 if gateway:
@@ -322,7 +352,7 @@ class ProviderProxyRelay:
                             and suffix.rstrip("/").endswith(("/responses", "/responses/compact")),
                         )
                     except (ValueError, RuntimeError, OSError, sqlite3.Error) as exc:
-                        self._send_relay_failure(exc)
+                        self._send_relay_failure(exc, {"provider": "unresolved", "base_url": ""})
                         self.close_connection = True
                         return
                 upstream = urlsplit(route["base_url"])
@@ -337,6 +367,8 @@ class ProviderProxyRelay:
                 if query:
                     target += "?" + query
                 connection = None
+                response = None
+                upstream_id = ""
                 upstream_response_received = False
                 try:
                     if route.get("enabled"):
@@ -369,7 +401,7 @@ class ProviderProxyRelay:
                     if gateway:
                         headers = {k: v for k, v in headers.items() if k.lower() not in {
                             "authorization", "api-key", "x-api-key", "chatgpt-account-id",
-                            "openai-organization", "openai-project", "cookie",
+                            "openai-organization", "openai-project", "cookie", GATEWAY_AUTH_HEADER.lower(),
                         }}
                         headers.update(route.get("headers") or {})
                     headers["Host"] = upstream.netloc
@@ -414,11 +446,24 @@ class ProviderProxyRelay:
                             body = prepare_request_body(gateway_path, route, body)
                     connection.request(self.command, target or "/", body=body, headers=headers)
                     response = connection.getresponse()
+                    upstream_id = upstream_request_id(response.headers)
+                    error_chunks = error_body_chunks(response) if response.status >= 400 and self.command != "HEAD" else None
+                    sample = sample_error_body(error_chunks) if error_chunks is not None else b""
+                    if error_chunks is not None:
+                        upstream_id = upstream_request_id(response.headers, sample)
                     upstream_response_received = True
                     self.send_response_only(response.status, response.reason)
+                    omitted = _HOP_HEADERS | {"content-length", HUD_REQUEST_HEADER.lower(), "x-codex-hud-upstream-request-id"}
+                    if error_chunks is not None:
+                        omitted |= {"content-type", "content-encoding", "content-md5", "digest", "etag"}
                     for key, value in response.getheaders():
-                        if key.lower() not in _HOP_HEADERS | {"content-length"}:
+                        if key.lower() not in omitted:
                             self.send_header(key, value)
+                    self.send_header(HUD_REQUEST_HEADER, self.hud_request_id)
+                    if upstream_id:
+                        self.send_header("X-Codex-Hud-Upstream-Request-Id", upstream_id)
+                    if error_chunks is not None:
+                        self.send_header("Content-Type", "text/plain; charset=utf-8")
                     if upgrade and response.status == 101:
                         self.send_header("Connection", "Upgrade")
                         self.send_header("Upgrade", "websocket")
@@ -444,12 +489,30 @@ class ProviderProxyRelay:
                         self.send_header("Connection", "close")
                         self.end_headers()
                         if self.command != "HEAD":
-                            while data := response.read1(65536):
-                                self.wfile.write(data)
+                            if error_chunks is not None:
+                                context = diagnostic_text(route, self.hud_request_id, upstream_id, response.status)
+                                _LOGGER.warning("provider_upstream_error %s", context)
+                                self.wfile.write(f"[Codex HUD] {context}\n\n".encode("utf-8") + sample)
                                 self.wfile.flush()
+                                for data in error_chunks:
+                                    self.wfile.write(data)
+                                    self.wfile.flush()
+                            else:
+                                sse = SseDiagnostics(route, self.hud_request_id, response.headers) if (
+                                    "text/event-stream" in str(response.getheader("Content-Type", "")).lower()
+                                    and str(response.getheader("Content-Encoding", "")).lower() in {"", "identity"}
+                                ) else None
+                                while data := response.read1(65536):
+                                    self.wfile.write(sse.feed(data) if sse else data)
+                                    self.wfile.flush()
+                                if sse:
+                                    self.wfile.write(sse.finish())
+                                    self.wfile.flush()
                 except (OSError, ValueError, LookupError, sqlite3.Error, http.client.HTTPException) as exc:
                     if not upstream_response_received:
-                        self._send_relay_failure(exc)
+                        self._send_relay_failure(exc, route, upstream_id, response.status if response else None)
+                    else:
+                        _LOGGER.warning("provider_upstream_stream_failure %s error=%s", diagnostic_text(route, self.hud_request_id, upstream_id), type(exc).__name__)
                 finally:
                     self.close_connection = True
                     if connection is not None:

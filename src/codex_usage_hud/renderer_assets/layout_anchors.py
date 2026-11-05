@@ -304,6 +304,16 @@ TEXT = r"""
 
       function topTitlebarSlot(headerNode, header) {
         if (!headerNode || !header) return null;
+        const titleBounds = headerTitleTextBounds(headerNode, header);
+        const nativeTitle = typeof activeSessionHeaderTitleText === "function"
+          ? activeSessionHeaderTitleText()
+          : null;
+        // A blank/new chat has no conversation menu to dock against. Protect
+        // every native control, including buttons mounted beside the main slot.
+        if ((nativeTitle === null && !titleBounds) || nativeTitle === "" || (
+          typeof activeSessionTitleIsNewSession === "function"
+          && activeSessionTitleIsNewSession(nativeTitle)
+        )) return topControlFreeSlot(header, titleBounds);
         const controls = headerControlButtons(headerNode, header);
         const composerNode = composerElement();
         const composer = visible(composerNode) ? composerNode.getBoundingClientRect() : null;
@@ -318,7 +328,6 @@ TEXT = r"""
           headerLayoutSignature(headerNode, header, controls),
         ].join(":");
         if (topSlotCache?.key === cacheKey) return topSlotCache.slot;
-        const titleBounds = headerTitleTextBounds(headerNode, header);
         const left = clamp(topTitlebarLeft(headerNode, header, controls, titleBounds), header.left + 8, header.right - 8);
         const right = clamp(
           headerOverflowMenuControlStart(headerNode, header, controls) - 10,
@@ -329,6 +338,34 @@ TEXT = r"""
         const slot = { left, right, width: Math.max(1, right - left), cacheKey };
         topSlotCache = { key: cacheKey, slot };
         return slot;
+      }
+
+      function topControlFreeSlot(header, titleBounds = null) {
+        const left = Math.max(8, header.left + 8);
+        const right = Math.min(innerWidth - 8, header.right - 8);
+        const top = Math.max(8, header.top + Math.max(0, (header.height - PANEL.top.collapsedHeight) / 2));
+        const bottom = top + PANEL.top.collapsedHeight;
+        const blockers = Array.from(document.querySelectorAll(
+          "button, [role='button'], a, input, select, [role='combobox'], [role='tab'], [role='menuitem']",
+        ))
+          .filter((node) => visible(node) && !node.closest?.(`#${rootId}`))
+          .map((node) => node.getBoundingClientRect())
+          .filter((rect) => rect.width > 0 && rect.height > 0
+            && rect.left < right && rect.right > left && rect.top < bottom && rect.bottom > top);
+        if (titleBounds) blockers.push(titleBounds);
+        blockers.sort((a, b) => a.left - b.left);
+        const gaps = [];
+        let cursor = left;
+        for (const rect of blockers) {
+          const end = Math.min(right, rect.left - 10);
+          if (end > cursor) gaps.push({ left: cursor, right: end, width: end - cursor });
+          cursor = Math.max(cursor, rect.right + 10);
+        }
+        if (cursor < right) gaps.push({ left: cursor, right, width: right - cursor });
+        // Prefer the largest gap, then the rightmost one when widths match.
+        const slot = gaps.sort((a, b) => (b.width - a.width) || (b.right - a.right))[0]
+          || { left, right: left, width: 0 };
+        return { ...slot, protectControls: true, blocked: slot.width < minWidthFor("top", false) };
       }
 
       function topHeaderSlot(headerNode, header) {
@@ -400,13 +437,18 @@ TEXT = r"""
 
       function topAnchor(height, widthOverride) {
         const headerNode = conversationHeaderElement();
-        const header = visible(headerNode) ? headerNode.getBoundingClientRect() : null;
+        let header = visible(headerNode) ? headerNode.getBoundingClientRect() : null;
         const minWidth = minWidthFor("top", height > PANEL.top.collapsedHeight);
+        let slot;
         if (!header) {
-          const width = clamp(widthOverride || PANEL.top.fallbackWidth, minWidth, Math.max(minWidth, innerWidth - 16));
-          return { left: innerWidth - width - 12, top: 12, width, height };
+          // New-chat builds without a recognized header still have native
+          // top-right controls. Use their geometry instead of a fixed corner.
+          const composer = composerElement()?.getBoundingClientRect();
+          header = { left: composer?.left || 0, right: innerWidth, top: 12, height: PANEL.top.collapsedHeight };
+          slot = topControlFreeSlot(header);
+        } else {
+          slot = topHeaderSlot(headerNode, header);
         }
-        const slot = topHeaderSlot(headerNode, header);
         const fitMinWidth = Math.min(minWidth, Math.max(1, slot.width));
         // The fallback width is only for the no-header path. Collapsed content
         // is fitted after the panel DOM has been rendered so its intrinsic
@@ -425,6 +467,8 @@ TEXT = r"""
           height,
           source: "header-slot",
           overlayTitle: slot.overlayTitle === true,
+          protectControls: slot.protectControls === true,
+          blocked: slot.blocked === true,
           maxWidth: slot.width,
           area: { left: slot.left, top, width: slot.width, height, right: slot.right },
         };
@@ -796,7 +840,8 @@ TEXT = r"""
         const baseWidth = Number(state.width || anchor.width);
         const width = clamp(baseWidth, minWidth, Math.max(minWidth, slotWidth));
         const left = clamp(Number(state.x ?? anchor.left), slotLeft, Math.max(slotLeft, slotRight - width));
-        const top = clamp(Number(state.y ?? anchor.top), 8, Math.max(8, innerHeight - height - 8));
+        const top = anchor.protectControls ? anchor.top
+          : clamp(Number(state.y ?? anchor.top), 8, Math.max(8, innerHeight - height - 8));
         return { left, top, width };
       }
 """

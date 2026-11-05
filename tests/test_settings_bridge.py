@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import socket
 import sys
@@ -34,6 +35,16 @@ def _available_port() -> int:
 
 
 class SettingsBridgeServerTests(unittest.TestCase):
+    def test_health_identifies_current_hud_process_for_source_reload(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            bridge = SettingsBridgeServer(UserConfigStore(Path(temp_dir) / "hud_settings.json"), port=0)
+            try:
+                bridge.start()
+                with urlopen(bridge.url.rsplit("/settings", 1)[0] + "/health", timeout=2) as response:
+                    self.assertEqual(json.load(response), {"status": "ok", "pid": os.getpid()})
+            finally:
+                bridge.close()
+
     def test_background_usage_endpoints_require_token_and_lazy_load_prompt(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             store = UserConfigStore(Path(temp_dir) / "hud_settings.json")

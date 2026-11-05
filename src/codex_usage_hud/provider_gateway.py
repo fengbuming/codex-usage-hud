@@ -312,8 +312,9 @@ def _provider_route(path: Path, provider: str, definitions: Mapping) -> dict:
         route = {"base_url": definition.base_url, "enabled": definition.use_proxy,
                  "port": definition.proxy_port, "model": definition.desktop_model,
                  "models": list(definition.desktop_models), "headers": {}}
-        raw = config._parse_toml_mapping(definition.section_text)
-        entry = raw.get("model_providers", {}).get(definition.provider_id, {})
+        raw = config._parse_toml_mapping(text)
+        entry = next((v for k, v in raw.get("model_providers", {}).items()
+                      if str(k).casefold() == definition.provider_id.casefold()), {})
         if entry.get("auth"):
             raise ValueError("此供应商使用命令获取凭据，请先在 HUD 保存 API key 后启用统一代理。")
         route["headers"].update(entry.get("http_headers") or {})
@@ -340,7 +341,7 @@ def _provider_route(path: Path, provider: str, definitions: Mapping) -> dict:
     # Header names are case-insensitive. Never forward the caller's credential,
     # nor allow a configured header to override the selected upstream key.
     route["headers"] = {str(k): str(v) for k, v in route["headers"].items()
-                        if str(k).lower() not in {"authorization", "host", "content-length", "connection", "transfer-encoding"}}
+                        if str(k).lower() not in {"authorization", "host", "content-length", "connection", "transfer-encoding", "x-codex-hud-gateway-token"}}
     route["headers"]["Authorization"] = "Bearer " + key
     upstream = _validated_proxy_upstream(route)
     endpoint = urlsplit(str(info.get("endpoint") or ""))
@@ -355,6 +356,7 @@ def _provider_route(path: Path, provider: str, definitions: Mapping) -> dict:
 def activate_gateway(path: Path, relay) -> None:
     from . import codex_provider_config as config
     from .provider_proxy import with_proxy_metadata
+    from .provider_gateway_auth import GATEWAY_PATH_ID, with_gateway_auth
 
     if not path.exists():
         return
@@ -377,9 +379,10 @@ def activate_gateway(path: Path, relay) -> None:
     # The service stores only the config path; upstream credentials are read
     # for the selected provider at request time, never copied to control state.
     route = getattr(relay, "gateway_route", relay.route)
-    endpoint = route({"base_url": "http://localhost/v1", "token": metadata["token"],
+    endpoint = route({"base_url": "http://localhost/v1", "token": metadata["token"], "path_id": GATEWAY_PATH_ID,
                       "gateway_config": str(path.resolve())}, path)
     metadata["endpoint"] = endpoint
+    named_endpoint = urlsplit(endpoint).path.split("/")[1:2] == [GATEWAY_PATH_ID]
     metadata["active"] = True
     if not gateway_metadata(original):
         with _state_db(path) as db:
@@ -396,6 +399,7 @@ def activate_gateway(path: Path, relay) -> None:
         body = config._set_quoted_value(body, "base_url", endpoint, newline)
         candidate = config._replace_section_body(candidate, definition.provider_id,
                                                  with_proxy_metadata(body, old_metadata, newline))
+        candidate = with_gateway_auth(candidate, definition.provider_id, metadata["token"] if named_endpoint else None)
     body = newline.join(['name = "Codex HUD"', f'base_url = "{endpoint}"', 'wire_api = "responses"',
                          'requires_openai_auth = false', 'supports_websockets = false',
                          f'experimental_bearer_token = "{metadata["token"]}"'])
@@ -407,6 +411,7 @@ def activate_gateway(path: Path, relay) -> None:
         candidate = config._replace_section_body(candidate, PROVIDER_ID, body)
     else:
         candidate = config._add_provider_section_text(candidate, PROVIDER_ID, body)
+    candidate = with_gateway_auth(candidate, PROVIDER_ID, metadata["token"] if named_endpoint else None)
     first_table = config.TABLE_HEADER_PATTERN.search(candidate)
     end = first_table.start() if first_table else len(candidate)
     head = config._set_quoted_value(candidate[:end], "model_provider", PROVIDER_ID, newline)
@@ -427,6 +432,7 @@ def activate_gateway(path: Path, relay) -> None:
 def prepare_exit(provider: str, *, config_path: Path | None = None) -> dict:
     """Restore a usable direct config before authorizing normal HUD shutdown."""
     from . import codex_provider_config as config
+    from .provider_gateway_auth import with_gateway_auth
 
     path = config_path or config.default_codex_config_path()
     original = config._read_text_exact(path)
@@ -445,6 +451,7 @@ def prepare_exit(provider: str, *, config_path: Path | None = None) -> dict:
         body = config._section_range(candidate, definition.provider_id)[2]
         body = config._set_quoted_value(body, "base_url", definition.base_url, newline)
         candidate = config._replace_section_body(candidate, definition.provider_id, body)
+        candidate = with_gateway_auth(candidate, definition.provider_id, None)
     metadata = gateway_metadata(original, include_inactive=True)
     # Retain the native identity so chats created through HUD remain openable
     # after exit. Codex rejects a saved identity with no provider table.
@@ -456,6 +463,7 @@ def prepare_exit(provider: str, *, config_path: Path | None = None) -> dict:
         body = newline.join(['name = "OpenAI"', f'base_url = "{direct_route["base_url"]}"',
                              'wire_api = "responses"', 'requires_openai_auth = true'])
     candidate = config._replace_section_body(candidate, PROVIDER_ID, body)
+    candidate = with_gateway_auth(candidate, PROVIDER_ID, None)
     metadata["active"] = False
     metadata["default_provider"] = provider
     candidate = _MARKER_RE.sub(lambda _: MARKER + json.dumps(metadata, separators=(",", ":")), candidate)

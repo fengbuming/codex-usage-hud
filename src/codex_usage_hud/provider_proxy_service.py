@@ -22,7 +22,7 @@ from .provider_proxy import LoopbackHTTPServer
 
 CONTROL_PATH = "/__codex_hud_proxy__/"
 CONTROL_HEADER = "X-Codex-Hud-Proxy-Control"
-PROTOCOL_VERSION = 2
+PROTOCOL_VERSION = 3
 
 # A HUD launched from the Windows desktop can itself be placed in a
 # kill-on-close Job Object.  The provider relay is deliberately a separate
@@ -47,7 +47,7 @@ def _save_state(path: Path, state: dict) -> None:
 def _read_state(path: Path, port: int) -> dict:
     try:
         state = json.loads(path.read_text(encoding="utf-8"))
-        if state.get("version") in {1, PROTOCOL_VERSION} and state.get("port") == port and state.get("control_token"):
+        if state.get("version") in {1, 2, PROTOCOL_VERSION} and state.get("port") == port and state.get("control_token"):
             return state
     except (OSError, ValueError, AttributeError):
         pass
@@ -119,7 +119,7 @@ class ProviderProxyServiceClient:
         self._lock = RLock()
 
     def _call(self, action: str, payload: dict | None = None) -> dict:
-        connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=2)
+        connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=15 if action == "reload" else 2)
         try:
             connection.request("POST", CONTROL_PATH + action, json.dumps(payload or {}), {
                 CONTROL_HEADER: self.state["control_token"], "Content-Type": "application/json",
@@ -177,6 +177,8 @@ class ProviderProxyServiceClient:
             )
 
     def route(self, metadata: dict, config_path: Path) -> str:
+        # Keep an already-running pre-reload helper alive. It will return its
+        # existing private URL until a safe one-time migration is arranged.
         self.ensure(minimum_version=2 if metadata.get("gateway_config") else 1)
         result = self._call("route", {"metadata": metadata, "config_path": str(config_path.resolve())})
         metadata.update(result["metadata"])
@@ -250,6 +252,7 @@ class ProviderProxyServiceClient:
 def run_helper(state_path: Path, port: int, *, wait_for_port: float = 0) -> int:
     from .codex_provider_config import default_codex_config_path, read_provider_definitions
     from .provider_proxy import ProviderProxyRelay, proxy_metadata
+    from .provider_proxy_reload import ProxyReloadManager
 
     state = {**_load_or_create_state(state_path, port), "version": PROTOCOL_VERSION}
     subscriptions: dict[str, int] = {}
@@ -262,7 +265,7 @@ def run_helper(state_path: Path, port: int, *, wait_for_port: float = 0) -> int:
             class Handler(base):
                 def _forward(self):
                     if not self.path.startswith(CONTROL_PATH):
-                        return super()._forward()
+                        return relay.reload_manager.dispatch(self)
                     if not secrets.compare_digest(self.headers.get(CONTROL_HEADER, ""), state["control_token"]):
                         self.send_error(403)
                         return
@@ -273,11 +276,13 @@ def run_helper(state_path: Path, port: int, *, wait_for_port: float = 0) -> int:
                         payload = json.loads(self.rfile.read(size))
                         action = self.path[len(CONTROL_PATH):]
                         if action == "health":
-                            result = {"version": PROTOCOL_VERSION, "pid": os.getpid()}
+                            result = {"version": PROTOCOL_VERSION, "pid": os.getpid(), **relay.reload_manager.health()}
+                        elif action == "reload":
+                            result = {"version": PROTOCOL_VERSION, "pid": os.getpid(), **relay.reload_manager.reload()}
                         elif action == "route":
                             metadata = payload["metadata"]
+                            endpoint = relay.reload_manager.route(metadata, Path(payload["config_path"]))
                             with relay.lock:
-                                endpoint = relay.route(metadata, Path(payload["config_path"]))
                                 _save_state(state_path, {**state, "routes": relay.routes, "config_paths": [str(p) for p in relay.config_paths]})
                             result = {"endpoint": endpoint, "metadata": metadata}
                         elif action in {"subscribe", "unsubscribe"}:
@@ -299,7 +304,7 @@ def run_helper(state_path: Path, port: int, *, wait_for_port: float = 0) -> int:
                         self.send_header("Content-Length", str(len(body)))
                         self.end_headers()
                         self.wfile.write(body)
-                    except (OSError, ValueError, TypeError, KeyError) as error:
+                    except (OSError, ValueError, TypeError, KeyError, RuntimeError, ImportError, SyntaxError) as error:
                         body = json.dumps({"error": str(error)}).encode()
                         self.send_response_only(400)
                         self.send_header("Content-Length", str(len(body)))
@@ -311,6 +316,7 @@ def run_helper(state_path: Path, port: int, *, wait_for_port: float = 0) -> int:
             return Handler
 
     relay = Relay(port)
+    relay.reload_manager = ProxyReloadManager(relay)
     relay.routes.update(state.get("routes") or {})
     paths = {Path(p) for p in state.get("config_paths", [])}
     if wait_for_port > 0:

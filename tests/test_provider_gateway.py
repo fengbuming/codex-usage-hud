@@ -17,6 +17,7 @@ from codex_usage_hud import provider_gateway as gateway
 from codex_usage_hud.provider_proxy import ProviderProxyRelay, DetachedProviderProxyRelay
 from codex_usage_hud.provider_proxy import _decode_gateway_body
 from codex_usage_hud.provider_registry import discover_provider_registry
+from codex_usage_hud.provider_gateway_auth import GATEWAY_AUTH_HEADER
 from codex_usage_hud.core.parser import JsonlSessionParser
 from codex_usage_hud.config import UserConfig
 
@@ -233,7 +234,7 @@ def test_gateway_streams_replaces_credentials_and_preserves_status(home):
         endpoint = urlsplit(gateway.gateway_info(home)["endpoint"])
         client = http.client.HTTPConnection(endpoint.hostname, endpoint.port, timeout=3)
         client.request("POST", endpoint.path + "/responses?custom=1", b'{"input":[]}',
-                       {**headers(A), "Authorization": "Bearer caller", "X-Api-Key": "caller", "Cookie": "secret", "OpenAI-Project": "foreign"})
+                       {**headers(A), GATEWAY_AUTH_HEADER: gateway.gateway_info(home)["token"], "Authorization": "Bearer caller", "X-Api-Key": "caller", "Cookie": "secret", "OpenAI-Project": "foreign"})
         response = client.getresponse()
         assert started.wait(1)
         assert response.read(len(b"data: first\n\n")) == b"data: first\n\n"
@@ -242,7 +243,7 @@ def test_gateway_streams_replaces_credentials_and_preserves_status(home):
         assert calls[0][0] == "/api/custom/responses?custom=1"
         sent = {k.lower(): v for k, v in calls[0][1].items()}
         assert sent["authorization"] == "Bearer alpha-test-only"
-        assert not {"x-api-key", "cookie", "openai-project"} & sent.keys()
+        assert not {"x-api-key", "cookie", "openai-project", GATEWAY_AUTH_HEADER.lower()} & sent.keys()
         release.set()
         assert response.read() == b"data: last\n\n"
     finally:
@@ -308,9 +309,117 @@ def test_edit_provider_keeps_gateway_and_hot_reads_new_url_and_model(active, mon
     parsed = config._parse_toml_mapping(path.read_text(encoding="utf-8"))
     assert parsed["model_provider"] == "codex_hud"
     assert parsed["model_providers"]["alpha"]["base_url"] == gateway.gateway_info(path)["endpoint"]
+    assert parsed["model_providers"]["alpha"]["http_headers"][GATEWAY_AUTH_HEADER] == gateway.gateway_info(path)["token"]
     route = gateway.resolve_route(path, headers(A), generation=True)
     assert route["base_url"] == "https://alpha.example/v3"
     assert route["model"] == "custom-model"
+
+
+@pytest.mark.parametrize("style", ["inline", "multiline", "table", "dotted"])
+def test_gateway_auth_headers_preserve_custom_headers_and_are_removed_on_exit(home, style):
+    source = home.read_text(encoding="utf-8")
+    extra = {
+        "inline": 'http_headers = { "X-Custom" = "keep" }\n',
+        "multiline": 'http_headers = { "X-Custom" = """\\\nkeep""" }\n',
+        "dotted": 'http_headers."X-Custom" = "keep"\n',
+        "table": '',
+    }[style]
+    source = source.replace('name = "Alpha"\n', 'name = "Alpha"\n' + extra)
+    if style == "table":
+        source += '\n[model_providers.alpha.http_headers]\n"X-Custom" = "keep"\n'
+    home.write_text(source, encoding="utf-8")
+    relay = ProviderProxyRelay()
+    try:
+        gateway.activate_gateway(home, relay)
+        info = gateway.gateway_info(home)
+        assert urlsplit(info["endpoint"]).path == "/codex_hud/v1"
+        parsed = config._parse_toml_mapping(home.read_text(encoding="utf-8"))
+        for entry in parsed["model_providers"].values():
+            assert entry["http_headers"][GATEWAY_AUTH_HEADER] == info["token"]
+        assert parsed["model_providers"]["alpha"]["http_headers"]["X-Custom"] == "keep"
+        route = gateway.resolve_route(home, headers(A), generation=True)
+        assert route["headers"]["X-Custom"] == "keep"
+        assert GATEWAY_AUTH_HEADER not in route["headers"]
+        active_text = home.read_bytes()
+        gateway.activate_gateway(home, relay)
+        assert home.read_bytes() == active_text
+        gateway.prepare_exit("alpha", config_path=home)
+        parsed = config._parse_toml_mapping(home.read_text(encoding="utf-8"))
+        assert parsed["model_providers"]["alpha"]["http_headers"] == {"X-Custom": "keep"}
+        assert all(GATEWAY_AUTH_HEADER not in entry.get("http_headers", {}) for entry in parsed["model_providers"].values())
+    finally:
+        relay.close()
+
+
+def test_named_gateway_requires_auth_before_binding_and_legacy_url_still_works(home):
+    calls = []
+
+    class Upstream(BaseHTTPRequestHandler):
+        def log_message(self, *_args):
+            pass
+
+        def do_POST(self):
+            self.rfile.read(int(self.headers.get("Content-Length", 0)))
+            calls.append(dict(self.headers))
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"ok")
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Upstream)
+    worker = Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    home.write_text(home.read_text().replace("https://alpha.example/v1", f"http://127.0.0.1:{server.server_port}/v1"), encoding="utf-8")
+    relay = ProviderProxyRelay()
+    try:
+        gateway.activate_gateway(home, relay)
+        info = gateway.gateway_info(home)
+        endpoint = urlsplit(info["endpoint"])
+
+        def request(path, auth):
+            client = http.client.HTTPConnection(endpoint.hostname, endpoint.port, timeout=3)
+            try:
+                client.request("POST", path, b"{}", {**headers(A), **auth})
+                response = client.getresponse()
+                body = response.read()
+                return response.status, body
+            finally:
+                client.close()
+
+        for auth in ({}, {GATEWAY_AUTH_HEADER: "wrong"}, {"Authorization": "Bearer upstream-not-the-gateway"}):
+            assert request(endpoint.path + "/responses", auth)[0] == 401
+        assert not calls
+        assert gateway.session_provider(A, config_path=home) == ""
+        assert request(endpoint.path + "/responses", {GATEWAY_AUTH_HEADER: info["token"]}) == (200, b"ok")
+        assert request(endpoint.path + "/responses", {"Authorization": "Bearer " + info["token"]}) == (200, b"ok")
+        assert request(f'/{info["token"]}/v1/responses', {}) == (200, b"ok")
+        assert all(GATEWAY_AUTH_HEADER.lower() not in {k.lower() for k in call} for call in calls)
+        # Re-adopting a saved random URL migrates config without changing the
+        # token, the durable session route, or compatibility with cached URLs.
+        text = home.read_text().replace("/codex_hud/v1", f'/{info["token"]}/v1')
+        home.write_text(text, encoding="utf-8")
+        gateway.activate_gateway(home, relay)
+        assert gateway.gateway_info(home)["endpoint"] == info["endpoint"]
+        assert gateway.session_provider(A, config_path=home) == "alpha"
+    finally:
+        relay.close()
+        server.shutdown()
+        server.server_close()
+        worker.join(2)
+
+
+def test_gateway_header_preserves_case_insensitive_provider_identity(home):
+    text = home.read_text().replace('[model_providers.alpha]', '[model_providers.ALPHA]').replace('name = "Alpha"', 'name = "Alpha"\nhttp_headers = { "X-Custom" = "keep" }')
+    home.write_text(text, encoding="utf-8")
+    relay = ProviderProxyRelay()
+    try:
+        gateway.activate_gateway(home, relay)
+        route = gateway.resolve_route(home, headers(A), generation=True)
+        assert route["headers"]["X-Custom"] == "keep"
+        assert GATEWAY_AUTH_HEADER not in route["headers"]
+        gateway.prepare_exit("alpha", config_path=home)
+        assert GATEWAY_AUTH_HEADER not in home.read_text()
+    finally:
+        relay.close()
 
 
 def test_official_account_refresh_and_exit_keep_native_login(home):
@@ -367,7 +476,7 @@ def test_detached_takeover_uses_separate_stable_helper_and_close_keeps_worker(ho
     relay = DetachedProviderProxyRelay(state_path=home.with_name("legacy-state.json"))
     with patch.object(provider_proxy_service, "ProviderProxyServiceClient") as factory:
         worker = factory.return_value
-        worker.route.return_value = "http://127.0.0.1:57324/test-local-token/v1"
+        worker.route.return_value = "http://127.0.0.1:57324/codex_hud/v1"
         relay.activate(home)
         assert factory.call_args.args == (57324,)
         assert factory.call_args.kwargs["state_path"].name == "gateway-legacy-state.json"

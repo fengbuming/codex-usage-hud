@@ -32,6 +32,14 @@ exhaustive, long-running, integration, end-to-end, packaging, or cross-platform
 test suites. Run only the smallest focused test set needed to validate behavior
 affected by the current task.
 
+## Development reload (optional)
+
+Do not automatically reload or restart after edits. The user chooses whether
+and how to reload, including manual restart. Use `tools/reload_hud.py` only when
+requested or already authorized for the current task; see
+`docs/DEVELOPMENT_RELOAD.md` when needed. Preserve the independent proxy and
+active requests; report unsupported migrations without forcing them.
+
 ## Push validation
 
 Before pushing, keep the shared gate in `tools/run_validation.py` passing and

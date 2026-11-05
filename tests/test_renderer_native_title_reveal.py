@@ -285,6 +285,7 @@ const elementFromMutationNode = node => node.nodeType === 1 ? node : node.parent
 let invalidations = 0;
 const invalidateNativeTitleReveal = () => invalidations++;
 const getPanelState = () => ({manual: false});
+const headerScopeSelector = () => 'header.app-header-tint';
 const invalidateHeaderAnchor = () => { throw Error('toolbar must not reflow anchor'); };
 const normalize = value => String(value || '').trim();
 const toolbar = {nodeType: 1, closest: selector => selector === '[data-app-shell-focus-area="main"][role="toolbar"]' ? toolbar : null};

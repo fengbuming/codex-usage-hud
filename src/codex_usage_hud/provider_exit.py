@@ -21,6 +21,7 @@ def _windows_choose(choices: list[tuple[str, str]], default: str) -> str:
     from ctypes import wintypes
 
     class Button(ctypes.Structure):
+        _pack_ = 1  # TASKDIALOG_BUTTON uses the same commctrl.h packing as the config.
         _fields_ = [("id", ctypes.c_int), ("text", wintypes.LPCWSTR)]
 
     class Config(ctypes.Structure):

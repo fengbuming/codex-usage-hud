@@ -1093,6 +1093,11 @@ def save_provider_configs(
             candidate_text = _replace_section_body(
                 candidate_text, provider_id, with_proxy_metadata(body, metadata, newline)
             )
+            if active_gateway:
+                from .provider_gateway_auth import with_gateway_auth
+
+                named_endpoint = urlsplit(active_gateway["endpoint"]).path.split("/")[1:2] == ["codex_hud"]
+                candidate_text = with_gateway_auth(candidate_text, provider_id, active_gateway["token"] if named_endpoint else None)
 
         if is_default_app_provider:
             default_provider_before_section = _provider_section_text(

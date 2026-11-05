@@ -117,7 +117,7 @@ _TEXT_PREFIX = r"""
           const timer = window.setTimeout(() => {
             gatewayCommandRequests.delete(requestId);
             reject(new Error("代理操作尚未确认，请重试。"));
-          }, 15000);
+          }, command.action === "developmentReload" ? 30000 : 15000);
           gatewayCommandRequests.set(requestId, { resolve, reject, timer });
           if (!submitSettingsCommand({ ...command, requestId }, "", { preserveOverlay: true, quiet: true })) {
             window.clearTimeout(timer);
@@ -134,7 +134,7 @@ _TEXT_PREFIX = r"""
         gatewayCommandRequests.delete(requestId);
         window.clearTimeout(request.timer);
         if (status.kind === "error") request.reject(new Error(status.message || "代理操作失败。"));
-        else request.resolve(status.providerGateway || {});
+        else request.resolve(status.developmentReload || status.providerGateway || {});
       }
 
       function installGatewayResumeAdapter() {
@@ -3978,6 +3978,7 @@ _TEXT_PREFIX = r"""
               ${settingsProviderEditorHtml(settings)}
             </div>
             <div class="codex-usage-hud-settings-footnote">
+              <button type="button" class="codex-usage-hud-settings-action" data-action="settings-reload" data-variant="ghost">重载</button>
               <button type="button" class="codex-usage-hud-settings-action" data-action="settings-exit" data-variant="ghost">退出 HUD</button>
               <label class="codex-usage-hud-settings-lock-toggle" title="默认锁屏/睡眠时已自动暂停对 Codex 的一切活动（HUD 保留，解锁恢复）。勾选此项则完全退出 HUD 进程，解锁后由守护重启">
                 <input type="checkbox" data-setting-key="stop_hud_on_lock_screen" ${settings.stop_hud_on_lock_screen ? "checked" : ""} aria-label="锁屏后完全退出HUD进程">
@@ -7124,6 +7125,54 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
         );
       }
 
+      function openSettingsReloadConfirm() {
+        const dialog = settingsDialogRoot();
+        if (!dialog) return;
+        captureSettingsProviderForm();
+        if (settingsDirtyProviders.size || codexProviderDirty.size) {
+          setSettingsStatus("请先应用或取消未保存的修改，再重载。", "error");
+          return;
+        }
+        closeSettingsConfirm();
+        const layer = document.createElement("div");
+        layer.className = "codex-usage-hud-settings-confirm-layer";
+        layer.dataset.settingsConfirm = "true";
+        layer.innerHTML = `
+          <div class="codex-usage-hud-settings-confirm-card" role="alertdialog" aria-modal="true" aria-label="重载 HUD">
+            <div class="codex-usage-hud-settings-confirm-title">选择重载范围</div>
+            <div class="codex-usage-hud-settings-confirm-body">
+              <label>重载范围 <select data-hud-reload-mode="true" aria-label="重载范围">
+                <option value="hud">HUD 界面与主程序</option>
+                <option value="proxy">代理处理逻辑</option>
+                <option value="all">HUD 与代理处理逻辑</option>
+              </select></label>
+              <p>HUD 重载时界面短暂重连，代理保持运行。代理热重载保留已有请求，后续请求使用新代码；新逻辑若有问题，仍可能影响后续请求。不会重启 Codex。</p>
+            </div>
+            <div class="codex-usage-hud-settings-confirm-actions">
+              <button type="button" class="codex-usage-hud-settings-action" data-action="settings-reload-cancel" data-variant="ghost">取消</button>
+              <button type="button" class="codex-usage-hud-settings-action" data-action="settings-reload-confirm" data-primary="true">重载</button>
+            </div>
+          </div>`;
+        dialog.appendChild(layer);
+      }
+
+      async function reloadHudFromModal() {
+        const selection = document.querySelector('[data-hud-reload-mode="true"]');
+        const mode = selection?.value || "";
+        if (!['hud', 'proxy', 'all'].includes(mode) || selection.disabled) return;
+        selection.disabled = true;
+        setSettingsStatus("正在确认重载，请稍候...");
+        try {
+          await codexGatewayCommand({ action: "developmentReload", mode });
+          closeSettingsConfirm();
+          if (mode === "proxy") setSettingsStatus("代理处理逻辑已重载，已有请求继续完成。");
+          else closeSettingsModal({ force: true });
+        } catch (error) {
+          selection.disabled = false;
+          setSettingsStatus(`无法重载：${error?.message || error}`, "error");
+        }
+      }
+
       function restartCodexFromModal() {
         submitSettingsCommand(
           { action: "restartCodex", reason: "provider-config" },
@@ -9449,6 +9498,8 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
       commitPricingImport,
       copyPricingExample,
       restartHudFromModal,
+      openSettingsReloadConfirm,
+      reloadHudFromModal,
       restartCodexFromModal,
       installDesktopOverlayFromModal,
       enableDesktopOverlayFromModal,
@@ -9602,6 +9653,8 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
     commitPricingImport,
     copyPricingExample,
     restartHudFromModal,
+    openSettingsReloadConfirm,
+    reloadHudFromModal,
     restartCodexFromModal,
     installDesktopOverlayFromModal,
     enableDesktopOverlayFromModal,

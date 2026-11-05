@@ -429,6 +429,7 @@ const rootId = 'hud';
 const normalize = value => String(value || '').replace(/\s+/g, ' ').trim();
 const clamp = (value, low, high) => Math.max(low, Math.min(high, value));
 const visible = node => Boolean(node);
+const activeSessionHeaderTitleText = () => 'Conversation title';
 const PANEL = {top: {collapsedHeight: 36, fallbackWidth: 520}};
 const minWidthFor = (_name, expanded) => expanded ? 220 : 120;
 let topSlotCache = null;

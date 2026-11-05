@@ -196,6 +196,17 @@ assert.equal(strip.dataset.overflow, 'true');
 assert.equal(topAnchor(390).width, 451);
 slot = {left: 950, right: 951, width: 1};
 assert.equal(topAnchor(390).width, 1);
+// A new-chat header with no usable gap hides the HUD instead of covering a
+// native button, then restores it when a control leaves the header.
+const previousRect = {...panel.rect};
+slot.blocked = true;
+syncPosition(['top']);
+assert.equal(panel.dataset.awaitingChrome, 'true');
+assert.deepEqual(panel.rect, previousRect);
+slot = {left: 500, right: 951, width: 451};
+syncPosition(['top']);
+assert.equal(panel.dataset.awaitingChrome, undefined);
+assert.equal(panel.rect.width, 451);
 ''', sync=True)
 
 

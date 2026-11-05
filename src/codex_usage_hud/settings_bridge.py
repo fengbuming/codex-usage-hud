@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import os
 import secrets
 from threading import Thread, current_thread
 from typing import Any, Callable
@@ -155,6 +156,9 @@ class SettingsBridgeServer:
 
             def do_GET(self) -> None:
                 parsed = urlparse(self.path)
+                if parsed.path == "/health":
+                    self._send_json({"status": "ok", "pid": os.getpid()})
+                    return
                 if parsed.path == "/settings":
                     self._send_config(store.load(), "ok", "settings loaded")
                     return

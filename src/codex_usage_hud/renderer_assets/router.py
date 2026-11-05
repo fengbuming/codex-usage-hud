@@ -1483,6 +1483,24 @@ TEXT = r"""
         openSettingsExitConfirm();
         return;
       }
+      if (action.dataset.action === "settings-reload") {
+        event.preventDefault();
+        event.stopPropagation();
+        openSettingsReloadConfirm();
+        return;
+      }
+      if (action.dataset.action === "settings-reload-cancel") {
+        event.preventDefault();
+        event.stopPropagation();
+        closeSettingsConfirm();
+        return;
+      }
+      if (action.dataset.action === "settings-reload-confirm") {
+        event.preventDefault();
+        event.stopPropagation();
+        void reloadHudFromModal();
+        return;
+      }
       if (action.dataset.action === "settings-exit-cancel") {
         event.preventDefault();
         event.stopPropagation();

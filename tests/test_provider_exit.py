@@ -1,10 +1,31 @@
 from unittest.mock import MagicMock
+import ctypes
 
 import pytest
 
 from codex_usage_hud import provider_exit
 from codex_usage_hud.windows_tray import WindowsTrayIcon
 from codex_usage_hud.runtime_commands import _handle_renderer_settings_command
+
+
+def test_windows_taskdialog_button_array_uses_native_packed_stride(monkeypatch):
+    from ctypes import wintypes
+
+    class NativeButton(ctypes.Structure):
+        _pack_ = 1
+        _fields_ = [("id", ctypes.c_int), ("text", wintypes.LPCWSTR)]
+
+    def show(config_pointer, button_pointer, _radio_pointer, _verified):
+        config = config_pointer._obj
+        assert ctypes.sizeof(config.buttons._type_) == ctypes.sizeof(ctypes.c_int) + ctypes.sizeof(ctypes.c_void_p)
+        address = ctypes.addressof(config.radios.contents)
+        second = NativeButton.from_address(address + ctypes.sizeof(NativeButton))
+        assert second.id == 101 and second.text == "Beta"
+        button_pointer._obj.value = 2
+        return 0
+
+    monkeypatch.setattr(ctypes, "WinDLL", lambda _name: type("Native", (), {"TaskDialogIndirect": staticmethod(show)})(), raising=False)
+    assert provider_exit._windows_choose([("alpha", "Alpha"), ("beta", "Beta")], "alpha") == ""
 
 
 @pytest.mark.parametrize("selected", ["", "beta"])

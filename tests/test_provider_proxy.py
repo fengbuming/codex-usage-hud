@@ -440,9 +440,12 @@ def test_routing_and_streaming_preserve_body_auth_query_and_errors(relay, upstre
     response = client.getresponse()
     assert response.status == 502
     assert response.reason == "Upstream Busy"
-    assert response.getheader("Content-Type") == "application/json"
+    assert response.getheader("Content-Type") == "text/plain; charset=utf-8"
     assert response.getheader("x-request-id") == "req-upstream-123"
-    assert response.read() == b'{"error":{"message":"upstream overloaded","type":"server_error"}}'
+    body = response.read()
+    assert body.endswith(b'{"error":{"message":"upstream overloaded","type":"server_error"}}')
+    assert b"upstreamReqId=req-upstream-123" in body
+    assert response.getheader("X-Codex-Hud-Request-Id").encode() in body
     client.close()
 
 
@@ -461,6 +464,40 @@ def test_connection_failure_identifies_local_relay_and_preserves_exception(relay
     assert response.getheader("Content-Type") == "text/plain; charset=utf-8"
     assert "Codex HUD provider relay did not receive an upstream HTTP response." in body
     assert "ConnectionRefusedError" in body
+
+
+def test_detached_proxy_hot_reload_keeps_listener_pid_and_inflight_stream(detached_relay, upstream, tmp_path, monkeypatch):
+    server, _, started, release = upstream
+    original_wait = release.wait
+    monkeypatch.setattr(release, "wait", lambda _timeout=None: original_wait(10))
+    endpoint = urlsplit(detached_relay.route({"base_url": f"http://127.0.0.1:{server.server_port}/v1"}, tmp_path / "config.toml"))
+    service = detached_relay._service
+    before = service._call("health")
+    client = http.client.HTTPConnection(endpoint.hostname, endpoint.port, timeout=5)
+    error_client = None
+    try:
+        client.request("POST", endpoint.path + "/responses", b"{}")
+        response = client.getresponse()
+        assert started.wait(1)
+        assert response.read(len(b"data: first\n\n")) == b"data: first\n\n"
+        changed = service._call("reload")
+        assert changed["pid"] == before["pid"]
+        assert changed["generation"] != before["generation"]
+        assert changed["retiredGenerations"] == 1 and changed["activeRequests"] == 1
+        error_client = http.client.HTTPConnection(endpoint.hostname, endpoint.port, timeout=3)
+        error_client.request("POST", endpoint.path + "/upstream-502", b"{}")
+        error_response = error_client.getresponse()
+        assert error_response.status == 502
+        assert b"upstream overloaded" in error_response.read()
+        assert not release.is_set(), "new requests must work while the old stream is still active"
+        release.set()
+        assert response.read() == b""
+        assert service._call("health")["pid"] == before["pid"]
+    finally:
+        release.set()
+        client.close()
+        if error_client:
+            error_client.close()
 
 
 def test_relay_reports_known_source_signature_by_codex_thread_metadata(relay, tmp_path):
