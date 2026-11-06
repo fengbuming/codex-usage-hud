@@ -28,7 +28,7 @@ def home(tmp_path, monkeypatch):
 [model_providers.alpha]
 base_url = "https://alpha.example/v1"
 experimental_bearer_token = "alpha-key"
-# codex-hud-desktop-model: "gpt-image-2"
+# codex-hud-desktop-model: ["gpt-image-2","gpt-image-2.5","gpt-6.1-sol"]
 # codex-hud-proxy: {"base_url":"https://alpha.example/v1","models":["gpt-image-2","gpt-image-2.5","gpt-6.1-sol"]}
 [model_providers.beta]
 base_url = "https://beta.example/v1"
@@ -41,10 +41,10 @@ experimental_bearer_token = "beta-key"
     return path
 
 
-def test_image_mode_is_persistent_exact_chat_and_pins_provider(home):
+def test_legacy_image_mode_does_not_override_per_request_routing(home):
     before = home.read_bytes()
     gateway.set_image_generation(A, True, "gpt-image-2", config_path=home)
-    assert gateway.resolve_route(home, {"session_id": A}, generation=True)["image_generation"]["model"] == "gpt-image-2"
+    assert gateway.resolve_route(home, {"session_id": A}, generation=True)["image_generation"] == {}
     assert gateway.resolve_route(home, {"session_id": B}, generation=True)["image_generation"] == {}
     gateway.select_provider("beta", config_path=home)
     assert gateway.resolve_route(home, {"session_id": A}, generation=True)["provider"] == "alpha"
@@ -75,17 +75,38 @@ def test_only_latest_user_text_becomes_prompt_and_native_image_selection_wins():
     payload = {"model": "gpt-image-2.5", "instructions": "private developer context", "tools": [{"type": "function"}],
                "input": [{"role": "user", "content": "old request"}, {"role": "assistant", "content": "old reply"},
                          {"role": "user", "content": [{"type": "input_text", "text": "a moonlit whale"}]}]}
-    request = images.image_request(payload, {"model": "gpt-image-2"})
+    request = images.image_request(payload)
     assert request == {"model": "gpt-image-2.5", "prompt": "a moonlit whale", "n": 1,
                        "size": "1024x1024", "response_format": "b64_json"}
-    assert images.image_request({"model": "gpt-6.1-sol", "input": "clouds"}, {"model": "gpt-image-2"})["model"] == "gpt-image-2"
+    with pytest.raises(ValueError, match="未选择"):
+        images.image_request({"model": "gpt-6.1-sol", "input": "clouds"})
 
 
 @pytest.mark.parametrize("payload", [{"input": []}, {"input": " "}, {"input": [{"role": "user", "content": [
     {"type": "input_image", "image_url": "data:image/png;base64,private"}]}]}])
 def test_missing_text_and_unsupported_attachments_never_generate(payload):
     with pytest.raises(ValueError):
-        images.image_request(payload, {"model": "gpt-image-2"})
+        images.image_request({"model": "gpt-image-2", **payload})
+
+
+@pytest.mark.parametrize("model", ["gpt-image-2", "gpt-image-2.5", "gemini-3-pro-image-preview", "gemini-nano-banana"])
+def test_request_model_classifies_known_image_families(model):
+    route = {"provider": "alpha", "models": [model]}
+    assert images.image_request_mode(route, json.dumps({"model": model}).encode()) == {"provider": "alpha", "model": model}
+
+
+@pytest.mark.parametrize("payload", [None, b"invalid", b"[]", b"{}", b'{"model":null}',
+    b'{"model":"gpt-6.1-sol","tools":[{"type":"image_generation"}]}',
+    b'{"model":"gemini-3-pro","input":[{"type":"input_image"}]}',
+    b'{"model":"custom-image-vision-chat"}'])
+def test_text_vision_and_unknown_models_never_inherit_image_mode(payload):
+    route = {"provider": "alpha", "models": ["gpt-image-2"], "image_generation": {"model": "gpt-image-2"}}
+    assert images.image_request_mode(route, payload) == {}
+
+
+def test_recognized_but_unconfigured_image_model_is_rejected_before_fallback():
+    with pytest.raises(ValueError, match="模型列表"):
+        images.image_request_mode({"provider": "beta", "models": ["gpt-6.1-sol"]}, b'{"model":"gpt-image-2"}')
 
 
 class Handler:
@@ -117,7 +138,7 @@ def test_stream_emits_native_terminal_message_and_durable_local_image(tmp_path):
         return {"data": [{"b64_json": base64.b64encode(PNG).decode()}]}
 
     with patch.object(images, "_generate", side_effect=generate) as call:
-        images.serve_image_generation(handler, tmp_path / "config.toml", route(), b'{"input":"whale","stream":true}')
+        images.serve_image_generation(handler, tmp_path / "config.toml", route(), b'{"model":"gpt-image-2","input":"whale","stream":true}')
     assert call.call_count == 1
     frames = [json.loads(line[6:]) for line in handler.wfile.getvalue().decode().splitlines() if line.startswith("data: ")]
     assert frames[-1]["type"] == "response.completed"
@@ -133,7 +154,7 @@ def test_stream_emits_native_terminal_message_and_durable_local_image(tmp_path):
 def test_failures_are_terminal_and_never_retried(tmp_path, streaming):
     handler = Handler()
     with patch.object(images, "_generate", side_effect=ValueError("upstream unavailable")) as call:
-        images.serve_image_generation(handler, tmp_path / "config.toml", route(), json.dumps({"input": "whale", "stream": streaming}).encode())
+        images.serve_image_generation(handler, tmp_path / "config.toml", route(), json.dumps({"model": "gpt-image-2", "input": "whale", "stream": streaming}).encode())
     assert call.call_count == 1
     text = handler.wfile.getvalue().decode()
     if streaming:
@@ -167,21 +188,24 @@ def test_invalid_vendor_images_are_not_written(tmp_path, encoded):
     assert not (tmp_path / "generated_images").exists()
 
 
-def test_relay_intercepts_only_the_enabled_chat_before_native_model_rewrite(home):
-    gateway.set_image_generation(A, True, "gpt-image-2", config_path=home)
+@pytest.mark.parametrize("thread_id", [A, B])
+def test_relay_automatically_routes_image_models_in_existing_and_new_chats(home, thread_id):
+    if thread_id == A:
+        gateway.resolve_route(home, {"session_id": thread_id}, generation=True)
     relay = ProviderProxyRelay()
     relay.routes[GATEWAY_PATH_ID] = {"gateway_config": str(home), "token": gateway.gateway_info(home)["token"]}
     handler = object.__new__(relay._handler_type())
     handler.command = "POST"
     handler.path = "/codex_hud/v1/responses"
     handler.rfile = BytesIO(b'{"input":"whale","model":"gpt-image-2"}')
-    handler.headers = {"session_id": A, GATEWAY_AUTH_HEADER: gateway.gateway_info(home)["token"], "Content-Length": str(len(handler.rfile.getvalue()))}
+    handler.headers = {"session_id": thread_id, GATEWAY_AUTH_HEADER: gateway.gateway_info(home)["token"], "Content-Length": str(len(handler.rfile.getvalue()))}
     with patch.object(images, "serve_image_generation") as serve, patch("http.client.HTTPSConnection") as connection:
         handler._forward()
     assert serve.call_count == 1
-    assert serve.call_args.args[2]["thread_id"] == A
+    assert serve.call_args.args[2]["thread_id"] == thread_id
     connection.return_value.request.assert_not_called()
 
+    assert gateway.image_sessions(home) == {}, "automatic routing must not persist an image toggle"
 
 def test_mode_command_delivers_ack_and_refreshes_settings_without_full_reparse():
     from codex_usage_hud.runtime_commands import handle_general_command
@@ -264,4 +288,49 @@ def test_relay_binds_new_draft_before_model_rewrite_and_calls_images_adapter(hom
         handler._forward()
     assert serve.call_args.args[2]["thread_id"] == A
     assert json.loads(serve.call_args.args[3])["model"] == "gpt-image-2"
+    connection.return_value.request.assert_not_called()
+
+
+def _relay_handler(home, payload, thread_id=A, path="/responses"):
+    relay = ProviderProxyRelay()
+    token = gateway.gateway_info(home)["token"]
+    relay.routes[GATEWAY_PATH_ID] = {"gateway_config": str(home), "token": token}
+    handler = object.__new__(relay._handler_type())
+    handler.command = "POST"
+    handler.path = "/codex_hud/v1" + path
+    handler.rfile = BytesIO(json.dumps(payload).encode())
+    handler.wfile = BytesIO()
+    handler.headers = {"session_id": thread_id, GATEWAY_AUTH_HEADER: token,
+                       "Content-Length": str(len(handler.rfile.getvalue()))}
+    handler.send_response_only = MagicMock()
+    handler.send_header = MagicMock()
+    handler.end_headers = MagicMock()
+    handler._send_relay_failure = MagicMock()
+    return handler
+
+
+def test_switching_models_routes_each_request_and_ignores_old_chat_flag(home):
+    gateway.set_image_generation(A, True, "gpt-image-2", config_path=home)
+    with patch.object(images, "serve_image_generation") as serve, patch("http.client.HTTPSConnection") as connection:
+        response = connection.return_value.getresponse.return_value
+        response.status = 200
+        response.headers = {}
+        response.getheaders.return_value = []
+        response.read1.return_value = b""
+        for model in ["gpt-image-2", "gpt-6.1-sol", "gpt-image-2.5"]:
+            handler = _relay_handler(home, {"model": model, "input": "whale"})
+            handler._forward()
+            handler._send_relay_failure.assert_not_called()
+        assert [json.loads(call.args[3])["model"] for call in serve.call_args_list] == ["gpt-image-2", "gpt-image-2.5"]
+        assert connection.return_value.request.call_count == 1
+        assert json.loads(connection.return_value.request.call_args.kwargs["body"])["model"] == "gpt-6.1-sol"
+
+
+@pytest.mark.parametrize("model,path", [("gpt-image-not-configured", "/responses"), ("gpt-image-2", "/responses/compact")])
+def test_invalid_image_request_does_not_fall_back_to_another_model_or_generate(home, model, path):
+    handler = _relay_handler(home, {"model": model, "input": "whale"}, path=path)
+    with patch.object(images, "serve_image_generation") as serve, patch("http.client.HTTPSConnection") as connection:
+        handler._forward()
+    handler._send_relay_failure.assert_called_once()
+    serve.assert_not_called()
     connection.return_value.request.assert_not_called()

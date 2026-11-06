@@ -448,9 +448,13 @@ class ProviderProxyRelay:
 
                             body = bind_image_draft(gateway_path, route, body)
                         relay._report_source_evidence(self.headers, body)
+                        if gateway:
+                            from .image_generation import image_request_mode
+
+                            route["image_generation"] = image_request_mode(route, body)
                         if gateway and route.get("image_generation"):
                             if upgrade or request_path.endswith("/compact"):
-                                raise ValueError("生图模式需要 HTTP Responses 请求，不支持 WebSocket 或上下文压缩。")
+                                raise ValueError("图片模型需要 HTTP Responses 请求，不支持 WebSocket 或上下文压缩。")
                             from .image_generation import serve_image_generation
 
                             serve_image_generation(self, gateway_path, route, body)

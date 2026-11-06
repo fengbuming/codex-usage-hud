@@ -257,9 +257,10 @@ def resolve_route(path: Path, headers: Mapping, *, generation: bool) -> dict:
         if generation and thread_id and not row:
             db.execute("INSERT INTO sessions VALUES (?, ?)", (thread_id, provider))
         copy = db.execute("SELECT source_provider FROM copies WHERE id = ?", (thread_id,)).fetchone()
-    mode = image_sessions(path).get(thread_id, {})
+    # Legacy per-chat image flags remain readable for old clients, but routing
+    # now follows each request's model, not persisted conversation state.
     return {**route, "provider": provider, "thread_id": thread_id,
-            "image_generation": mode if mode.get("provider") == provider else {},
+            "image_generation": {},
             "foreign_history": bool(copy and copy[0] != provider)}
 
 

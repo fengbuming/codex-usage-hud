@@ -1,4 +1,4 @@
-"""Adapt an explicitly enabled chat's Responses turn to the Images API.
+"""Adapt a Responses turn selecting an image model to the Images API.
 
 Only the newest user message is sent. Agent instructions, tools and unrelated
 conversation history never become image prompts. This adapter makes one paid
@@ -27,10 +27,31 @@ def is_image_model(model: object) -> bool:
     return bool(re.fullmatch(r"(?:gpt-image-[\w.-]+|gemini-[\w.-]*image[\w.-]*|gemini-nano-banana[\w.-]*)", str(model or ""), re.I))
 
 
-def image_request(payload: dict, mode: dict) -> dict:
+def image_request_mode(route: dict, body: bytes | None) -> dict:
+    """Classify the original request before the provider's fallback rewrite.
+
+    A previous chat toggle must never override the model selected for this
+    request. Vision inputs and image-generation tools on a conversational
+    model do not make that model an Images API model.
+    """
+    if not body:
+        return {}
+    try:
+        payload = json.loads(body)
+    except (ValueError, UnicodeError):
+        return {}
+    model = payload.get("model") if isinstance(payload, dict) else None
+    if not is_image_model(model):
+        return {}
+    if model not in route.get("models", []):
+        raise ValueError("所选图片模型不在当前供应商的模型列表中。")
+    return {"provider": route["provider"], "model": model}
+
+
+def image_request(payload: dict) -> dict:
     model = str(payload.get("model") or "")
     if not is_image_model(model):
-        model = mode["model"]
+        raise ValueError("当前请求未选择支持的图片模型。")
     messages = payload.get("input")
     if isinstance(messages, str):
         content = messages
@@ -109,7 +130,7 @@ def serve_image_generation(handler, config_path: Path, route: dict, body: bytes 
     payload = json.loads(body or b"{}")
     if not isinstance(payload, dict):
         raise ValueError("生图请求格式无效。")
-    request = image_request(payload, route["image_generation"])
+    request = image_request(payload)
     if request["model"] not in route.get("models", []):
         raise ValueError("所选图片模型不在当前供应商的模型列表中。")
     response_id = "resp_hud_image_" + uuid.uuid4().hex
