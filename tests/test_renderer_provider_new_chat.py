@@ -36,7 +36,7 @@ const activeSessionHeaderTitleText=()=>'Previous conversation';
 const activeSessionHeaderLooksNewSession=()=>false;
 const activeSessionRowSelected=()=>true;
 const activeSessionRowMatchesLocation=()=>false;
-const activeSessionRefFromRow=()=>({sessionId:'source',rendererSessionId:'local:source',title:'Previous conversation'});
+const activeSessionRefFromRow=()=>({sessionId:'source',rendererSessionId:'local:source',rawSessionId:'native-row-key',title:'Previous conversation'});
 const activeSessionTitleIsNewSession=()=>false;
 const cleanActiveSessionTitle=value=>value;
 const settings={provider_gateway:{active:true},default_provider:'alpha'};
@@ -71,6 +71,7 @@ for (const condition of ['hidden','hud','no-composer','thread-url','absent']) {
   if(condition==='absent')hero=null;
   composer=condition!=='no-composer';locationId=condition==='thread-url'?'source':'';
   assert.equal(readActiveSessionRef().sessionId,'source',condition);
+  assert.equal(readActiveSessionRef().rawSessionId,'native-row-key',condition);
   assert.equal(codexProviderSwitchSessionContext().provider,'alpha',condition);
   handleCodexCliQuickLaunchMenuClick(event);
 }

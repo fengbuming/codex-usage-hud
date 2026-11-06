@@ -9312,11 +9312,23 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
         // A live empty selection must clear the previous HUD snapshot, even
         // when new-chat chrome has not supplied an explicit newSession flag.
         const ref = live || payload;
-        const sessionId = ref.newSession || ref.pendingSession ? "" : String(ref.sessionId || "").trim();
-        const reading = !!sessionId && !!live && sessionId !== String(payload.sessionId || "").trim();
+        let sessionId = ref.newSession || ref.pendingSession ? "" : String(ref.sessionId || "").trim();
+        const payloadId = String(payload.sessionId || "").trim();
+        const rawId = String(ref.rendererSessionId || ref.rawSessionId || "").trim();
+        if (!ref.newSession && ref.pendingSession && rawId
+          && rawId === payload.rendererSessionId && !payload.newSession
+          && !payload.pendingSession && !payload.cachedPreview && payload.followState === "confirmed"
+          && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(payloadId)) {
+          sessionId = payloadId;
+        }
+        const provider = sessionId && sessionId === payloadId
+          ? String(payload.activeSessionProvider || "").trim().toLowerCase() : "";
+        const awaitingIdentity = ref.pendingSession || (!sessionId && ref.title
+          && ["sidebar-row", "header-title"].includes(ref.matchedBy));
+        const reading = !ref.newSession && !provider && (!!sessionId || !!awaitingIdentity);
         return {
           sessionId,
-          provider: !sessionId || reading ? "" : String(payload.activeSessionProvider || "").trim().toLowerCase(),
+          provider,
           reading,
         };
       }
@@ -9432,11 +9444,19 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
       }
 
       function codexCliQuickLaunchProviderLabelState() {
-        const active = codexProviderSwitchSessionContext().provider;
+        const session = codexProviderSwitchSessionContext();
+        const active = session.provider;
         const pending = String(codexProviderSwitchMenuState.pendingProvider || "")
           .trim().toLowerCase();
         const gateway = !!hudSettingsFromPayload()?.provider_gateway?.active;
         const gatewayTitle = gateway ? "（HUD 请求代理已开启）" : "";
+        if (session.reading) {
+          return {
+            provider: "", mismatch: false, switching: false, gateway,
+            text: "识别中…", suffix: "",
+            title: "正在确认当前会话供应商，请稍后" + gatewayTitle,
+          };
+        }
         // config.toml 顶层 model_provider 的稳定默认（新会话默认供应商）；
         // app_provider 会被活跃会话供应商观察覆盖，不能作为「默认」展示。
         const fallback = String(

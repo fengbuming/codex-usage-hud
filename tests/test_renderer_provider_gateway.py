@@ -118,7 +118,7 @@ assert.equal(dialogs.length,1);assert.equal(submitted[0].action,'providerSetDefa
 // A blank live page outranks the previous conversation, even without flags.
 for (gateway of [true,false]) {
   for (live of [{sessionId:'',title:''},{sessionId:'',title:'启动CLI'},
-    {newSession:true},{pendingSession:true}]) {
+    {newSession:true}]) {
     fresh=false;submitted=[];begun=[];
     handleCodexCliQuickLaunchMenuClick(event);
     assert.equal(dialogs.length,1);
@@ -135,6 +135,11 @@ fresh=false;live={sessionId:'other'};
 handleCodexCliQuickLaunchMenuClick(event);
 assert.equal(dialogs.length,2);assert.equal(submitted.length,0);
 assert.equal(feedback.length,1,'wait for matching provider data after navigation');
+live={pendingSession:true,rendererSessionId:'local:client-new-thread:temporary'};
+submitted=[];handleCodexCliQuickLaunchMenuClick(event);
+assert.equal(submitted.length,0,'unresolved existing sessions must not change defaults as a new chat');
+assert.equal(dialogs.length,2);
+assert.equal(feedback.length,2);
 ''')
 
 

@@ -2,6 +2,7 @@
 
 TEXT = r"""
   function createActiveSessionDomain(ctx, shared) {
+      let pendingReconcileKey = "";
       function normalizeThreadId(value) {
         const text = normalize(value);
         const match = text.match(/^(?:[a-z0-9_.-]+:)(.+)$/i);
@@ -391,14 +392,22 @@ TEXT = r"""
           || "";
         const sessionId = normalizeThreadId(rawSessionId);
         const titleNode = sourceRow?.querySelector?.(activeSessionTitleSelector);
-        const rawTitle = titleNode?.textContent
+        const rawTitle = sourceRow?.getAttribute?.("data-app-action-sidebar-thread-title") || titleNode?.textContent
           || (titleNode ? "" : (activeSessionRowLooksThread(sourceRow) ? (sourceRow?.textContent || row?.textContent || "") : ""));
         const title = cleanActiveSessionTitle(titleNode ? rawTitle : rawTitle.replace(/\s*(Export|Delete|Move|Remove from project|导出|删除|移动|移出项目)+$/g, "")).slice(0, 160);
         if (activeSessionTitleIsNewSession(title)) {
           return { rawSessionId: "", sessionId: "", title };
         }
         if (activeSessionIdIsProvisional(rawSessionId)) {
-          const canonicalId = activeSessionCanonicalIdFromRow(sourceRow);
+          const payload = ctx.state?.payload?.() || {};
+          // Local reconciliation may finish before React replaces the row's
+          // temporary key. Reuse only this exact row's confirmed identity.
+          const reconciledId = !payload.newSession && !payload.pendingSession
+            && !payload.cachedPreview && payload.followState === "confirmed"
+            && payload.rendererSessionId === rawSessionId
+            && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(payload.sessionId || "")
+            ? payload.sessionId : "";
+          const canonicalId = activeSessionCanonicalIdFromRow(sourceRow) || reconciledId;
           if (canonicalId) {
             const hostId = sourceRow?.getAttribute?.("data-app-action-sidebar-thread-host-id") || "";
             return {
@@ -523,6 +532,7 @@ TEXT = r"""
         }
         return {
           sessionId: (newSession || pendingSession) ? "" : (ref.sessionId || ""),
+          rawSessionId: ref.rawSessionId || "",
           rendererSessionId: ref.rendererSessionId || ref.rawSessionId || "",
           title: newSession ? "" : (title || ""),
           url: location.href,
@@ -710,8 +720,21 @@ TEXT = r"""
       function scheduleActiveSessionReport(reason = "event") {
         ctx.lifecycle.clearTimeout(window[activeSessionTimerName] || 0);
         window[activeSessionTimerName] = ctx.lifecycle.timeout("active_session", () => {
-          postActiveSession(reason);
+          const ref = readActiveSessionRef();
+          postActiveSession(reason, ref);
           refreshActiveSessionObserver();
+          // React can publish the canonical id without another DOM mutation.
+          // Allow one bounded settling burst per pending selection, including
+          // keyboard/native navigation. Payload refreshes must not restart it.
+          const key = JSON.stringify([ref.rawSessionId || ref.rendererSessionId || "", ref.title || "", !!ref.newSession]);
+          if (ref.pendingSession) {
+            if (pendingReconcileKey !== key) {
+              pendingReconcileKey = key;
+              scheduleActiveSessionSendFollowup(reason, ref.rawSessionId || ref.rendererSessionId || "");
+            }
+          } else {
+            pendingReconcileKey = "";
+          }
         }, 0);
       }
 
@@ -830,8 +853,11 @@ TEXT = r"""
           ) {
             ref.newSession = true;
           }
-          const current = normalize(ref.rendererSessionId || ref.rawSessionId || ref.sessionId || "");
-          if (expected && current !== expected) return;
+          const identities = [ref.rawSessionId, ref.rendererSessionId, ref.sessionId].map(normalize);
+          // The click is observed before native navigation commits. Keep the
+          // bounded burst alive through that gap, and through temporary ->
+          // canonical promotion; never publish a different selected thread.
+          if (expected && !identities.includes(expected)) return true;
           postActiveSession(reason, ref);
           refreshActiveSessionObserver();
           // Keep reconciling while still on a blank/new latch so late title/id
@@ -888,6 +914,7 @@ TEXT = r"""
         if (container) window[activeSessionObserverName].observe(container, {
           subtree: true,
           childList: true,
+          characterData: true,
           attributes: true,
           attributeFilter: [
             "aria-selected",
@@ -896,7 +923,10 @@ TEXT = r"""
             "data-selected",
             "data-state",
             "data-app-action-sidebar-thread-active",
+            "data-app-action-sidebar-thread-selected",
             "data-app-action-sidebar-thread-id",
+            "data-app-action-sidebar-thread-host-id",
+            "data-app-action-sidebar-thread-title",
             "href",
           ],
         });
@@ -981,6 +1011,7 @@ TEXT = r"""
       }
 
       function removeActiveSessionWatchers() {
+        pendingReconcileKey = "";
         ctx.lifecycle.disposeScope("active_session_listeners");
         ctx.lifecycle.clearTimeout(window[activeSessionTimerName] || 0);
         clearActiveSessionSendFollowup();
