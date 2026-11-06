@@ -7,6 +7,25 @@ import re
 from . import codex_provider_config as config
 
 
+_WEBSOCKETS_KEY = r'''[\t ]*(?:supports_websockets|"supports_websockets"|'supports_websockets')[\t ]*=[\t ]*'''
+
+
+def with_websocket_setting(body: str, value: bool | None, newline: str) -> str:
+    if value is None:
+        return re.sub(r"(?m)^" + _WEBSOCKETS_KEY + r"[^\r\n]*(?:\r?\n|$)", "", body)
+    if not isinstance(value, bool):
+        raise ValueError("保存的 WebSocket 设置无效，未修改供应商配置。")
+    pattern = re.compile(r"(?m)^(" + _WEBSOCKETS_KEY + r")(?:true|false)(?=[\t #\r\n]|$)")
+    if pattern.search(body):
+        return pattern.sub(lambda match: match[1] + str(value).lower(), body)
+    return f"supports_websockets = {str(value).lower()}" + newline + body
+
+
+def gateway_http_transport(body: str, metadata: dict, newline: str) -> str:
+    metadata.setdefault("gateway_websockets", config._parse_toml_mapping(body, strict=True).get("supports_websockets"))
+    return with_websocket_setting(body, False, newline)
+
+
 def _provider_prefix(provider: str):
     escaped = re.escape(provider)
     return re.compile(

@@ -28,7 +28,7 @@ from urllib.parse import SplitResult, parse_qsl, urlencode, urlsplit
 
 from .provider_gateway_auth import GATEWAY_AUTH_HEADER, GATEWAY_PATH_ID, gateway_authorized
 from .provider_proxy_diagnostics import (
-    HUD_REQUEST_HEADER, SseDiagnostics, diagnostic_text, error_body_chunks,
+    HUD_REQUEST_HEADER, SseDiagnostics, annotate_http_error, diagnostic_text, error_body_chunks,
     sample_error_body, upstream_request_id,
 )
 
@@ -37,6 +37,18 @@ _METADATA = re.compile(r"(?m)^# codex-hud-proxy: (.+)\r?$")
 _HOP_HEADERS = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
                 "te", "trailer", "transfer-encoding", "upgrade"}
 _LOGGER = logging.getLogger(__name__)
+
+# Gateway clients are Codex transports. Vendor-specific fields must come from
+# the selected route, even if an old native identity's definition was deleted.
+_GATEWAY_PROTOCOL_HEADERS = {
+    "accept", "accept-encoding", "accept-language", "content-type", "user-agent",
+    "originator", "version", "client-version", "openai-beta", "session_id",
+    "conversation_id", "x-codex-thread-id", "x-codex-turn-metadata",
+    "x-codex-turn-state", "x-codex-beta-features", "x-codex-parent-thread-id",
+    "x-openai-subagent", "x-client-request-id", "x-request-id", "traceparent", "tracestate",
+    "sec-websocket-key", "sec-websocket-version", "sec-websocket-protocol", "sec-websocket-extensions",
+}
+_GATEWAY_PROTOCOL_QUERY_PARAMS = {"client_version", "cursor", "limit", "after", "before", "order", "model"}
 
 
 def _decode_gateway_body(body: bytes | None, encoding: str) -> bytes | None:
@@ -364,11 +376,14 @@ class ProviderProxyRelay:
                     if suffix.startswith("v1/codex/"):
                         target = upstream.path.rstrip("/") + "/" + suffix[len("v1/codex/"):]
                 query = "&".join(filter(None, (upstream.query, path.query)))
-                if gateway and route.get("query_params"):
+                if gateway:
                     # The selected upstream owns configured keys, including
                     # api-version; cached native-provider values cannot win.
-                    params = route["query_params"]
-                    pairs = [(key, value) for key, value in parse_qsl(query, keep_blank_values=True)
+                    params = route.get("query_params") or {}
+                    caller = [(key, value) for key, value in parse_qsl(path.query, keep_blank_values=True)
+                              if key in _GATEWAY_PROTOCOL_QUERY_PARAMS
+                              and key not in route.get("provider_query_names", ()) and key not in params]
+                    pairs = [(key, value) for key, value in [*parse_qsl(upstream.query, keep_blank_values=True), *caller]
                              if key not in params]
                     query = urlencode([*pairs, *params.items()])
                 if query:
@@ -406,10 +421,9 @@ class ProviderProxyRelay:
                     headers = {k: v for k, v in self.headers.items()
                                if k.lower() not in _HOP_HEADERS | nominated | {"host", "content-length"}}
                     if gateway:
-                        headers = {k: v for k, v in headers.items() if k.lower() not in {
-                            "authorization", "api-key", "x-api-key", "chatgpt-account-id",
-                            "openai-organization", "openai-project", "cookie", GATEWAY_AUTH_HEADER.lower(),
-                        }}
+                        headers = {k: v for k, v in headers.items()
+                                   if k.lower() in _GATEWAY_PROTOCOL_HEADERS
+                                   and k.lower() not in route.get("provider_header_names", ())}
                         headers.update(route.get("headers") or {})
                     headers["Host"] = upstream.netloc
                     if upgrade:
@@ -441,6 +455,8 @@ class ProviderProxyRelay:
                     if gateway and self.headers.get("Content-Encoding"):
                         body = _decode_gateway_body(body, self.headers["Content-Encoding"])
                         headers = {k: v for k, v in headers.items() if k.lower() != "content-encoding"}
+                    if gateway and body is not None and not any(key.lower() == "content-type" for key in headers):
+                        headers["Content-Type"] = "application/json"
                     request_path = urlsplit(target).path.rstrip("/")
                     if request_path.endswith(("/responses", "/responses/compact")):
                         if gateway and request_path.endswith("/responses") and not upgrade:
@@ -475,17 +491,18 @@ class ProviderProxyRelay:
                         upstream_id = upstream_request_id(response.headers, sample)
                     upstream_response_received = True
                     self.send_response_only(response.status, response.reason)
-                    omitted = _HOP_HEADERS | {"content-length", HUD_REQUEST_HEADER.lower(), "x-codex-hud-upstream-request-id"}
+                    omitted = _HOP_HEADERS | {"content-length", HUD_REQUEST_HEADER.lower(), "x-codex-hud-upstream-request-id", "x-codex-hud-diagnostic"}
                     if error_chunks is not None:
-                        omitted |= {"content-type", "content-encoding", "content-md5", "digest", "etag"}
+                        omitted |= {"content-encoding", "content-md5", "digest", "etag"}
                     for key, value in response.getheaders():
                         if key.lower() not in omitted:
                             self.send_header(key, value)
                     self.send_header(HUD_REQUEST_HEADER, self.hud_request_id)
                     if upstream_id:
                         self.send_header("X-Codex-Hud-Upstream-Request-Id", upstream_id)
-                    if error_chunks is not None:
-                        self.send_header("Content-Type", "text/plain; charset=utf-8")
+                    if response.status >= 400:
+                        context = diagnostic_text(route, self.hud_request_id, upstream_id, response.status)
+                        self.send_header("X-Codex-Hud-Diagnostic", context.encode("ascii", "backslashreplace").decode("ascii"))
                     if upgrade and response.status == 101:
                         self.send_header("Connection", "Upgrade")
                         self.send_header("Upgrade", "websocket")
@@ -514,7 +531,7 @@ class ProviderProxyRelay:
                             if error_chunks is not None:
                                 context = diagnostic_text(route, self.hud_request_id, upstream_id, response.status)
                                 _LOGGER.warning("provider_upstream_error %s", context)
-                                self.wfile.write(f"[Codex HUD] {context}\n\n".encode("utf-8") + sample)
+                                self.wfile.write(annotate_http_error(sample, context))
                                 self.wfile.flush()
                                 for data in error_chunks:
                                     self.wfile.write(data)

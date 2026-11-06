@@ -2,6 +2,7 @@
 
 from concurrent.futures import ThreadPoolExecutor
 import http.client
+from io import BytesIO
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import sqlite3
@@ -278,7 +279,7 @@ def test_gateway_streams_replaces_credentials_and_preserves_status(home):
         gateway.select_provider("beta", config_path=home)
         assert urlsplit(calls[0][0]).path == "/api/custom/responses"
         assert parse_qs(urlsplit(calls[0][0]).query) == {
-            "base":["keep"], "custom":["1"], "api-version":["target"], "tenant":["space & slash/"],
+            "base":["keep"], "api-version":["target"], "tenant":["space & slash/"],
         }
         sent = {k.lower(): v for k, v in calls[0][1].items()}
         assert sent["authorization"] == "Bearer alpha-test-only"
@@ -593,3 +594,138 @@ def test_detached_takeover_uses_separate_stable_helper_and_close_keeps_worker(ho
         relay.close()
         worker.close.assert_called_once()
         worker.process.terminate.assert_not_called()
+
+
+@pytest.mark.parametrize("remove_source", [False, True])
+def test_copy_rebuilds_custom_credentials_and_query_only_from_target(active, remove_source):
+    path, relay, _ = active
+    text = path.read_text(encoding="utf-8")
+    text = text.replace('name = "Alpha"', 'name = "Alpha"\nquery_params = { source_key = "alpha-secret", client_version = "alpha-version" }\nenv_http_headers = { "X-Source-Secret" = "ALPHA_SECRET" }')
+    text = text.replace('name = "Beta"', 'name = "Beta"\nquery_params = { target_key = "beta-secret", tenant = "target-tenant" }\nenv_http_headers = { "x-target-secret" = "BETA_SECRET" }')
+    path.write_text(text, encoding="utf-8")
+    gateway.resolve_route(path, headers(A), generation=True)
+    gateway.select_provider("beta", config_path=path, thread_id=B, copied_from=A)
+    if remove_source:
+        gateway.select_provider("beta", config_path=path)
+        config.delete_provider_config("alpha", config_path=path)
+    body = b'{"model":"text-model","input":[]}'
+    handler = object.__new__(relay._handler_type())
+    handler.command, handler.path = "POST", "/codex_hud/v1/responses?source_key=alpha-secret&client_version=client&target_key=stale&tenant=source-tenant&unknown_secret=deleted-secret&limit=5"
+    handler.rfile, handler.wfile = BytesIO(body), BytesIO()
+    handler.headers = {**headers(B), GATEWAY_AUTH_HEADER: gateway.gateway_info(path)["token"],
+                       "Content-Length": str(len(body)), "Authorization": "Bearer source-key",
+                       "X-Source-Secret": "alpha-secret", "X-Deleted-Secret": "deleted-secret",
+                       "X-TARGET-SECRET": "stale-target-secret", "OpenAI-Beta": "responses=experimental"}
+    handler.send_response_only, handler.send_header, handler.end_headers = MagicMock(), MagicMock(), MagicMock()
+    with patch.object(config, "_user_environment_value", lambda key: {"ALPHA_SECRET": "alpha-secret", "BETA_SECRET": "beta-secret"}.get(key, "")), patch("http.client.HTTPSConnection") as connection:
+        response = connection.return_value.getresponse.return_value
+        response.status, response.headers = 200, {}
+        response.getheaders.return_value, response.getheader.return_value, response.read1.return_value = [], "", b""
+        handler._forward()
+    request = connection.return_value.request.call_args
+    sent = {key.lower(): value for key, value in request.kwargs["headers"].items()}
+    assert sent["authorization"] == "Bearer beta-test-only"
+    assert sent["x-target-secret"] == "beta-secret"
+    assert not {"x-source-secret", "x-deleted-secret", GATEWAY_AUTH_HEADER.lower()} & sent.keys()
+    assert sent["openai-beta"] == "responses=experimental"
+    assert sent["x-codex-turn-metadata"] == headers(B)["x-codex-turn-metadata"]
+    params = parse_qs(urlsplit(request.args[1]).query)
+    assert params == {"target_key": ["beta-secret"], "tenant": ["target-tenant"], "limit": ["5"],
+                      **({"client_version": ["client"]} if remove_source else {})}
+
+
+@pytest.mark.parametrize("parent_prepared", [False, True])
+@pytest.mark.parametrize("existing_binding", [False, True])
+def test_subagent_inherits_foreign_seals_without_scrubbing_target_history(active, parent_prepared, existing_binding):
+    path, _, _ = active
+    gateway.resolve_route(path, headers(A), generation=True)
+    gateway.select_provider("beta", config_path=path, thread_id=B, copied_from=A)
+    parent = gateway.resolve_route(path, headers(B), generation=True)
+    source = {"type": "reasoning", "summary": [], "encrypted_content": "source-seal"}
+    own = {**source, "encrypted_content": "target-seal"}
+    text = {"role": "user", "content": "continue"}
+    if parent_prepared:
+        gateway.prepare_request_body(path, parent, json.dumps({"input": [source, text]}).encode())
+    state_thread(path, C, "alpha", gateway.gateway_info(path)["activated_at"] + 1)
+    with sqlite3.connect(path.parent / "state_5.sqlite") as db:
+        db.execute("ALTER TABLE threads ADD COLUMN source TEXT")
+        db.execute("UPDATE threads SET source = ? WHERE id = ?", (json.dumps({"subAgent": {"thread_spawn": {"parent_thread_id": B}}}), C))
+    db.close()
+    if existing_binding:
+        with gateway._state_db(path) as db:
+            db.execute("INSERT INTO sessions VALUES (?, ?)", (C, "beta"))
+    child = gateway.resolve_route(path, headers(C), generation=True)
+    assert child["provider"] == "beta" and child["foreign_history"] is True
+    items = [source, own, text] if parent_prepared else [source, text]
+    cleaned = json.loads(gateway.prepare_request_body(path, child, json.dumps({"input": items}).encode()))["input"]
+    assert cleaned == ([own, text] if parent_prepared else [text])
+    cleaned = json.loads(gateway.prepare_request_body(path, child, json.dumps({"input": [source, own, text]}).encode()))["input"]
+    assert cleaned == [own, text]
+
+
+def test_descendant_repairs_missing_foreign_state_through_an_unvisited_parent(active):
+    path, _, _ = active
+    gateway.resolve_route(path, headers(A), generation=True)
+    gateway.select_provider("beta", config_path=path, thread_id=B, copied_from=A)
+    source = {"type": "reasoning", "summary": [], "encrypted_content": "old-seal"}
+    gateway.prepare_request_body(path, gateway.resolve_route(path, headers(B), generation=True),
+                                 json.dumps({"input": [source]}).encode())
+    child_id = "10000000-0000-4000-8000-000000000004"
+    for thread_id in (C, child_id):
+        state_thread(path, thread_id, "alpha", gateway.gateway_info(path)["activated_at"] + 1)
+    with sqlite3.connect(path.parent / "state_5.sqlite") as db:
+        db.execute("ALTER TABLE threads ADD COLUMN source TEXT")
+        for thread_id, parent in ((C, B), (child_id, C)):
+            db.execute("UPDATE threads SET source = ? WHERE id = ?", (json.dumps({"parent_thread_id": parent}), thread_id))
+    db.close()
+    with gateway._state_db(path) as db:
+        db.executemany("INSERT INTO sessions VALUES (?, 'beta')", [(C,), (child_id,)])
+    route = gateway.resolve_route(path, headers(child_id), generation=True)
+    assert route["foreign_history"] is True
+    assert json.loads(gateway.prepare_request_body(path, route, json.dumps({"input": [source]}).encode()))["input"] == []
+
+
+@pytest.mark.parametrize("setting", [None, False, True])
+def test_takeover_forces_http_for_legacy_identities_and_restores_transport_on_exit(home, monkeypatch, setting):
+    original = home.read_text(encoding="utf-8")
+    if setting is not None:
+        original = original.replace('name = "Alpha"', f'name = "Alpha"\nsupports_websockets = {str(setting).lower()} # keep comment')
+        home.write_text(original, encoding="utf-8")
+    relay = ProviderProxyRelay()
+    monkeypatch.setattr(config, "provider_proxy_relay", relay)
+    try:
+        gateway.activate_gateway(home, relay)
+        assert all(entry["supports_websockets"] is False for entry in config._parse_toml_mapping(home.read_text())["model_providers"].values())
+        active_text = home.read_bytes()
+        gateway.activate_gateway(home, relay)
+        assert home.read_bytes() == active_text
+        gateway.prepare_exit("alpha", config_path=home)
+        restored = config._parse_toml_mapping(home.read_text())["model_providers"]
+        for provider in ("alpha", "codex_hud"):
+            assert restored[provider].get("supports_websockets") is setting
+            assert ("supports_websockets" in restored[provider]) == (setting is not None)
+        assert "supports_websockets" not in restored["beta"]
+        if setting is not None:
+            assert "# keep comment" in home.read_text()
+        gateway.activate_gateway(home, relay)
+        assert config._parse_toml_mapping(home.read_text())["model_providers"]["alpha"]["supports_websockets"] is False
+    finally:
+        relay.close()
+
+
+def test_provider_added_during_takeover_uses_http_then_restores_requested_websockets(active, monkeypatch):
+    path, relay, _ = active
+    monkeypatch.setattr(config, "provider_proxy_relay", relay)
+    environment = {}
+    monkeypatch.setattr(config, "_user_environment_value", lambda key: environment.get(key, ""))
+    monkeypatch.setattr(config, "_set_user_environment_value", environment.__setitem__)
+    config.save_provider_configs({"provider_id": "gamma", "is_new": True, "api_key": "gamma-test", "section_text": '''[model_providers.gamma]
+name = "Gamma"
+base_url = "https://gamma.example/v1"
+experimental_bearer_token = "gamma-test"
+env_key = "GAMMA_TEST_API_KEY"
+supports_websockets = true
+'''}, config_path=path)
+    assert config._parse_toml_mapping(path.read_text())["model_providers"]["gamma"]["supports_websockets"] is False
+    gateway.prepare_exit("gamma", config_path=path)
+    assert config._parse_toml_mapping(path.read_text())["model_providers"]["gamma"]["supports_websockets"] is True

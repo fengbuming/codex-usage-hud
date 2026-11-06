@@ -467,10 +467,12 @@ def test_routing_and_streaming_preserve_body_auth_query_and_errors(relay, upstre
     response = client.getresponse()
     assert response.status == 502
     assert response.reason == "Upstream Busy"
-    assert response.getheader("Content-Type") == "text/plain; charset=utf-8"
+    assert response.getheader("Content-Type") == "application/json"
     assert response.getheader("x-request-id") == "req-upstream-123"
     body = response.read()
-    assert body.endswith(b'{"error":{"message":"upstream overloaded","type":"server_error"}}')
+    error = json.loads(body)["error"]
+    assert error["type"] == "server_error"
+    assert error["message"].startswith("upstream overloaded\n[Codex HUD] ")
     assert b"upstreamReqId=req-upstream-123" in body
     assert response.getheader("X-Codex-Hud-Request-Id").encode() in body
     client.close()

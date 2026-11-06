@@ -68,7 +68,11 @@ def image_request(payload: dict) -> dict:
         content = "\n".join(str(part.get("text") or "") for part in content if isinstance(part, dict))
     if not isinstance(content, str) or not content.strip():
         raise ValueError("请填写要生成的图片内容。")
-    return {"model": model, "prompt": content.strip(), "n": 1, "size": "1024x1024", "response_format": "b64_json"}
+    request = {"model": model, "prompt": content.strip(), "n": 1, "size": "1024x1024"}
+    # GPT image models always return Base64 and reject the legacy parameter.
+    if not model.lower().startswith("gpt-image-"):
+        request["response_format"] = "b64_json"
+    return request
 
 
 def _generate(route: dict, request: dict) -> dict:
@@ -100,7 +104,7 @@ def save_image(result: dict, config_path: Path, thread_id: str) -> Path:
     items = result.get("data")
     encoded = items[0].get("b64_json") if isinstance(items, list) and items and isinstance(items[0], dict) else None
     if not isinstance(encoded, str) or len(encoded) > MAX_IMAGE_BYTES * 2:
-        raise ValueError("供应商未返回有效 b64_json 图片；请确认 Images API 支持 response_format=b64_json。")
+        raise ValueError("供应商未返回有效 b64_json 图片；请确认 Images API 返回 Base64 图片。")
     try:
         raw = base64.b64decode(encoded, validate=True)
     except (ValueError, binascii.Error):

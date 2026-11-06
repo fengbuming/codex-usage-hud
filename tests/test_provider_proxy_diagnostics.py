@@ -9,7 +9,7 @@ import pytest
 
 from codex_usage_hud.provider_proxy import ProviderProxyRelay
 from codex_usage_hud.provider_proxy_diagnostics import (
-    HUD_REQUEST_HEADER, SseDiagnostics, annotate_sse_frame, safe_base_url,
+    HUD_REQUEST_HEADER, SseDiagnostics, annotate_http_error, annotate_sse_frame, safe_base_url,
     upstream_request_id,
 )
 
@@ -25,8 +25,8 @@ def test_request_ids_are_distinct_from_response_ids_and_urls_hide_credentials():
 
 @pytest.mark.parametrize("encoding", ["identity", "gzip", "zstd", "deflate"])
 @pytest.mark.parametrize("id_source", ["header", "body", "none"])
-def test_http_errors_keep_status_and_complete_body_with_displayable_context(tmp_path, encoding, id_source):
-    original = json.dumps({"error": {"message": "original upstream failure", "code": "quota", **({"reqId": "req-body"} if id_source == "body" else {})}, "padding": "x" * 140000}).encode()
+def test_http_errors_keep_status_and_complete_body_with_displayable_context(tmp_path, encoding, id_source, padding_bytes=140000):
+    original = json.dumps({"error": {"message": "original upstream failure", "code": "quota", **({"reqId": "req-body"} if id_source == "body" else {})}, "padding": "x" * padding_bytes}).encode()
     wire = original
     if encoding == "gzip":
         wire = gzip.compress(original)
@@ -68,10 +68,14 @@ def test_http_errors_keep_status_and_complete_body_with_displayable_context(tmp_
             data = response.read()
             hud_id = response.getheader(HUD_REQUEST_HEADER)
             assert response.status == 429 and response.reason == "Upstream Quota"
-            assert response.getheader("Content-Type") == "text/plain; charset=utf-8"
+            assert response.getheader("Content-Type") == "application/json"
             assert response.getheader("Content-Encoding") is None
-            assert data.endswith(original), "the diagnostic sample must not truncate the error body"
-            prefix = data[:-len(original)].decode()
+            if padding_bytes:
+                assert data == original, "large JSON errors must retain the entire valid body"
+            else:
+                assert json.loads(data)["error"]["message"].startswith("original upstream failure\n[Codex HUD] ")
+            assert json.loads(data)["error"]["code"] == "quota"
+            prefix = response.getheader("X-Codex-Hud-Diagnostic")
             assert "provider=yeta" in prefix
             assert f"baseUrl=http://127.0.0.1:{server.server_port}/api/v2" in prefix
             assert "private" not in prefix
@@ -85,6 +89,27 @@ def test_http_errors_keep_status_and_complete_body_with_displayable_context(tmp_
         server.shutdown()
         server.server_close()
         worker.join(2)
+
+
+def test_small_json_http_error_keeps_content_type_and_fields_through_relay(tmp_path):
+    test_http_errors_keep_status_and_complete_body_with_displayable_context(tmp_path, "identity", "header", padding_bytes=0)
+
+
+@pytest.mark.parametrize("code", ["context_length_exceeded", "insufficient_quota", "invalid_api_key"])
+def test_json_error_annotation_preserves_machine_readable_error_contract(code):
+    original = {"error": {"type": "invalid_request_error", "code": code, "param": "input",
+                           "message": "original failure"}, "request_id": "req-original"}
+    result = json.loads(annotate_http_error(json.dumps(original).encode(), "provider=alpha | hudReqId=hud_test"))
+    assert {k: v for k, v in result["error"].items() if k != "message"} == {
+        k: v for k, v in original["error"].items() if k != "message"}
+    assert result["request_id"] == "req-original"
+    assert result["error"]["message"] == "original failure\n[Codex HUD] provider=alpha | hudReqId=hud_test"
+
+
+@pytest.mark.parametrize("body", [b"plain error", b'<html>error</html>', b'{"error":', b'[]',
+                                  b'{"error":"original"}', b'{"error":{"code":"quota"}}'])
+def test_unstructured_and_partial_error_samples_remain_byte_for_byte_unchanged(body):
+    assert annotate_http_error(body, "provider=alpha") == body
 
 
 def test_local_connection_failures_show_real_provider_base_and_unique_local_id(tmp_path):

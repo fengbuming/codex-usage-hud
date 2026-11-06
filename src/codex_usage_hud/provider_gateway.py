@@ -17,7 +17,7 @@ import os
 import time
 from contextlib import contextmanager
 from threading import RLock
-from urllib.parse import urlsplit
+from urllib.parse import parse_qsl, urlsplit
 import uuid
 
 PROVIDER_ID = "codex_hud"
@@ -230,6 +230,28 @@ def select_provider(provider: str, *, config_path: Path | None = None, thread_id
             "nativeProviderId": PROVIDER_ID, "sessionId": thread_id}
 
 
+def _inherit_copy_history(db, path: Path, thread_id: str, provider: str) -> None:
+    """Carry account-specific history into descendants, including older bindings."""
+    parent = _parent_thread_id(path, thread_id)
+    visited = {thread_id}
+    for _ in range(32):
+        if not parent or parent in visited:
+            return
+        visited.add(parent)
+        bound = db.execute("SELECT provider FROM sessions WHERE id = ?", (parent,)).fetchone()
+        if bound and bound[0] != provider:
+            return
+        source = db.execute("SELECT source_provider, prepared FROM copies WHERE id = ?", (parent,)).fetchone()
+        if source:
+            if source[0] != provider:
+                db.execute("INSERT INTO copies(id, source_provider, prepared) VALUES (?, ?, ?)",
+                           (thread_id, source[0], source[1]))
+                db.execute("INSERT OR IGNORE INTO foreign_seals SELECT ?, digest FROM foreign_seals WHERE id = ?",
+                           (thread_id, parent))
+            return
+        parent = _parent_thread_id(path, parent)
+
+
 def resolve_route(path: Path, headers: Mapping, *, generation: bool) -> dict:
     from . import codex_provider_config as config
 
@@ -257,6 +279,9 @@ def resolve_route(path: Path, headers: Mapping, *, generation: bool) -> dict:
         if generation and thread_id and not row:
             db.execute("INSERT INTO sessions VALUES (?, ?)", (thread_id, provider))
         copy = db.execute("SELECT source_provider FROM copies WHERE id = ?", (thread_id,)).fetchone()
+        if thread_id and not copy:
+            _inherit_copy_history(db, path, thread_id, provider)
+            copy = db.execute("SELECT source_provider FROM copies WHERE id = ?", (thread_id,)).fetchone()
     # Legacy per-chat image flags remain readable for old clients, but routing
     # now follows each request's model, not persisted conversation state.
     return {**route, "provider": provider, "thread_id": thread_id,
@@ -422,7 +447,8 @@ def _provider_route(path: Path, provider: str, definitions: Mapping) -> dict:
 
     text = config._read_text_exact(path)
     info = gateway_metadata(text, include_inactive=True)
-    builtin_urls = info.get("builtin_urls") or config._parse_toml_mapping(text, strict=True)
+    raw = config._parse_toml_mapping(text, strict=True)
+    builtin_urls = info.get("builtin_urls") or raw
     definition = definitions.get(provider)
     if definition is None and provider != "openai":
         raise ValueError(f"会话供应商「{provider}」已删除；请恢复配置或复制到其他供应商。")
@@ -432,7 +458,6 @@ def _provider_route(path: Path, provider: str, definitions: Mapping) -> dict:
         route = {"base_url": definition.base_url, "enabled": definition.use_proxy,
                  "port": definition.proxy_port, "model": definition.desktop_model,
                  "models": list(definition.desktop_models), "headers": {}}
-        raw = config._parse_toml_mapping(text, strict=True)
         entry = next((v for k, v in raw.get("model_providers", {}).items()
                       if str(k).casefold() == definition.provider_id.casefold()), {})
         if entry.get("auth"):
@@ -467,6 +492,24 @@ def _provider_route(path: Path, provider: str, definitions: Mapping) -> dict:
     route["headers"] = {str(k): str(v) for k, v in route["headers"].items()
                         if str(k).lower() not in {"authorization", "host", "content-length", "connection", "transfer-encoding", "x-codex-hud-gateway-token"}}
     route["headers"]["Authorization"] = "Bearer " + key
+    # A copied chat retains its native provider's client-side headers/params.
+    # Strip every configured provider field before rebuilding the target's
+    # metadata, including custom credential names and URL query credentials.
+    header_names, query_names = set(), set()
+    for entry in (raw.get("model_providers") or {}).values():
+        if not isinstance(entry, Mapping):
+            continue
+        for field in ("http_headers", "env_http_headers"):
+            if isinstance(entry.get(field), Mapping):
+                header_names.update(str(name).lower() for name in entry[field])
+        if isinstance(entry.get("query_params"), Mapping):
+            query_names.update(entry["query_params"])
+    urls = [definition.base_url for definition in definitions.values()]
+    urls += [builtin_urls.get(name) for name in ("openai_base_url", "chatgpt_base_url")]
+    for url in urls:
+        query_names.update(name for name, _ in parse_qsl(urlsplit(str(url or "")).query, keep_blank_values=True))
+    route["provider_header_names"] = header_names
+    route["provider_query_names"] = query_names
     upstream = _validated_proxy_upstream(route)
     endpoint = urlsplit(str(info.get("endpoint") or ""))
     loopback = {"127.0.0.1", "localhost", "::1"}
@@ -481,7 +524,7 @@ def activate_gateway(path: Path, relay, *, on_config_written: Callable[[str], No
     from . import codex_provider_config as config
     from .provider_proxy import with_proxy_metadata
     from .provider_gateway_auth import GATEWAY_PATH_ID, with_gateway_auth
-    from .provider_gateway_config import clear_provider_subtables
+    from .provider_gateway_config import clear_provider_subtables, gateway_http_transport
 
     if not path.exists():
         return
@@ -521,6 +564,7 @@ def activate_gateway(path: Path, relay, *, on_config_written: Callable[[str], No
         old_metadata = config.proxy_metadata(definition.section_text)
         old_metadata.update(base_url=definition.base_url, enabled=definition.use_proxy,
                             port=definition.proxy_port, gateway=True)
+        body = gateway_http_transport(body, old_metadata, newline)
         body = config._set_quoted_value(body, "base_url", endpoint, newline)
         candidate = config._replace_section_body(candidate, definition.provider_id,
                                                  with_proxy_metadata(body, old_metadata, newline))
@@ -562,7 +606,7 @@ def prepare_exit(provider: str, *, config_path: Path | None = None,
     """Restore a usable direct config before authorizing normal HUD shutdown."""
     from . import codex_provider_config as config
     from .provider_gateway_auth import with_gateway_auth
-    from .provider_gateway_config import clear_provider_subtables, copy_provider_settings
+    from .provider_gateway_config import clear_provider_subtables, copy_provider_settings, with_websocket_setting
     from .provider_proxy import updated_proxy_metadata, with_proxy_metadata
 
     path = config_path or config.default_codex_config_path()
@@ -583,6 +627,8 @@ def prepare_exit(provider: str, *, config_path: Path | None = None,
         body = config._section_range(candidate, definition.provider_id)[2]
         route_metadata = config.proxy_metadata(definition.section_text)
         route_metadata.pop("gateway", None)
+        if "gateway_websockets" in route_metadata:
+            body = with_websocket_setting(body, route_metadata.pop("gateway_websockets"), newline)
         route_metadata = updated_proxy_metadata(
             route_metadata, base_url=definition.base_url, enabled=definition.use_proxy,
             port=definition.proxy_port, model=definition.desktop_model, models=list(definition.desktop_models),

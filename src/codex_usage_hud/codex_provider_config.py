@@ -1077,7 +1077,10 @@ def save_provider_configs(
                 model=model_for_route, models=models_for_route, **proxy_options,
             )
             if active_gateway:
+                from .provider_gateway_config import gateway_http_transport
+
                 metadata["gateway"] = True
+                section = (section[0], section[1], gateway_http_transport(section[2], metadata, newline))
             body = _set_quoted_value(
                 section[2],
                 "base_url",

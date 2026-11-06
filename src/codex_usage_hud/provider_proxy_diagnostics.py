@@ -120,6 +120,25 @@ def sample_error_body(chunks):
     return bytes(sample)
 
 
+def annotate_http_error(body: bytes, context: str) -> bytes:
+    """Enrich small JSON errors without changing codes, types or body framing.
+
+    Large/incomplete diagnostic samples and non-JSON bodies pass through;
+    their provenance remains available in response headers and the local log.
+    """
+    try:
+        payload = json.loads(body)
+    except (ValueError, UnicodeError):
+        return body
+    if not isinstance(payload, dict):
+        return body
+    error = payload.get("error", payload)
+    if not isinstance(error, dict) or not isinstance(error.get("message"), str):
+        return body
+    error["message"] += "\n[Codex HUD] " + context
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+
+
 def annotate_sse_frame(frame: bytes, route: dict, hud_id: str, response_headers) -> bytes:
     lines = frame.splitlines()
     data = b"\n".join(line[5:].lstrip(b" ") for line in lines if line.startswith(b"data:"))

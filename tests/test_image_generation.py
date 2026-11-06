@@ -77,7 +77,7 @@ def test_only_latest_user_text_becomes_prompt_and_native_image_selection_wins():
                          {"role": "user", "content": [{"type": "input_text", "text": "a moonlit whale"}]}]}
     request = images.image_request(payload)
     assert request == {"model": "gpt-image-2.5", "prompt": "a moonlit whale", "n": 1,
-                       "size": "1024x1024", "response_format": "b64_json"}
+                       "size": "1024x1024"}
     with pytest.raises(ValueError, match="未选择"):
         images.image_request({"model": "gpt-6.1-sol", "input": "clouds"})
 
@@ -134,7 +134,7 @@ def test_stream_emits_native_terminal_message_and_durable_local_image(tmp_path):
 
     def generate(_route, request):
         assert b"response.created" in handler.wfile.getvalue(), "send progress before waiting on the API"
-        assert request["response_format"] == "b64_json"
+        assert "response_format" not in request
         return {"data": [{"b64_json": base64.b64encode(PNG).decode()}]}
 
     with patch.object(images, "_generate", side_effect=generate) as call:
@@ -179,6 +179,29 @@ def test_generator_respects_provider_auth_base_path_query_and_explicit_proxy():
     with patch.object(images, "build_opener", return_value=opener), pytest.raises(ValueError, match="HTTP 429") as error:
         images._generate(value, {})
     assert "private credentials" not in str(error.value)
+
+
+@pytest.mark.parametrize("model", ["gpt-image-1", "gpt-image-2", "GPT-IMAGE-2"])
+def test_gpt_images_use_native_base64_contract_without_legacy_parameter(model):
+    opener = MagicMock()
+    opener.open.return_value.__enter__.return_value.read.return_value = b'{"data":[]}'
+
+    def strict_api(request, **_kwargs):
+        payload = json.loads(request.data)
+        assert payload["model"] == model
+        assert "response_format" not in payload, "GPT Images rejects this legacy parameter"
+        return opener.open.return_value
+
+    opener.open.side_effect = strict_api
+    with patch.object(images, "build_opener", return_value=opener):
+        assert images._generate({"base_url": "https://api.openai.com/v1"},
+                                images.image_request({"model": model, "input": "whale"})) == {"data": []}
+    assert opener.open.call_count == 1
+
+
+@pytest.mark.parametrize("model", ["gemini-3-pro-image-preview", "gemini-nano-banana"])
+def test_compatible_image_models_keep_explicit_base64_response_format(model):
+    assert images.image_request({"model": model, "input": "whale"})["response_format"] == "b64_json"
 
 
 @pytest.mark.parametrize("encoded", [None, "bad base64!", base64.b64encode(b"<script>not an image</script>").decode()])
