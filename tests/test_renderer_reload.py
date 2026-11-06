@@ -66,37 +66,21 @@ def test_reload_picker_protects_drafts_waits_for_ack_and_keeps_failures_visible(
 ''')
 
 
-def test_gateway_confirmation_persists_only_after_ack_and_failure_stays_visible():
-    run_js(management_script() + r'''
-(async()=>{
- openSettingsGatewayConfirm();assert.equal(commands.length,0);
- assert(layer.innerHTML.includes('data-enabled="false"'));
- assert(!layer.innerHTML.includes('value="codex_hud"'));
- let pending=toggleSettingsGateway(false);assert.equal(settings.provider_gateway.active,true);
- closeSettingsConfirm();assert(layer);reject(new Error('write denied'));await pending;
- assert(layer);assert.equal(layer.dataset.busy,'false');assert.match(status.at(-1),/write denied/);
- assert.equal(settings.provider_gateway.active,true);assert.equal(rendered,0);
- pending=toggleSettingsGateway(false);release({enabled:false,gateway:false});await pending;
- assert.equal(settings.provider_gateway_enabled,false);assert.equal(settings.provider_gateway.active,false);
- assert.equal(layer,null);assert.equal(rendered,1);assert.match(status.at(-1),/代理已关闭/);
- openSettingsGatewayConfirm();assert(layer.innerHTML.includes('data-enabled="true"'));
- assert(!layer.innerHTML.includes('data-provider-exit-selection'));
-})().catch(error=>{console.error(error);process.exitCode=1});
-''')
-
-
 def test_management_and_gateway_actions_are_exported_and_routed():
     assert 'data-action="settings-manage"' in TEXT
     footer = TEXT.split('<div class="codex-usage-hud-settings-actions">', 1)[1].split('</div>\n          </div>', 1)[0]
     assert 'data-action="settings-manage" data-variant="ghost">重载/退出</button>' in footer
     assert 'codex-usage-hud-settings-footnote' not in TEXT
     assert 'data-setting-key="stop_hud_on_lock_screen"' not in TEXT
-    assert 'data-action="settings-gateway-toggle"' in TEXT
+    # The gateway switch moved to the menubar provider menu.
+    assert 'data-action="settings-gateway-toggle"' not in TEXT
+    assert 'settings-gateway' not in ROUTER
     assert 'data-action="settings-reload"' not in TEXT
     assert 'data-action="settings-exit"' not in TEXT
-    for name in ('openSettingsManagement', 'openSettingsGatewayConfirm', 'toggleSettingsGateway'):
-        assert TEXT.count(f"      {name},") == 1
-        assert f"\n    {name}," in TEXT
+    assert TEXT.count("      openSettingsManagement,") == 1
+    assert "\n    openSettingsManagement," in TEXT
+    for name in ('openSettingsGatewayConfirm', 'toggleSettingsGateway'):
+        assert name not in TEXT
+        assert name not in ROUTER
     assert 'action.dataset.action === "settings-reload-confirm"' in ROUTER
     assert "void reloadHudFromModal();" in ROUTER
-    assert "void toggleSettingsGateway(action.dataset.enabled === \"true\");" in ROUTER

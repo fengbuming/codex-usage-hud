@@ -91,28 +91,50 @@ function codexWaitForSidebarActive(){return Promise.resolve(true);}
 
 
 def test_history_menu_asks_before_changing_default_and_new_chat_switches_directly():
-    start = TEXT.index("      function handleCodexCliQuickLaunchMenuClick(event)")
+    start = TEXT.index("      function codexProviderSwitchSessionContext()")
     end = TEXT.index("      function codexCliQuickLaunchProviderLabelState()", start)
     run_js(r'''
 const assert=require('node:assert/strict');
-let submitted=[],dialogs=[],fresh=false;
+let submitted=[],dialogs=[],feedback=[],fresh=false,live=null,gateway=true,begun=[];
 const item={dataset:{provider:'beta'}};
 const codexCliQuickLaunchMenuState={};
 const codexProviderSwitchMenuState={surface:{contains(){return true;}}};
 const event={preventDefault(){},stopPropagation(){},target:{closest(selector){return selector.includes('provider-switch=')?item:null;}}};
 function closeCodexProviderSwitchMenu(){}
-function hudSettingsFromPayload(){return {provider_gateway:{active:true}};}
+function hudSettingsFromPayload(){return {provider_gateway:{active:gateway}};}
 function currentPayload(){return {activeSessionProvider:'alpha',sessionId:'source',newSession:fresh};}
+function readActiveSessionRef(){return live;}
+function showDefaultProviderSwitchFeedback(message){feedback.push(message);}
 function providerDisplayName(_s,p){return p;}
 function typedSettingsRequestId(){return 'switch';}
 function openCodexProviderMigrateDialog(value){dialogs.push(value);}
-function beginDefaultProviderSwitch(){return true;}
+function beginDefaultProviderSwitch(options){begun.push(options);return true;}
 function submitSettingsCommand(command){submitted.push(command);return true;}
 ''' + TEXT[start:end] + r'''
 handleCodexCliQuickLaunchMenuClick(event);
 assert.equal(dialogs.length,1);assert.equal(submitted.length,0,'canceling confirmation must not change defaults');
 fresh=true;handleCodexCliQuickLaunchMenuClick(event);
 assert.equal(dialogs.length,1);assert.equal(submitted[0].action,'providerSetDefault');
+// A blank live page outranks the previous conversation, even without flags.
+for (gateway of [true,false]) {
+  for (live of [{sessionId:'',title:''},{sessionId:'',title:'启动CLI'},
+    {newSession:true},{pendingSession:true}]) {
+    fresh=false;submitted=[];begun=[];
+    handleCodexCliQuickLaunchMenuClick(event);
+    assert.equal(dialogs.length,1);
+    assert.equal(submitted.length,1,'new chat must switch directly');
+    assert.equal(begun[0].migration,null,'must not reopen the old session dialog after saving');
+    assert.equal(codexProviderSwitchSessionContext().provider,'');
+  }
+}
+// A stale newSession payload cannot hide a real live conversation either.
+gateway=true;fresh=true;live={sessionId:'source'};submitted=[];
+handleCodexCliQuickLaunchMenuClick(event);
+assert.equal(dialogs.length,2);assert.equal(submitted.length,0);
+fresh=false;live={sessionId:'other'};
+handleCodexCliQuickLaunchMenuClick(event);
+assert.equal(dialogs.length,2);assert.equal(submitted.length,0);
+assert.equal(feedback.length,1,'wait for matching provider data after navigation');
 ''')
 
 

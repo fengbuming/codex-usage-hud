@@ -35,6 +35,22 @@ def _available_port() -> int:
 
 
 class SettingsBridgeServerTests(unittest.TestCase):
+    def test_health_waits_for_renderer_ack_after_listener_starts(self) -> None:
+        ready = {"attached": False}
+        with tempfile.TemporaryDirectory() as temp_dir:
+            bridge = SettingsBridgeServer(UserConfigStore(Path(temp_dir) / "hud.json"), port=0)
+            bridge.renderer_ready_callback = lambda: ready["attached"]
+            try:
+                bridge.start()
+                for attached in (False, True):
+                    ready["attached"] = attached
+                    with urlopen(bridge.url + "/health", timeout=2) as response:
+                        health = json.load(response)
+                    self.assertEqual(health["pid"], os.getpid())
+                    self.assertIs(health["rendererReady"], attached)
+            finally:
+                bridge.close()
+
     def test_health_identifies_current_hud_process_for_source_reload(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             bridge = SettingsBridgeServer(UserConfigStore(Path(temp_dir) / "hud_settings.json"), port=0)

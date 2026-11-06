@@ -588,6 +588,11 @@ def run_renderer_hud_session(args: argparse.Namespace, *, lock_already_held: boo
                         ports._append_renderer_diagnostic('window_not_ready', status=window_status, reason=window_reason, hwnd=window_hwnd, display_mode=display_mode, daemon_mode=True, window_ready_timeout_seconds=ports.DAEMON_RENDERER_WINDOW_READY_TIMEOUT_SECONDS)
                         return ports.RENDERER_HUD_UNAVAILABLE
                 initial_timeout = ports.RENDERER_RESTART_INITIAL_TIMEOUT_SECONDS if cold_start_attach else ports.DAEMON_RENDERER_INITIAL_TIMEOUT_SECONDS if wait_for_window else ports.RENDERER_INITIAL_TIMEOUT_SECONDS
+                # A source reload injects the full bundle into a live page.
+                # Give transient timeouts bounded retries, just like cold start.
+                retry_attach = cold_start_attach or startup_plan.scenario == ports.RENDERER_STARTUP_ATTACH
+                if retry_attach and not cold_start_attach:
+                    initial_timeout = max(initial_timeout, 5.0)
                 if local_loading is not None and not seamless_recovery:
                     local_loading.update(
                         title='正在切换到 Renderer HUD' if cold_start_attach else '正在启动 Renderer HUD',
@@ -615,7 +620,7 @@ def run_renderer_hud_session(args: argparse.Namespace, *, lock_already_held: boo
                         time.sleep(ports.RENDERER_STARTUP_STEP_MIN_VISIBLE_SECONDS)
                     startup_feedback.update(step='第 2 步，共 4 步', detail='正在建立安全的 HUD 通道…', progress=35)
                 initial_wait_kwargs: dict[str, object] = {'timeout_seconds': initial_timeout}
-                if cold_start_attach:
+                if retry_attach:
                     initial_wait_kwargs['retry_until_ready'] = True
                 elif renderer_startup_visible or initial_bootstrapped:
                     initial_wait_kwargs['progress_callback'] = startup_feedback.progress
@@ -629,12 +634,17 @@ def run_renderer_hud_session(args: argparse.Namespace, *, lock_already_held: boo
                     return ports.HUD_SUSPEND_FOR_SESSION_LOCK
                 if not renderer_attached:
                     original_error = client.last_error
+                    # A timeout is not evidence that debug mode is disabled.
                     restart_can_help = bool(startup_plan.scenario in {ports.RENDERER_STARTUP_ATTACH, ports.RENDERER_STARTUP_ATTACH_OBSERVED} and (ports._renderer_initial_failure_should_recover_cdp_port(original_error) or ports._renderer_initial_failure_can_be_fixed_by_restart(original_error)))
                     if restart_can_help:
                         current_port = ports._valid_renderer_cdp_port(getattr(client, 'port', startup_plan.port))
                         if current_port is not None:
                             target_still_valid, _reason = ports._validate_renderer_cdp_candidate(ports._RendererCdpPortCandidate(port=current_port, source=startup_plan.port_source or 'startup-plan'))
-                            restart_can_help = not target_still_valid
+                            restart_can_help = not target_still_valid and (
+                                _reason == 'not-listening'
+                                or ports._renderer_initial_failure_can_be_fixed_by_restart(original_error)
+                                or ports._renderer_initial_failure_can_be_fixed_by_restart(_reason)
+                            )
                     if restart_can_help:
                         ports._append_renderer_diagnostic('initial_connect_restart_waiting_for_user', status=client.last_status, error=original_error, old_port=getattr(client, 'port', None), display_mode=display_mode, daemon_mode=daemon_manager is not None)
                         if ports._wait_for_renderer_restart_request(args, work_overlay, local_loading):

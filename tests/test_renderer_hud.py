@@ -3694,6 +3694,14 @@ class RendererHudClientTests(unittest.TestCase):
 
         self.assertEqual(observed_stages, ["reading_session", "showing_hud"])
         self.assertIn("snapshotBuildMs", client.last_attach_metrics)
+        self.assertTrue(client.last_attach_metrics["attached"])
+
+    def test_bundle_install_has_separate_budget_from_fast_cdp_probes(self) -> None:
+        client = RendererHudClient(enabled=True, timeout_seconds=0.35)
+        with patch.object(renderer_hud, "install_new_document_script", return_value="script") as install:
+            client._install("ws://127.0.0.1/page/test", "target")
+        self.assertGreaterEqual(install.call_args.args[2], 3.0)
+        self.assertEqual(client.timeout_seconds, 0.35)
 
     def test_wait_for_renderer_retries_cold_start_until_payload_is_acknowledged(
         self,
@@ -3743,6 +3751,21 @@ class RendererHudClientTests(unittest.TestCase):
         self.assertEqual(observed_stages, [])
         self.assertEqual(client.last_attach_metrics["attempts"], 3)
         self.assertTrue(client.last_attach_metrics["retryUntilReady"])
+        self.assertTrue(client.last_attach_metrics["attached"])
+
+    def test_startup_retries_stop_at_deadline_without_acknowledging_ready(self) -> None:
+        clock = {"now": 0.0}
+        client = SimpleNamespace(last_status="failed", last_update_metrics={},
+                                 update_startup=MagicMock(return_value=False))
+        def wait(seconds):
+            clock["now"] += seconds
+        self.assertFalse(renderer_hud.wait_for_renderer(
+            client, lambda: ParsedSession(), timeout_seconds=0.5,
+            retry_until_ready=True, retry_interval_seconds=0.25,
+            monotonic=lambda: clock["now"], sleep=wait,
+        ))
+        self.assertEqual(client.update_startup.call_count, 3)
+        self.assertFalse(client.last_attach_metrics["attached"])
 
     def test_startup_payload_failure_does_not_open_normal_retry_gate(self) -> None:
         client = RendererHudClient(enabled=True)

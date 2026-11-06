@@ -587,11 +587,14 @@ def test_codex_cli_menu_shows_active_session_provider_label() -> None:
     assert "function syncCodexCliQuickLaunchProviderLabel(menubar, toggle)" in SETTINGS_SHELL
     assert 'data-codex-usage-hud-cli-provider-label="true"' in SETTINGS_SHELL
     assert "function codexCliQuickLaunchProviderLabelState()" in SETTINGS_SHELL
-    assert "currentPayload()?.activeSessionProvider" in SETTINGS_SHELL
+    assert "codexProviderSwitchSessionContext().provider" in SETTINGS_SHELL
     assert "hudSettingsFromPayload().app_provider" in SETTINGS_SHELL
     # 供应商标签显示 config.toml 的 name 键（缺省回退 Provider ID）。
-    assert '供应商 ${activeName}' in SETTINGS_SHELL
-    assert '（默认）' in SETTINGS_SHELL
+    assert 'text: activeName,' in SETTINGS_SHELL
+    assert '供应商 ${activeName}' not in SETTINGS_SHELL
+    assert 'suffix: pending ? "" : "默认",' in SETTINGS_SHELL
+    assert '.codex-usage-hud-cli-provider-label[data-gateway="true"]::before {' in SETTINGS_SHELL
+    assert 'content: "代理";' in SETTINGS_SHELL
     assert ".codex-usage-hud-cli-provider-label[data-mismatch=\"true\"] {" in SETTINGS_SHELL
     assert "syncCodexCliQuickLaunchProviderLabel(menubar, toggle);" in SETTINGS_SHELL
     assert 'document.querySelector(\'[data-codex-usage-hud-cli-provider-label="true"]\')?.remove();' in SETTINGS_SHELL
@@ -625,7 +628,7 @@ def test_codex_cli_quick_launch_menu_controls_exit_desktop_drag_region() -> None
 
     selectors = (
         '[data-codex-usage-hud-cli-menu-surface="true"] {',
-        '[data-codex-usage-hud-cli-menu-surface="true"] [role="menuitem"] {',
+        '[data-codex-usage-hud-cli-menu-surface="true"] [role="menuitemcheckbox"] {',
         '[data-codex-usage-hud-cli-menu-toggle="true"] {',
     )
     for selector in selectors:

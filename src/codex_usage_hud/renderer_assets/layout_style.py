@@ -5035,46 +5035,6 @@ TEXT = r"""
             cursor: pointer;
             z-index: 1;
           }
-          #${rootId} .codex-usage-hud-gateway-control {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            gap: 16px;
-            padding: 12px 0;
-            border-top: 1px solid var(--codex-usage-hud-divider, #393b40);
-          }
-          #${rootId} .codex-usage-hud-gateway-control strong { display: block; font-size: 12px; }
-          #${rootId} .codex-usage-hud-gateway-control span {
-            display: block;
-            margin-top: 4px;
-            font-size: 11px;
-            color: var(--codex-usage-hud-muted, #8a93a0);
-          }
-          #${rootId} .codex-usage-hud-gateway-switch {
-            flex-shrink: 0;
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            min-height: 28px;
-            padding: 4px 10px;
-            border: 1px solid var(--codex-usage-hud-divider, #393b40);
-            border-radius: 16px;
-            background: transparent;
-            color: var(--codex-usage-hud-muted, #8a93a0);
-            cursor: pointer;
-            transition: background .12s ease, color .12s ease;
-          }
-          #${rootId} .codex-usage-hud-gateway-switch::before {
-            content: "";
-            width: 6px;
-            height: 6px;
-            border-radius: 50%;
-            background: currentColor;
-          }
-          #${rootId} .codex-usage-hud-gateway-switch[aria-checked="true"] {
-            color: var(--codex-usage-hud-accent, #f3d27a);
-            background: color-mix(in srgb, var(--codex-usage-hud-accent, #f3d27a) 8%, transparent);
-          }
           #${rootId} .codex-usage-hud-management-card {
             width: min(460px, 100%);
             max-height: 100%;
@@ -5139,7 +5099,6 @@ TEXT = r"""
           #${rootId} .codex-usage-hud-management-card .codex-usage-hud-settings-action[data-danger="true"] { color: #ff9298; }
           #${rootId} [data-hud-management="true"][data-busy="true"] button { opacity: .55; cursor: wait; }
           @media (prefers-reduced-motion: reduce) {
-            #${rootId} .codex-usage-hud-gateway-switch,
             #${rootId} .codex-usage-hud-management-tabs button { transition: none; }
           }
           #${rootId} .codex-usage-hud-settings-confirm-close:hover {

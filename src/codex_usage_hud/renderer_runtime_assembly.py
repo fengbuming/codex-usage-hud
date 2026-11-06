@@ -247,6 +247,11 @@ def assemble_renderer_session(
         ),
     )
     resources.bridge = bridge
+    # The HTTP listener starts before Renderer attachment. Source reload must
+    # not mistake a live listener (or the old page's bridge URL) for a ready HUD.
+    bridge.renderer_ready_callback = lambda: bool(
+        getattr(client, "last_attach_metrics", {}).get("attached", False)
+    )
     bridge_url = bridge.start()
     background_usage_bridge_url = (
         bridge.background_usage_url if background_usage_runtime is not None else ""

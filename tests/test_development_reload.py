@@ -8,6 +8,21 @@ from codex_usage_hud import development_reload as reload
 from codex_usage_hud.provider_proxy_reload import bootstrap_digest
 
 
+@pytest.mark.parametrize("health,expected", [
+    ({"pid": 3000}, False),
+    ({"pid": 3000, "rendererReady": False}, False),
+    ({"pid": 3000, "rendererReady": True}, True),
+    ({"pid": 1000, "rendererReady": True}, False),
+])
+def test_reload_requires_renderer_ack_not_just_http_listener(monkeypatch, health, expected):
+    response = SimpleNamespace(status=200, read=lambda: json.dumps(health).encode())
+    connection = MagicMock()
+    connection.getresponse.return_value = response
+    monkeypatch.setattr(reload.http.client, "HTTPConnection", lambda *args, **kwargs: connection)
+    assert reload._bridge_matches_pid("http://127.0.0.1:57322", 3000) is expected
+    connection.close.assert_called_once()
+
+
 def test_hud_observation_uses_existing_persisted_cdp_schema(tmp_path, monkeypatch):
     from codex_usage_hud.platforms import cdp_probe
     from codex_usage_hud.renderer_cdp import connection

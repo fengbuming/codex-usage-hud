@@ -124,7 +124,8 @@ def _bridge_matches_pid(bridge: str, pid: int) -> bool:
     try:
         connection.request("GET", "/health")
         response = connection.getresponse()
-        return response.status == 200 and json.loads(response.read()).get("pid") == pid
+        health = json.loads(response.read())
+        return response.status == 200 and health.get("pid") == pid and health.get("rendererReady") is True
     except (OSError, ValueError, http.client.HTTPException):
         return False
     finally:

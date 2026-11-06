@@ -45,6 +45,7 @@ DEFAULT_RENDERER_TIMEOUT_SECONDS = 0.45
 DEFAULT_RENDERER_TARGET_CACHE_SECONDS = 2.0
 SLOW_RENDERER_UPDATE_LOG_MS = 250.0
 RENDERER_STARTUP_RETRY_INTERVAL_SECONDS = 0.5
+RENDERER_SCRIPT_INSTALL_TIMEOUT_SECONDS = 3.0
 WARMUP_ACK_TARGET = 3
 WARMUP_MAX_PROBES = 6
 WARMUP_MAX_SECONDS = 8.0
@@ -1490,7 +1491,7 @@ class RendererHudClient:
         self._script_identifier = install_new_document_script(
             websocket_url,
             _renderer_hud_script_with_model_catalog(),
-            self.timeout_seconds,
+            max(self.timeout_seconds, RENDERER_SCRIPT_INSTALL_TIMEOUT_SECONDS),
         )
         self._target_id = target_id
         self._websocket_url = websocket_url
@@ -1691,7 +1692,7 @@ def wait_for_renderer(
     monotonic: Callable[[], float] | None = None,
     sleep: Callable[[float], None] | None = None,
 ) -> bool:
-    """Attach once, or use a bounded cold-start retry when explicitly asked."""
+    """Attach once, or retry startup within the caller's bounded budget."""
     clock = monotonic or time.monotonic
     wait = sleep or time.sleep
     if callable(progress_callback) and not retry_until_ready:
@@ -1738,6 +1739,7 @@ def wait_for_renderer(
         "hudUpdateMs": update_ms,
         "attempts": attempts,
         "retryUntilReady": bool(retry_until_ready),
+        "attached": bool(attached),
         "update": dict(getattr(client, "last_update_metrics", {}) or {}),
     }
     client.last_attach_metrics = metrics

@@ -178,3 +178,68 @@ const window = {
 })().catch(e => {console.error(e); process.exitCode = 1;});
 '''
     run_script(tmp_path, script)
+
+
+def test_switch_only_button_saves_default_without_copy_or_navigation(tmp_path):
+    lifecycle_start = TEXT.index("      function clearDefaultProviderSwitchFeedback(")
+    lifecycle_end = TEXT.index("      async function resolveCodexProviderRuntime()", lifecycle_start)
+    dialog_start = TEXT.index("      function openCodexProviderMigrateDialog(")
+    dialog_end = TEXT.index("      function codexSourceSessionTitle(", dialog_start)
+    click_start = TEXT.index("      function switchCodexProviderOnly()")
+    click_end = TEXT.index("      function codexProviderSwitchSessionContext()", click_start)
+    script = r'''
+const assert = require('node:assert/strict');
+const codexProviderMigrateDialogState = {}, codexProviderSwitchMenuState = {};
+const settings = {default_provider:'old'}, settingsProviderDraft = {};
+const timers = new Map(), commands = [];
+let serial = 0, submitFails = false;
+const window = {
+  setTimeout(fn, ms) {const id=++serial;timers.set(id,{fn,ms});return id;},
+  clearTimeout(id) {timers.delete(id);},
+};
+const document = {
+  body:{appendChild() {}},
+  createElement() {return {dataset:{},innerHTML:'',setAttribute() {},
+    addEventListener(_type,fn) {this.click=fn;}, remove() {},
+    querySelector() {return {addEventListener() {}};}};},
+};
+function hudSettingsFromPayload() {return settings;}
+function providerDisplayName(_,provider) {return provider;}
+function escapeHtml(value) {return String(value);}
+function ensureCodexCliQuickLaunchMenuStyle() {}
+function syncCodexCliQuickLaunchMenu() {}
+function completeCodexProviderMismatchSwitch() {}
+function typedSettingsRequestId() {return 'switch-'+(++serial);}
+function submitSettingsCommand(command) {commands.push(command);return !submitFails;}
+function codexBridgeRequest() {throw new Error('switch only cannot call thread RPCs');}
+''' + TEXT[lifecycle_start:lifecycle_end] + TEXT[dialog_start:dialog_end] + TEXT[click_start:click_end] + r'''
+function open() {
+  assert(openCodexProviderMigrateDialog({targetProvider:'new',activeProvider:'old',activeSessionId:'source'}));
+  assert.match(codexProviderMigrateDialogState.layer.innerHTML,/仅切换/);
+}
+function clickOnly() {
+  codexProviderMigrateDialogState.layer.click({
+    preventDefault() {}, stopPropagation() {},
+    target:{closest(selector) {return selector.includes('switch-only') ? {} : null;}},
+  });
+}
+open();clickOnly();switchCodexProviderOnly();
+assert.equal(commands.length,1,'repeated activation cannot duplicate a switch');
+assert.equal(commands[0].action,'providerSetDefault');assert.equal(commands[0].provider,'new');
+assert.equal(codexProviderSwitchMenuState.migration,null);
+assert.equal(codexProviderMigrateDialogState.layer,null);
+assert.equal(settings.default_provider,'old','wait for confirmed save');
+finishDefaultProviderSwitch({requestId:commands[0].requestId,provider:'new'});
+assert.equal(settings.default_provider,'new');assert.equal(timers.size,0);
+assert.equal(codexProviderMigrateDialogState.layer,null,'success cannot reopen the copy prompt');
+assert.equal(codexProviderMigrateDialogState.activeSessionId,'source','leave the original conversation intact');
+// Canceled prompts submit nothing, and switch failures use existing feedback.
+open();closeCodexProviderMigrateDialog();assert.equal(commands.length,1);
+submitFails=true;open();clickOnly();
+assert.equal(codexProviderSwitchMenuState.pendingRequestId,'');assert.equal(timers.size,0);
+assert.match(codexProviderSwitchMenuState.feedbackLayer.innerHTML,/未能切换/);
+clearDefaultProviderSwitchFeedback();
+open();codexProviderMigrateDialogState.busy=true;clickOnly();
+assert.equal(commands.length,2,'copy in progress cannot start switch only');
+'''
+    run_script(tmp_path, script)

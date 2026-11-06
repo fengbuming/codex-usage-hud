@@ -158,6 +158,37 @@ def test_toggle_command_acknowledges_and_refreshes_settings(setup, monkeypatch):
     reload.assert_called_once_with(include_history=False)
 
 
+def test_default_switch_only_updates_gateway_route_without_reloading_hud(setup):
+    from codex_usage_hud.core.parser import ParsedSession
+    from codex_usage_hud.renderer_payload_builder import payload_from_snapshot
+
+    path, store, relay = setup
+    gateway.activate_gateway(path, relay)
+    before = path.read_bytes()
+    reload = MagicMock(side_effect=AssertionError("route switches must not reload HUD settings"))
+    publish = MagicMock()
+    context = SimpleNamespace(settings_store=store, settings_mtime=123,
+                              reload_user_config=reload,
+                              runtime_events=SimpleNamespace(publish=publish))
+    status = _handle_renderer_settings_command(
+        {"action": "providerSetDefault", "provider": "beta", "requestId": "route-1"},
+        context, Event(), Event(),
+    )
+    assert status["kind"] != "error"
+    assert status["requestId"] == "route-1"
+    assert status["providerSetDefault"]["gateway"] is True
+    assert "代理默认路由" in status["message"]
+    assert path.read_bytes() == before
+    assert context.settings_mtime == 123
+    reload.assert_not_called()
+    publish.assert_not_called()
+    assert gateway.gateway_info(path)["default_provider"] == "beta"
+    # Full and settings-only snapshots must override the cached registry default.
+    payload = payload_from_snapshot(ParsedSession(), default_provider="alpha")
+    assert payload.to_json()["settings"]["default_provider"] == "beta"
+    assert payload.to_domain_json("settings")["settings"]["provider_gateway"]["default_provider"] == "beta"
+
+
 def test_generic_save_cannot_bypass_gateway_transition(setup):
     _, store, _ = setup
     status = _handle_renderer_settings_command(

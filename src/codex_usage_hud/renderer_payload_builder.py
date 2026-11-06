@@ -195,6 +195,8 @@ def payload_from_snapshot(
     from .provider_gateway import gateway_info
 
     gateway = gateway_info()
+    if gateway:
+        settings_payload["default_provider"] = str(gateway["default_provider"])
     settings_payload["provider_gateway"] = {
         "active": bool(gateway), "provider_id": gateway.get("provider_id", ""),
         "endpoint": gateway.get("endpoint", ""),

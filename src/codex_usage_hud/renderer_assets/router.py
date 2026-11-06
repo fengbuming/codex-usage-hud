@@ -1483,18 +1483,6 @@ TEXT = r"""
         openSettingsManagement(action.dataset.action === "settings-manage-exit" ? "exit" : "reload");
         return;
       }
-      if (action.dataset.action === "settings-gateway-toggle") {
-        event.preventDefault();
-        event.stopPropagation();
-        openSettingsGatewayConfirm();
-        return;
-      }
-      if (action.dataset.action === "settings-gateway-confirm") {
-        event.preventDefault();
-        event.stopPropagation();
-        void toggleSettingsGateway(action.dataset.enabled === "true");
-        return;
-      }
       if (action.dataset.action === "settings-exit") {
         event.preventDefault();
         event.stopPropagation();

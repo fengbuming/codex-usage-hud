@@ -79,6 +79,7 @@ _TEXT_PREFIX = r"""
         providers: [],
         pendingProvider: "",
         pendingRequestId: "",
+        pendingGatewayDefault: null,
         migration: null,
         refreshPendingRequestId: "",
         loadingTimer: 0,
@@ -108,6 +109,7 @@ _TEXT_PREFIX = r"""
         startedAt: 0,
       };
       const gatewayCommandRequests = new Map();
+      const codexProviderGatewayDialogState = { layer: null, busy: false };
       let gatewayResumeAdapter = null;
       let gatewayAdapterAttempted = false;
 
@@ -3976,10 +3978,6 @@ _TEXT_PREFIX = r"""
                 </div>
               </div>
             </div>
-            <div class="codex-usage-hud-gateway-control">
-              <div><strong>供应商请求代理</strong><span>${settings.provider_gateway?.active ? "已开启 · 由 HUD 统一转发请求" : "已关闭 · 使用 Codex 供应商配置"}</span></div>
-              <button type="button" class="codex-usage-hud-gateway-switch" role="switch" aria-label="供应商请求代理" aria-checked="${!!settings.provider_gateway?.active}" data-action="settings-gateway-toggle">${settings.provider_gateway?.active ? "开启" : "关闭"}</button>
-            </div>
             <div class="codex-usage-hud-provider-editor" data-provider-editor="true" data-active-provider="${escapeHtml(settingsProviderDraft?.activeProvider || "")}">
               ${settingsProviderEditorHtml(settings)}
             </div>
@@ -7197,53 +7195,6 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
         openSettingsManagement("reload");
       }
 
-      function openSettingsGatewayConfirm() {
-        const dialog = settingsDialogRoot();
-        if (!dialog || hudManagementDraftsPending()) return;
-        closeSettingsConfirm();
-        const settings = hudSettingsFromPayload();
-        const enabled = !settings.provider_gateway?.active;
-        const layer = document.createElement("div");
-        layer.className = "codex-usage-hud-settings-confirm-layer";
-        layer.dataset.settingsConfirm = "true";
-        layer.dataset.hudManagement = "true";
-        layer.innerHTML = `<div class="codex-usage-hud-settings-confirm-card codex-usage-hud-management-card" role="dialog" aria-modal="true" aria-label="供应商请求代理">
-          <div class="codex-usage-hud-management-header"><strong>${enabled ? "开启" : "关闭"}供应商请求代理</strong></div>
-          <div class="codex-usage-hud-management-body">
-            <p>${enabled ? "由 HUD 本机网关转发供应商请求，并按会话保留供应商路由。此功能默认关闭。" : "恢复所选供应商的配置，HUD 界面和用量统计继续运行。"}</p>
-            ${enabled ? '' : hudDirectProviderSelection(settings)}
-            <p class="codex-usage-hud-management-note">${enabled ? "会保存当前配置的备份。Codex 需重新加载配置后使用代理；不会自动重启。" : "请先等待回复完成。已有连接保留；旧窗口可能仍缓存代理地址，需要重新打开 Codex。"}</p>
-            <div data-hud-management-status="true" role="status" aria-live="polite"></div>
-          </div>
-          <div class="codex-usage-hud-settings-confirm-actions">
-            <button type="button" class="codex-usage-hud-settings-action" data-action="settings-reload-cancel" data-variant="ghost">取消</button>
-            <button type="button" class="codex-usage-hud-settings-action" data-action="settings-gateway-confirm" data-enabled="${enabled}" data-primary="true">${enabled ? "开启代理" : "保存并关闭代理"}</button>
-          </div></div>`;
-        dialog.appendChild(layer);
-        layer.querySelector('[data-action="settings-reload-cancel"]')?.focus();
-      }
-
-      async function toggleSettingsGateway(enabled) {
-        if (document.querySelector('[data-hud-management="true"]')?.dataset?.busy === "true") return;
-        hudManagementBusy(true);
-        hudManagementStatus("正在保存代理设置…");
-        const provider = document.querySelector('[data-provider-exit-selection="true"]')?.value || "";
-        try {
-          const result = await codexGatewayCommand({ action: "providerGatewayToggle", enabled, provider });
-          const settings = currentPayload()?.settings;
-          if (!settings) throw new Error("设置状态暂不可用，请重新打开设置。");
-          settings.provider_gateway_enabled = result.enabled;
-          settings.provider_gateway = { ...settings.provider_gateway, active: result.gateway };
-          hudManagementBusy(false);
-          closeSettingsConfirm();
-          renderSettingsModal();
-          setSettingsStatus(`${result.enabled ? "代理已开启" : "代理已关闭"}。请让 Codex 重新加载配置；旧窗口如无法发送，请重新打开 Codex。`);
-        } catch (error) {
-          hudManagementBusy(false);
-          hudManagementStatus(`无法切换代理：${error?.message || error}`, "error");
-        }
-      }
-
       async function reloadHudFromModal() {
         const selection = document.querySelector('[data-hud-reload-mode="true"]');
         const mode = selection?.value || "";
@@ -7500,6 +7451,7 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
         themeDomain.apply(root, payload || {});
         renderUpdateButtons(root, payload || {});
         applySettingsCommandStatus(payload || {});
+        reconcileDefaultProviderSwitch(payload || {});
         // 设置域 payload 是单价的权威来源。命令状态可能因为快照刷新被提前清空
         // （status 一旦丢了，提交就不会再触发重绘），所以这里按 payload 本身对账，
         // 保证任何后台写入都会反映到单价表上。
@@ -7568,7 +7520,8 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
             pointer-events: auto;
             -webkit-app-region: no-drag;
           }
-          [data-codex-usage-hud-cli-menu-surface="true"] [role="menuitem"] {
+          [data-codex-usage-hud-cli-menu-surface="true"] [role="menuitem"],
+          [data-codex-usage-hud-cli-menu-surface="true"] [role="menuitemcheckbox"] {
             width: 100%;
             min-height: 30px;
             display: flex;
@@ -7660,7 +7613,9 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
             -webkit-app-region: no-drag;
           }
           [data-codex-usage-hud-cli-menu-surface="true"] [role="menuitem"]:hover,
-          [data-codex-usage-hud-cli-menu-surface="true"] [role="menuitem"]:focus-visible {
+          [data-codex-usage-hud-cli-menu-surface="true"] [role="menuitem"]:focus-visible,
+          [data-codex-usage-hud-cli-menu-surface="true"] [role="menuitemcheckbox"]:hover,
+          [data-codex-usage-hud-cli-menu-surface="true"] [role="menuitemcheckbox"]:focus-visible {
             outline: none;
             background: var(--surface-hover, rgba(255, 255, 255, .1));
           }
@@ -7784,6 +7739,7 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
             display: inline-flex;
             align-items: center;
             gap: 6px;
+            max-width: 260px;
             cursor: pointer;
             user-select: none;
             opacity: .78;
@@ -7791,13 +7747,44 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
           .codex-usage-hud-cli-provider-label:empty { display: none; }
           .codex-usage-hud-cli-provider-label::before {
             content: "";
+            flex: 0 0 auto;
             width: 6px;
             height: 6px;
             border-radius: 50%;
             background: color-mix(in srgb, currentColor 55%, transparent);
           }
+          .codex-usage-hud-cli-provider-label[data-gateway="true"] {
+            opacity: .9;
+          }
+          .codex-usage-hud-cli-provider-label[data-gateway="true"]::before {
+            content: "代理";
+            width: auto;
+            height: auto;
+            padding: 2px 6px;
+            border: 1px solid color-mix(in srgb, var(--status-success, #3fb68b) 45%, transparent);
+            border-radius: 999px;
+            color: var(--status-success, #3fb68b);
+            background: color-mix(in srgb, var(--status-success, #3fb68b) 15%, transparent);
+            font: 700 10px/1.1 system-ui, sans-serif;
+            letter-spacing: .04em;
+          }
+          .codex-usage-hud-cli-provider-name {
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+          }
+          .codex-usage-hud-cli-provider-suffix {
+            flex: 0 0 auto;
+            padding: 1px 5px;
+            border-radius: 4px;
+            color: var(--text-tertiary, #a9b2bf);
+            background: rgba(255, 255, 255, .07);
+            font: 600 10px/1.2 system-ui, sans-serif;
+          }
           .codex-usage-hud-cli-provider-label::after {
             content: "▾";
+            flex: 0 0 auto;
             color: var(--text-tertiary, #a9b2bf);
             font: 700 10px/1 system-ui, sans-serif;
           }
@@ -7814,13 +7801,115 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
           .codex-usage-hud-cli-provider-label[data-mismatch="true"]::before {
             background: var(--status-warning, #e2a23a);
           }
+          .codex-usage-hud-cli-provider-label[data-gateway="true"][data-mismatch="true"]::before {
+            border-color: color-mix(in srgb, var(--status-warning, #e2a23a) 45%, transparent);
+            color: var(--status-warning, #e2a23a);
+            background: color-mix(in srgb, var(--status-warning, #e2a23a) 15%, transparent);
+          }
           .codex-usage-hud-cli-provider-label[data-switching="true"]::before {
             background: var(--accent, #7aa2ff);
             animation: codexUsageHudProviderSwitchPulse .7s ease-in-out infinite alternate;
           }
+          .codex-usage-hud-cli-provider-label[data-gateway="true"][data-switching="true"]::before {
+            color: var(--accent, #7aa2ff);
+            border-color: color-mix(in srgb, var(--accent, #7aa2ff) 45%, transparent);
+            background: color-mix(in srgb, var(--accent, #7aa2ff) 15%, transparent);
+            animation: codexUsageHudProviderGatewayPulse .7s ease-in-out infinite alternate;
+          }
           @keyframes codexUsageHudProviderSwitchPulse {
             from { opacity: .35; transform: scale(.75); }
             to { opacity: 1; transform: scale(1.15); }
+          }
+          @keyframes codexUsageHudProviderGatewayPulse {
+            from { opacity: .45; }
+            to { opacity: 1; }
+          }
+          [data-codex-usage-hud-provider-switch-surface="true"] [data-codex-usage-hud-provider-gateway-toggle="true"] {
+            min-height: 42px;
+            justify-content: space-between;
+            gap: 14px;
+          }
+          .codex-usage-hud-provider-gateway-copy {
+            display: grid;
+            gap: 3px;
+            min-width: 0;
+          }
+          .codex-usage-hud-provider-gateway-copy strong {
+            font: 650 12px/1.2 system-ui, sans-serif;
+          }
+          .codex-usage-hud-provider-gateway-copy small {
+            color: var(--text-tertiary, #a9b2bf);
+            font: 400 11px/1.2 system-ui, sans-serif;
+          }
+          [data-codex-usage-hud-provider-gateway-toggle="true"][aria-checked="true"] .codex-usage-hud-provider-gateway-copy small {
+            color: var(--status-success, #3fb68b);
+          }
+          .codex-usage-hud-provider-gateway-track {
+            position: relative;
+            flex: 0 0 auto;
+            width: 30px;
+            height: 17px;
+            border-radius: 999px;
+            background: rgba(255, 255, 255, .16);
+            transition: background .15s ease;
+          }
+          .codex-usage-hud-provider-gateway-track::after {
+            content: "";
+            position: absolute;
+            top: 2px;
+            left: 2px;
+            width: 13px;
+            height: 13px;
+            border-radius: 50%;
+            background: #fff;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, .35);
+            transition: transform .15s ease;
+          }
+          [data-codex-usage-hud-provider-gateway-toggle="true"][aria-checked="true"] .codex-usage-hud-provider-gateway-track {
+            background: var(--status-success, #3fb68b);
+          }
+          [data-codex-usage-hud-provider-gateway-toggle="true"][aria-checked="true"] .codex-usage-hud-provider-gateway-track::after {
+            transform: translateX(13px);
+          }
+          .codex-usage-hud-provider-switch-divider {
+            height: 1px;
+            margin: 4px 6px;
+            background: color-mix(in srgb, var(--border-subtle, #47505c) 70%, transparent);
+          }
+          .codex-usage-hud-provider-gateway-field {
+            margin-top: 12px;
+          }
+          .codex-usage-hud-provider-gateway-field label {
+            display: grid;
+            gap: 6px;
+            color: var(--text-secondary, #c7ced8);
+            font: 600 12px/1.3 system-ui, sans-serif;
+          }
+          .codex-usage-hud-provider-gateway-field select {
+            min-height: 30px;
+            padding: 4px 8px;
+            border: 1px solid rgba(255, 255, 255, .14);
+            border-radius: 7px;
+            background: rgba(255, 255, 255, .05);
+            color: inherit;
+            font: 400 12px/1.3 system-ui, sans-serif;
+          }
+          .codex-usage-hud-provider-gateway-note {
+            margin: 10px 0 0;
+            color: var(--text-tertiary, #a9b2bf);
+            font: 400 11px/1.5 system-ui, sans-serif;
+          }
+          .codex-usage-hud-provider-gateway-status {
+            margin-top: 10px;
+            color: var(--text-secondary, #c7ced8);
+            font: 400 12px/1.5 system-ui, sans-serif;
+          }
+          .codex-usage-hud-provider-gateway-status[data-kind="error"] {
+            color: var(--status-error, #ff8a8a);
+          }
+          [data-codex-provider-gateway-layer="true"][data-busy="true"] button {
+            opacity: .55;
+            cursor: wait;
           }
           [data-codex-usage-hud-provider-switch-surface="true"] [role="menuitem"] {
             min-height: 32px;
@@ -7846,6 +7935,7 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
             background: color-mix(in srgb, var(--status-warning, #e2a23a) 13%, transparent);
           }
           [data-codex-provider-migrate-layer="true"],
+          [data-codex-provider-gateway-layer="true"],
           [data-codex-provider-switch-feedback="true"] {
             position: fixed;
             inset: 0;
@@ -7934,10 +8024,14 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
             .codex-usage-hud-cli-quick-surface,
             .codex-usage-hud-cli-quick-track span,
             [data-codex-provider-migrate-layer="true"],
+            [data-codex-provider-gateway-layer="true"],
             [data-codex-provider-switch-feedback="true"],
             .codex-usage-hud-provider-migrate-surface,
             .codex-usage-hud-provider-migrate-spinner,
-            .codex-usage-hud-cli-provider-label[data-switching="true"]::before { animation: none; }
+            .codex-usage-hud-cli-provider-label[data-switching="true"]::before,
+            .codex-usage-hud-cli-provider-label[data-gateway="true"][data-switching="true"]::before { animation: none; }
+            .codex-usage-hud-provider-gateway-track,
+            .codex-usage-hud-provider-gateway-track::after { transition: none; }
           }
         `;
         document.head.appendChild(style);
@@ -8120,15 +8214,37 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
         clearDefaultProviderSwitchFeedback();
         codexProviderSwitchMenuState.pendingProvider = normalized;
         codexProviderSwitchMenuState.pendingRequestId = String(requestId || "");
+        const gateway = hudSettingsFromPayload().provider_gateway;
+        codexProviderSwitchMenuState.pendingGatewayDefault = gateway?.active
+          ? String(gateway.default_provider || "").trim().toLowerCase() : null;
         codexProviderSwitchMenuState.migration = migration;
         codexProviderSwitchMenuState.loadingTimer = window.setTimeout(() => {
-          showDefaultProviderSwitchFeedback(`正在保存「${providerDisplayName(hudSettingsFromPayload(), normalized)}」为默认供应商…`);
+          showDefaultProviderSwitchFeedback(codexProviderSwitchMenuState.pendingGatewayDefault !== null
+            ? `正在切换代理上游到「${providerDisplayName(hudSettingsFromPayload(), normalized)}」…`
+            : `正在保存「${providerDisplayName(hudSettingsFromPayload(), normalized)}」为默认供应商…`);
         }, 350);
         codexProviderSwitchMenuState.timeoutTimer = window.setTimeout(() => {
-          finishDefaultProviderSwitch({ requestId, ok: false, message: "暂未收到切换结果。配置可能已保存，请关闭后查看菜单中的默认标记。" });
+          finishDefaultProviderSwitch({ requestId, ok: false, message:
+            codexProviderSwitchMenuState.pendingGatewayDefault !== null
+              ? "暂未收到代理路由切换结果，请关闭后查看菜单中的默认标记。"
+              : "暂未收到切换结果。配置可能已保存，请关闭后查看菜单中的默认标记。" });
         }, 15000);
         syncCodexCliQuickLaunchMenu();
         return true;
+      }
+
+      function reconcileDefaultProviderSwitch(payload) {
+        const state = codexProviderSwitchMenuState;
+        const gateway = payload?.settings?.provider_gateway;
+        // A later authoritative route snapshot can confirm a lost one-shot
+        // command ack. An unchanged/stale route must never confirm a request.
+        if (!state.pendingRequestId || state.pendingGatewayDefault == null
+          || state.pendingGatewayDefault === state.pendingProvider
+          || !gateway?.active) return;
+        const provider = String(gateway.default_provider || "").trim().toLowerCase();
+        if (provider === state.pendingProvider) {
+          finishDefaultProviderSwitch({ requestId: state.pendingRequestId, provider });
+        }
       }
 
       function finishDefaultProviderSwitch({ requestId = "", provider = "", ok = true, message = "" } = {}) {
@@ -8143,10 +8259,12 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
         const migration = codexProviderSwitchMenuState.migration;
         if (ok) {
           settings.default_provider = confirmed;
+          if (settings.provider_gateway?.active) settings.provider_gateway.default_provider = confirmed;
           if (settingsProviderDraft) settingsProviderDraft.appProvider = confirmed;
         }
         codexProviderSwitchMenuState.pendingProvider = "";
         codexProviderSwitchMenuState.pendingRequestId = "";
+        codexProviderSwitchMenuState.pendingGatewayDefault = null;
         codexProviderSwitchMenuState.refreshPendingRequestId = "";
         codexProviderSwitchMenuState.migration = null;
         syncCodexCliQuickLaunchMenu();
@@ -8352,7 +8470,7 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
             || settings.app_provider
             || ""
         ).trim().toLowerCase();
-        const activeSession = String(currentPayload()?.activeSessionProvider || "").trim().toLowerCase();
+        const activeSession = codexProviderSwitchSessionContext().provider;
         if (!label?.isConnected || !providers.length) {
           closeCodexProviderSwitchMenu();
           return;
@@ -8368,7 +8486,18 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
           document.body.appendChild(surface);
           codexProviderSwitchMenuState.surface = surface;
         }
-        surface.innerHTML = providers.map((provider) => {
+        const gatewayActive = !!settings.provider_gateway?.active;
+        const gatewayRow = `
+          <button type="button" role="menuitemcheckbox" tabindex="-1" aria-checked="${gatewayActive}" data-codex-usage-hud-provider-gateway-toggle="true" title="${gatewayActive ? "HUD 请求代理已开启，点击关闭" : "HUD 请求代理已关闭，点击开启"}">
+            <span class="codex-usage-hud-provider-gateway-copy">
+              <strong>HUD 请求代理</strong>
+              <small>${gatewayActive ? "已开启 · HUD 统一转发" : "已关闭 · 直连供应商"}</small>
+            </span>
+            <span class="codex-usage-hud-provider-gateway-track" aria-hidden="true"></span>
+          </button>
+          <div class="codex-usage-hud-provider-switch-divider" role="separator"></div>
+        `;
+        surface.innerHTML = gatewayRow + providers.map((provider) => {
           const name = providerDisplayName(settings, provider);
           const current = provider === appProvider;
           const isActive = provider === activeSession;
@@ -8504,6 +8633,125 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
         return true;
       }
 
+      function closeCodexProviderGatewayDialog({ force = false } = {}) {
+        const state = codexProviderGatewayDialogState;
+        if (state.busy && !force) return;
+        state.layer?.remove();
+        state.layer = null;
+      }
+
+      function codexProviderGatewayDialogStatus(message, kind = "") {
+        const node = codexProviderGatewayDialogState.layer?.querySelector('[data-codex-provider-gateway-status="true"]');
+        if (!node) return;
+        node.textContent = String(message || "");
+        node.dataset.kind = kind;
+        node.hidden = !message;
+      }
+
+      function openCodexProviderGatewayDialog() {
+        if (codexProviderGatewayDialogState.busy) return false;
+        if (codexProviderSwitchMenuState.pendingRequestId) {
+          showDefaultProviderSwitchFeedback("正在切换供应商，请完成后再切换代理。", true);
+          return false;
+        }
+        if (hudManagementDraftsPending()) {
+          showDefaultProviderSwitchFeedback("设置中有未保存的供应商修改，请先应用或取消后再切换代理。", true);
+          return false;
+        }
+        ensureCodexCliQuickLaunchMenuStyle();
+        closeCodexProviderGatewayDialog();
+        const settings = hudSettingsFromPayload();
+        const enabled = !settings.provider_gateway?.active;
+        const layer = document.createElement("div");
+        layer.dataset.codexProviderGatewayLayer = "true";
+        layer.setAttribute("role", "dialog");
+        layer.setAttribute("aria-modal", "true");
+        layer.setAttribute("aria-label", `${enabled ? "开启" : "关闭"} HUD 请求代理`);
+        const selection = enabled ? "" : hudDirectProviderSelection(settings);
+        layer.innerHTML = `
+          <div class="codex-usage-hud-provider-migrate-surface" data-gateway-target="${enabled ? "on" : "off"}">
+            <div class="codex-usage-hud-provider-migrate-head">
+              <strong>${enabled ? "开启" : "关闭"} HUD 请求代理</strong>
+              <button type="button" data-codex-provider-gateway-dismiss="true" aria-label="关闭" title="关闭">×</button>
+            </div>
+            <div class="codex-usage-hud-provider-migrate-body">
+              ${enabled
+                ? "由 HUD 本机网关统一转发供应商请求，并按会话保留供应商路由。开启前会备份当前配置。"
+                : "恢复所选供应商的直连配置，HUD 界面和用量统计继续运行。请先等待正在生成的回复完成。"}
+            </div>
+            ${selection ? `<div class="codex-usage-hud-provider-gateway-field">${selection}</div>` : ""}
+            <p class="codex-usage-hud-provider-gateway-note">新会话生效，无需重启；已打开的窗口如无法发送，请重新打开 Codex。</p>
+            <div class="codex-usage-hud-provider-gateway-status" data-codex-provider-gateway-status="true" role="status" aria-live="polite" hidden></div>
+            <div class="codex-usage-hud-provider-migrate-actions">
+              <button type="button" data-codex-provider-gateway-dismiss="true" data-variant="ghost">取消</button>
+              <button type="button" data-codex-provider-gateway-confirm="true" data-enabled="${enabled}" data-primary="true">${enabled ? "开启代理" : "关闭代理"}</button>
+            </div>
+          </div>
+        `;
+        layer.addEventListener("click", (event) => {
+          if (event.target === layer || event.target?.closest?.('[data-codex-provider-gateway-dismiss="true"]')) {
+            event.preventDefault();
+            event.stopPropagation();
+            closeCodexProviderGatewayDialog();
+            return;
+          }
+          const confirm = event.target?.closest?.('[data-codex-provider-gateway-confirm="true"]');
+          if (confirm) {
+            event.preventDefault();
+            event.stopPropagation();
+            void toggleCodexProviderGateway(confirm.dataset.enabled === "true");
+          }
+        });
+        document.body.appendChild(layer);
+        codexProviderGatewayDialogState.layer = layer;
+        layer.querySelector('[data-codex-provider-gateway-confirm="true"]')?.focus?.();
+        return true;
+      }
+
+      async function toggleCodexProviderGateway(enabled) {
+        const state = codexProviderGatewayDialogState;
+        const layer = state.layer;
+        if (!layer || state.busy) return;
+        const provider = String(layer.querySelector('[data-provider-exit-selection="true"]')?.value || "");
+        if (!enabled && !provider) {
+          codexProviderGatewayDialogStatus("请选择关闭代理后使用的供应商。", "error");
+          return;
+        }
+        state.busy = true;
+        layer.dataset.busy = "true";
+        layer.querySelectorAll("button, select").forEach((node) => { node.disabled = true; });
+        codexProviderGatewayDialogStatus(enabled ? "正在开启代理…" : "正在保存直连配置并关闭代理…");
+        try {
+          const result = await codexGatewayCommand({ action: "providerGatewayToggle", enabled, provider });
+          const settings = currentPayload()?.settings;
+          if (settings && typeof settings === "object") {
+            settings.provider_gateway_enabled = result.enabled === true;
+            settings.provider_gateway = { ...(settings.provider_gateway || {}), active: result.gateway === true };
+            if (result.gateway !== true && provider) settings.default_provider = provider;
+          }
+          state.busy = false;
+          closeCodexProviderGatewayDialog({ force: true });
+          syncCodexCliQuickLaunchMenu();
+          if (codexProviderSwitchMenuState.open) renderCodexProviderSwitchMenu();
+          // Best effort: drop prewarmed threads so the next chat reads the new route.
+          refreshCodexProviderRuntime().catch((error) => {
+            console.warn("[Codex HUD] Gateway runtime refresh failed", error);
+          });
+          showDefaultProviderSwitchFeedback(
+            result.gateway === true
+              ? "HUD 请求代理已开启，新会话将通过 HUD 转发。"
+              : `HUD 请求代理已关闭，新会话直连「${providerDisplayName(hudSettingsFromPayload(), provider)}」。`,
+            false,
+            true,
+          );
+        } catch (error) {
+          state.busy = false;
+          layer.dataset.busy = "false";
+          layer.querySelectorAll("button, select").forEach((node) => { node.disabled = false; });
+          codexProviderGatewayDialogStatus(`无法切换代理：${error?.message || error}`, "error");
+        }
+      }
+
       function closeCodexProviderMigrateDialog() {
         const state = codexProviderMigrateDialogState;
         state.layer?.remove();
@@ -8583,10 +8831,11 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
               ${closeButton}
             </div>
             <div class="codex-usage-hud-provider-migrate-body">
-              当前会话使用「${escapeHtml(activeName)}」。是否复制会话并使用「${escapeHtml(targetName)}」继续？副本标题以「(复制)」开头，原会话保留。取消后不会更改当前会话的供应商。
+              当前会话使用「${escapeHtml(activeName)}」。仅切换会将默认供应商改为「${escapeHtml(targetName)}」，不复制会话，当前会话保持原供应商。也可复制会话并使用「${escapeHtml(targetName)}」继续，副本标题以「(复制)」开头，原会话保留。
             </div>
             <div class="codex-usage-hud-provider-migrate-actions">
               <button type="button" data-codex-provider-migrate-dismiss="true" data-variant="ghost">取消</button>
+              <button type="button" data-codex-provider-migrate-switch-only="true">仅切换</button>
               <button type="button" data-codex-provider-migrate-run="true" data-primary="true">复制并使用 ${escapeHtml(targetName)}</button>
             </div>
           </div>
@@ -9008,6 +9257,23 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
         });
       }
 
+      function switchCodexProviderOnly() {
+        const state = codexProviderMigrateDialogState;
+        if (state.busy || state.result || !state.layer) return;
+        const provider = String(state.targetProvider || "").trim().toLowerCase();
+        if (!provider) return;
+        const requestId = typedSettingsRequestId("provider-set-default");
+        if (!beginDefaultProviderSwitch({ provider, requestId })) return;
+        const name = providerDisplayName(hudSettingsFromPayload(), provider);
+        closeCodexProviderMigrateDialog();
+        const submitted = submitSettingsCommand(
+          { action: "providerSetDefault", provider, requestId },
+          `正在切换默认供应商到「${name}」...`,
+          { preserveOverlay: true, quiet: true },
+        );
+        if (!submitted) finishDefaultProviderSwitch({ requestId, ok: false });
+      }
+
       function bindCodexProviderMigrateDialogClicks() {
         const layer = codexProviderMigrateDialogState.layer;
         if (!layer) return;
@@ -9026,12 +9292,33 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
             closeCodexProviderMigrateDialog();
             return;
           }
+          if (event.target?.closest?.('[data-codex-provider-migrate-switch-only="true"]')) {
+            event.preventDefault();
+            event.stopPropagation();
+            switchCodexProviderOnly();
+            return;
+          }
           if (event.target?.closest?.('[data-codex-provider-migrate-run="true"]')) {
             event.preventDefault();
             event.stopPropagation();
             startCodexProviderMigrate();
           }
         });
+      }
+
+      function codexProviderSwitchSessionContext() {
+        const payload = currentPayload() || {};
+        const live = typeof readActiveSessionRef === "function" ? readActiveSessionRef() : null;
+        // A live empty selection must clear the previous HUD snapshot, even
+        // when new-chat chrome has not supplied an explicit newSession flag.
+        const ref = live || payload;
+        const sessionId = ref.newSession || ref.pendingSession ? "" : String(ref.sessionId || "").trim();
+        const reading = !!sessionId && !!live && sessionId !== String(payload.sessionId || "").trim();
+        return {
+          sessionId,
+          provider: !sessionId || reading ? "" : String(payload.activeSessionProvider || "").trim().toLowerCase(),
+          reading,
+        };
       }
 
       function handleCodexCliQuickLaunchMenuClick(event) {
@@ -9082,6 +9369,14 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
           return;
         }
         const providerSwitchItem = event.target?.closest?.('[data-codex-usage-hud-provider-switch="true"]');
+        const gatewayToggle = event.target?.closest?.('[data-codex-usage-hud-provider-gateway-toggle="true"]');
+        if (gatewayToggle && codexProviderSwitchMenuState.surface?.contains(gatewayToggle)) {
+          event.preventDefault();
+          event.stopPropagation();
+          closeCodexProviderSwitchMenu();
+          openCodexProviderGatewayDialog();
+          return;
+        }
         if (providerSwitchItem && codexProviderSwitchMenuState.surface?.contains(providerSwitchItem)) {
           event.preventDefault();
           event.stopPropagation();
@@ -9089,15 +9384,13 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
           closeCodexProviderSwitchMenu();
           if (!provider) return;
           const settings = hudSettingsFromPayload();
-          const payload = currentPayload() || {};
-          const live = typeof readActiveSessionRef === "function" ? readActiveSessionRef() : null;
-          const newSession = live?.newSession || live?.pendingSession || payload.newSession || payload.pendingSession;
-          if (!newSession && live?.sessionId && live.sessionId !== payload.sessionId) {
+          const session = codexProviderSwitchSessionContext();
+          if (session.reading) {
             showDefaultProviderSwitchFeedback("正在读取当前会话供应商，请稍后再选择。", true);
             return;
           }
-          const activeProvider = newSession ? "" : String(payload.activeSessionProvider || "").trim().toLowerCase();
-          const activeSessionId = newSession ? "" : String(payload.sessionId || "").trim();
+          const activeProvider = session.provider;
+          const activeSessionId = session.sessionId;
           const name = providerDisplayName(settings, provider);
           if (codexProviderSwitchMenuState.pendingRequestId) return;
           const requestId = typedSettingsRequestId("provider-set-default");
@@ -9139,13 +9432,11 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
       }
 
       function codexCliQuickLaunchProviderLabelState() {
-        const payload = currentPayload() || {};
-        const live = typeof readActiveSessionRef === "function" ? readActiveSessionRef() : null;
-        const newSession = live?.newSession || live?.pendingSession || payload.newSession || payload.pendingSession;
-        const active = newSession || (live?.sessionId && live.sessionId !== payload.sessionId)
-          ? "" : String(payload.activeSessionProvider || "").trim().toLowerCase();
+        const active = codexProviderSwitchSessionContext().provider;
         const pending = String(codexProviderSwitchMenuState.pendingProvider || "")
           .trim().toLowerCase();
+        const gateway = !!hudSettingsFromPayload()?.provider_gateway?.active;
+        const gatewayTitle = gateway ? "（HUD 请求代理已开启）" : "";
         // config.toml 顶层 model_provider 的稳定默认（新会话默认供应商）；
         // app_provider 会被活跃会话供应商观察覆盖，不能作为「默认」展示。
         const fallback = String(
@@ -9163,12 +9454,14 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
             provider: active,
             mismatch,
             switching: !!pending,
-            text: `供应商 ${activeName}`,
-            title: pending
+            gateway,
+            text: activeName,
+            suffix: "",
+            title: (pending
               ? `正在切换默认供应商为：${fallbackName}`
               : mismatch
               ? `当前会话供应商：${activeName}（新会话默认：${fallbackName}）`
-              : `当前会话供应商：${activeName}`,
+              : `当前会话供应商：${activeName}`) + gatewayTitle,
           };
         }
         if (fallback) {
@@ -9177,10 +9470,12 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
             provider: fallback,
             mismatch: false,
             switching: !!pending,
-            text: pending ? `正在切换 ${fallbackName}…` : `供应商 ${fallbackName}（默认）`,
-            title: pending
+            gateway,
+            text: pending ? `正在切换 ${fallbackName}…` : fallbackName,
+            suffix: pending ? "" : "默认",
+            title: (pending
               ? `正在切换默认供应商为：${fallbackName}`
-              : `默认供应商：${fallbackName}（当前无活跃会话）`,
+              : `默认供应商：${fallbackName}（当前无活跃会话）`) + gatewayTitle,
           };
         }
         return null;
@@ -9205,7 +9500,6 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
           label.dataset.state = "closed";
           const template = menubar.querySelector('button[role="menuitem"][aria-haspopup="menu"]');
           label.className = `${template?.className || ""} codex-usage-hud-cli-provider-label`.trim();
-          label.setAttribute("aria-label", "当前会话供应商，点击切换");
         }
         codexProviderSwitchMenuState.toggle = label;
         // The body-wide MutationObserver re-runs this sync on every DOM write,
@@ -9222,18 +9516,21 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
             menubar.insertBefore(label, anchor);
           }
         }
-        if (
-          label.dataset.provider !== state.provider
-          || label.dataset.mismatch !== String(state.mismatch)
-          || label.dataset.switching !== String(state.switching)
-          || label.textContent !== state.text
-          || label.title !== state.title
-        ) {
+        const signature = JSON.stringify([
+          state.provider, state.mismatch, state.switching, !!state.gateway,
+          state.text, state.suffix || "", state.title,
+        ]);
+        if (label.dataset.signature !== signature) {
+          label.dataset.signature = signature;
           label.dataset.provider = state.provider;
           label.dataset.mismatch = String(state.mismatch);
           label.dataset.switching = String(state.switching);
-          label.textContent = state.text;
+          label.dataset.gateway = String(!!state.gateway);
+          label.innerHTML = `<span class="codex-usage-hud-cli-provider-name">${escapeHtml(state.text)}</span>${
+            state.suffix ? `<small class="codex-usage-hud-cli-provider-suffix">${escapeHtml(state.suffix)}</small>` : ""
+          }`;
           label.title = state.title;
+          label.setAttribute("aria-label", `${state.title}，点击切换供应商或代理`);
         }
       }
 
@@ -9330,6 +9627,11 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
         }, true);
         ctx.lifecycle.listen("codex_cli_quick_launch_menu", document, "keydown", (event) => {
           if (event.key !== "Escape") return;
+          if (codexProviderGatewayDialogState.layer) {
+            event.preventDefault();
+            closeCodexProviderGatewayDialog();
+            return;
+          }
           if (codexProviderMismatchState.layer) {
             event.preventDefault();
             closeCodexProviderMismatchDialog();
@@ -9392,6 +9694,8 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
 
       function disposeCodexCliQuickLaunchMenu() {
         disposeGatewayResumeAdapter();
+        closeCodexProviderGatewayDialog({ force: true });
+        codexProviderGatewayDialogState.busy = false;
         closeCodexProviderMismatchDialog();
         codexProviderMismatchState.requestId = "";
         codexProviderMismatchState.attempt = null;
@@ -9565,8 +9869,6 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
       copyPricingExample,
       restartHudFromModal,
       openSettingsManagement,
-      openSettingsGatewayConfirm,
-      toggleSettingsGateway,
       openSettingsReloadConfirm,
       reloadHudFromModal,
       restartCodexFromModal,
@@ -9723,8 +10025,6 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
     copyPricingExample,
     restartHudFromModal,
     openSettingsManagement,
-    openSettingsGatewayConfirm,
-    toggleSettingsGateway,
     openSettingsReloadConfirm,
     reloadHudFromModal,
     restartCodexFromModal,

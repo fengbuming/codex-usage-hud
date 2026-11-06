@@ -59,6 +59,7 @@ class SettingsBridgeServer:
         self._server: ThreadingHTTPServer | None = None
         self._thread: Thread | None = None
         self.url = ""
+        self.renderer_ready_callback: Callable[[], bool] | None = None
 
     def start(self) -> str:
         if self._server is not None:
@@ -131,6 +132,7 @@ class SettingsBridgeServer:
 
     def _handler_type(self) -> type[BaseHTTPRequestHandler]:
         store = self.store
+        renderer_ready_callback = self.renderer_ready_callback
         restart_callback = self.restart_callback
         command_callback = self.command_callback
         active_session_callback = self.active_session_callback
@@ -157,7 +159,10 @@ class SettingsBridgeServer:
             def do_GET(self) -> None:
                 parsed = urlparse(self.path)
                 if parsed.path == "/health":
-                    self._send_json({"status": "ok", "pid": os.getpid()})
+                    health = {"status": "ok", "pid": os.getpid()}
+                    if callable(renderer_ready_callback):
+                        health["rendererReady"] = bool(renderer_ready_callback())
+                    self._send_json(health)
                     return
                 if parsed.path == "/settings":
                     self._send_config(store.load(), "ok", "settings loaded")

@@ -16423,7 +16423,7 @@ class DaemonLifecycleTests(unittest.TestCase):
                 patch("codex_usage_hud.renderer_runtime.wait_for_renderer", return_value=False),
                 patch(
                     "codex_usage_hud.runtime_orchestration._validate_renderer_cdp_candidate",
-                    return_value=(True, ""),
+                    return_value=(False, "TimeoutError: temporary discovery timeout"),
                 ),
                 patch("codex_usage_hud.loading_feedback._create_loading_feedback") as create_loading,
                 patch("codex_usage_hud.runtime_orchestration.hud_runtime_dir", return_value=temp_root),
@@ -16446,7 +16446,7 @@ class DaemonLifecycleTests(unittest.TestCase):
         fake_updates.close.assert_called_once()
         fake_context.close.assert_called_once()
 
-    def test_existing_codex_daemon_attach_uses_one_short_startup_probe(self) -> None:
+    def test_existing_codex_daemon_attach_uses_bounded_startup_retries(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_root = Path(temp_dir)
             fake_context = SimpleNamespace(
@@ -16512,6 +16512,8 @@ class DaemonLifecycleTests(unittest.TestCase):
             runtime_orchestration.RENDERER_CDP_TIMEOUT_SECONDS,
         )
         wait_renderer.assert_called_once()
+        self.assertTrue(wait_renderer.call_args.kwargs["retry_until_ready"])
+        self.assertGreaterEqual(wait_renderer.call_args.kwargs["timeout_seconds"], 5.0)
         wait_window.assert_not_called()
         fake_client.close.assert_called_once()
         fake_bridge.close.assert_called_once()

@@ -258,6 +258,26 @@ assert.equal(settings.default_provider, 'slow');
 assert.match([...layers][0].innerHTML, /暂未收到/);
 clearDefaultProviderSwitchFeedback();
 assert.equal(layers.size, 0);
+// If the one-shot command ack is lost, the persisted gateway route is enough
+// to confirm the pending switch without config/read or clearing prewarm.
+settings.provider_gateway = {active:true,default_provider:'old-route'};
+beginDefaultProviderSwitch({provider:'new-route',requestId:'route'});
+const routePayload = provider => ({settings:{provider_gateway:{active:true,default_provider:provider}}});
+reconcileDefaultProviderSwitch(routePayload('old-route'));
+assert.equal(codexProviderSwitchMenuState.pendingRequestId,'route','stale snapshot cannot confirm');
+reconcileDefaultProviderSwitch({settings:{provider_gateway:{active:false,default_provider:'new-route'}}});
+assert.equal(codexProviderSwitchMenuState.pendingRequestId,'route');
+reconcileDefaultProviderSwitch(routePayload('new-route'));
+assert.equal(codexProviderSwitchMenuState.pendingRequestId,'');
+assert.equal(settings.default_provider,'new-route');assert.equal(timers.size,0);
+assert.equal(layers.size,0);
+// A same-route snapshot predating the command cannot hide a command failure.
+beginDefaultProviderSwitch({provider:'new-route',requestId:'same-route'});
+reconcileDefaultProviderSwitch(routePayload('new-route'));
+assert.equal(codexProviderSwitchMenuState.pendingRequestId,'same-route');
+finishDefaultProviderSwitch({requestId:'same-route',ok:false,message:'route failed'});
+assert.match([...layers][0].innerHTML,/route failed/);
+clearDefaultProviderSwitchFeedback();
 console.log('provider switch lifecycle ok');
 '''
     path = tmp_path / "provider_switch.js"
@@ -294,6 +314,10 @@ function apply(status) {
   await new Promise(setImmediate);
   assert.equal(finished[1].ok, false); assert.match(finished[1].message, /重试切换/);
   assert(!finished[1].message.includes('unsupported-build'), 'implementation errors belong in diagnostics');
+  apply({...status,requestId:'gateway',providerSetDefault:{gateway:true}});
+  assert.equal(calls,2,'gateway ack must never refresh native config or prewarm');
+  assert.equal(finished.at(-1).requestId,'gateway');
+  assert.equal(finished.at(-1).ok,true);
 })().catch(e => { console.error(e); process.exitCode=1; });
 '''
     path = tmp_path / "provider_ack.js"
