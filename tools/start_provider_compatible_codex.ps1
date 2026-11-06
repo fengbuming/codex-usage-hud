@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-Start the installed Codex UI with the locally installed 0.162.1 core.
+Start the installed Codex UI with a verified provider-compatible core.
 
 .DESCRIPTION
 Temporary workaround for the modelProviderMismatch regression verified with
@@ -25,12 +25,12 @@ if (-not $CodexCliPath) {
     $CodexCliPath = Join-Path $env:APPDATA 'npm\node_modules\@openai\codex\node_modules\@openai\codex-win32-x64\vendor\x86_64-pc-windows-msvc\bin\codex.exe'
 }
 if (-not (Test-Path -LiteralPath $CodexCliPath -PathType Leaf)) {
-    throw 'The local compatibility core was not found. Supply -CodexCliPath; this script does not download or replace Codex.'
+    throw 'The local compatibility core was not found. Supply -CodexCliPath; see PROVIDER_COMPATIBILITY.md for an isolated 0.165.0 installation.'
 }
 $CodexCliPath = (Resolve-Path -LiteralPath $CodexCliPath).Path
 $coreVersion = (& $CodexCliPath --version | Out-String).Trim()
-if ($LASTEXITCODE -ne 0 -or $coreVersion -ne 'codex-cli 0.162.1') {
-    throw "This workaround was verified with codex-cli 0.162.1. Found: $coreVersion"
+if ($LASTEXITCODE -ne 0 -or $coreVersion -notin @('codex-cli 0.162.1', 'codex-cli 0.165.0')) {
+    throw "This workaround accepts verified codex-cli 0.162.1 or 0.165.0. Found: $coreVersion"
 }
 
 # Both executable names have shipped as the Codex desktop application.

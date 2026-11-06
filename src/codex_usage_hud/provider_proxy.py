@@ -612,6 +612,23 @@ class DetachedProviderProxyRelay(ProviderProxyRelay):
 
         activate_gateway(config_path, self)
 
+    def restore_legacy_routes(self, config_path: Path) -> None:
+        """Warm committed private URLs without opting into gateway takeover."""
+        from . import codex_provider_config as config
+
+        # Do not rewrite config or mint tokens. Old windows can retain any of
+        # these endpoints even when the current provider now uses the gateway.
+        for definition in config.read_provider_definitions(config_path).values():
+            metadata = proxy_metadata(definition.section_text)
+            for route in [*metadata.get("previous_routes", []), metadata]:
+                if route.get("token"):
+                    try:
+                        self.route({key: route[key] for key in
+                                    ("base_url", "enabled", "port", "token", "model", "models")
+                                    if key in route}, config_path)
+                    except (OSError, RuntimeError, ValueError, http.client.HTTPException) as exc:
+                        _LOGGER.warning("provider_legacy_route_restore_failed error=%s", type(exc).__name__)
+
     def gateway_route(self, metadata: dict, config_path: Path) -> str:
         from .provider_proxy_service import ProviderProxyServiceClient
         from .runtime_paths import runtime_file_path

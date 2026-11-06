@@ -67,8 +67,11 @@ class SettingsBridgeServer:
         from .codex_provider_config import default_codex_config_path
         from .provider_proxy import provider_proxy_relay
 
-        if self.manage_provider_proxy and self.store.load().provider_gateway_enabled:
-            provider_proxy_relay.activate(default_codex_config_path())
+        if self.manage_provider_proxy:
+            path = default_codex_config_path()
+            provider_proxy_relay.restore_legacy_routes(path)
+            if self.store.load().provider_gateway_enabled:
+                provider_proxy_relay.activate(path)
         handler = self._handler_type()
         try:
             self._server = ThreadingHTTPServer((self.host, self.port), handler)

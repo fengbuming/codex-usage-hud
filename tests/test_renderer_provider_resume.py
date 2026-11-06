@@ -25,6 +25,11 @@ const reads=[], writes=[], layers=new Set(), cliProviders=[];
 const codexProviderMismatchState={layer:null,context:null,attempt:null,checking:false,requestId:'',seen:new WeakMap()};
 const codexProviderSwitchMenuState={pendingRequestId:'',pendingProvider:'',migration:null};
 const settings={default_provider:'crab-ai'};
+const helpRequests=[];
+async function codexGatewayCommand(command) {
+  helpRequests.push(command);
+  return {version:'0.165.0',installCommand:'npm install isolated-core',launchCommand:'hud --provider-compatible-codex isolated-core'};
+}
 const settingsProviderDraft=null;
 const rootId='hud';
 function syncCodexCliQuickLaunchMenu() {}
@@ -173,6 +178,20 @@ function reset() {
   assert.equal(codexProviderMismatchState.checking,false);assert(pending);
   const last=writes.length;await finish();assert.equal(writes.length,last,'single confirmation must not restore old default');
   reset();assert.equal(timers.size,0);assert.equal(layers.size,0);
+  settings.provider_gateway={active:true,provider_id:'codex_hud'};
+  openCodexProviderMismatchDialog({provider:'custom',currentProvider:'codex_hud'});
+  assert.match(codexProviderMismatchState.layer.innerHTML,/手动兼容启动说明/);
+  const writesBefore=writes.length,readsBefore=reads.length,retriesBefore=retryCount;
+  await confirmCodexProviderMismatchSwitch();
+  assert.deepEqual(helpRequests,[{action:'providerCompatibilityHelp'}]);
+  assert.match(codexProviderMismatchState.layer.innerHTML,/0.165.0/);
+  assert.match(codexProviderMismatchState.layer.innerHTML,/关闭所有 Codex 窗口/);
+  assert.match(codexProviderMismatchState.layer.innerHTML,/安装兼容核心命令/);
+  assert.match(codexProviderMismatchState.layer.innerHTML,/只有这次启动/);
+  assert.equal(writes.length,writesBefore,'gateway fallback must not pretend a route switch fixes native identity');
+  assert.equal(reads.length,readsBefore,'manual fallback must not resume or restart the app');
+  assert.equal(retryCount,retriesBefore,'manual help must not resend a draft');
+  closeCodexProviderMismatchDialog();
 })().catch(error=>{console.error(error);process.exitCode=1;});
 '''
     result = subprocess.run(
@@ -212,6 +231,7 @@ const ctx={lifecycle:{listen(...args){listeners.push(args);}},observers:{
   clear(key){assert.equal(key,'codex_cli_quick_launch_menu');disconnected++;}
 }};
 const codexProviderSwitchMenuState={},codexCliQuickLaunchMenuState={};
+const codexProviderGatewayDialogState={busy:true};
 const codexProviderMismatchState={requestId:'pending',attempt:{}};
 function ensureCodexCliQuickLaunchMenuStyle(){}
 function captureCodexProviderMismatchAttempt(){}
@@ -219,7 +239,8 @@ function handleCodexCliQuickLaunchMenuClick(){}
 function syncCodexCliQuickLaunchMenu(){}
 function observeCodexProviderMismatchErrors(records){scans.push(records);}
 function closeCodexProviderMismatchDialog(){closed++;}
-function disposeGatewayResumeAdapter(){}
+function disposeGatewayCommands(){}
+function closeCodexProviderGatewayDialog(){}
 function clearDefaultProviderSwitchFeedback(){}
 function closeCodexCliQuickLaunchMenu(){}
 function closeCodexProviderSwitchMenu(){}

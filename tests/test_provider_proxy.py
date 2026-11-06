@@ -224,6 +224,33 @@ def test_activate_migrates_direct_provider_but_warms_existing_route(tmp_path):
     route.assert_called_once()
 
 
+def test_startup_restores_current_and_previous_legacy_urls_without_takeover(tmp_path):
+    path = tmp_path / "config.toml"
+    metadata = {"base_url":"https://current.example/v1", "enabled":True,
+                "port":7897, "token":"current-private", "model":"pinned-model",
+                "previous_routes":[{"base_url":"https://old.example/v1", "token":"old-private"}]}
+    path.write_text('model_provider="demo"\n[model_providers.demo]\n'
+                    'base_url="http://127.0.0.1:57323/current-private/v1"\n'
+                    '# codex-hud-proxy: ' + json.dumps(metadata) + '\n', encoding="utf-8")
+    original = path.read_bytes()
+    relay = DetachedProviderProxyRelay()
+    with patch.object(relay, "route") as route, patch.object(relay, "gateway_route") as gateway:
+        relay.restore_legacy_routes(path)
+    assert [call.args[0]["token"] for call in route.call_args_list] == ["old-private", "current-private"]
+    assert route.call_args.args[0]["model"] == "pinned-model"
+    gateway.assert_not_called()
+    assert path.read_bytes() == original
+
+
+def test_legacy_restore_does_not_create_routes_for_plain_providers(tmp_path):
+    path = tmp_path / "config.toml"
+    path.write_text('[model_providers.demo]\nbase_url="https://direct.example/v1"\n', encoding="utf-8")
+    relay = DetachedProviderProxyRelay()
+    with patch.object(relay, "route") as route:
+        relay.restore_legacy_routes(path)
+    route.assert_not_called()
+
+
 def test_direct_provider_save_switch_clone_and_activation_need_no_helper(tmp_path):
     path = tmp_path / "config.toml"
     path.write_text(

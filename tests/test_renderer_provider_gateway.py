@@ -10,44 +10,29 @@ def run_js(script):
     assert result.returncode == 0, result.stdout + result.stderr
 
 
-def test_resume_uses_saved_identity_and_waits_for_binding_then_disposes():
+def test_gateway_commands_leave_read_only_rpc_stub_untouched_and_dispose():
     start = TEXT.index("      const gatewayCommandRequests = new Map();")
     end = TEXT.index("      function codexCliLaunchStateKey(", start)
+    assert "manager.sendRequest =" not in TEXT
     run_js(r'''
 const assert = require('node:assert/strict');
-const timers = new Map(), commands = [], rpc = [];
-let serial = 0, release, saved = 'legacy', auto = false;
-const window = {setTimeout(fn){const id=++serial;timers.set(id,fn);return id;},clearTimeout(id){timers.delete(id);}};
-const settings = {provider_gateway:{active:true,provider_id:'codex_hud'}};
-function hudSettingsFromPayload(){return settings;}
+const timers = new Map(), commands=[];let serial=0;
+const window={setTimeout(fn){const id=++serial;timers.set(id,fn);return id;},clearTimeout(id){timers.delete(id);}};
 function typedSettingsRequestId(){return String(++serial);}
-function submitSettingsCommand(command){commands.push(command);if(auto)queueMicrotask(()=>applyGatewayCommandStatus({requestId:command.requestId,providerGateway:{}}));return true;}
-const manager = {async sendRequest(method, params){rpc.push({method,params});if(method==='thread/read')return {thread:{modelProvider:saved}};return {thread:{id:params?.threadId}};}};
-const original = manager.sendRequest;
-function resolveCodexProviderRuntime(){return Promise.resolve({manager});}
-const tick = () => new Promise(setImmediate);
+function submitSettingsCommand(command){commands.push(command);return true;}
+const original=async()=>({thread:{modelProvider:'alpha'}});
+const manager=new Proxy({sendRequest:original},{set(){throw new Error("Can't assign properties on RPC stubs");}});
 ''' + TEXT[start:end] + r'''
 (async()=>{
-  installGatewayResumeAdapter();installGatewayResumeAdapter();await tick();
-  const resumed = manager.sendRequest('thread/resume',{threadId:'source',modelProvider:'codex_hud',config:{custom:true}});
-  await tick();
-  assert.equal(commands.length,1);
-  assert.equal(commands[0].provider,'legacy');assert.equal(commands[0].preserveExisting,true);
-  assert.equal(rpc.filter(x=>x.method==='thread/resume').length,0,'binding must finish first');
-  applyGatewayCommandStatus({requestId:'stale',providerGateway:{}});
-  assert.equal(timers.size,1);
-  applyGatewayCommandStatus({requestId:commands[0].requestId,providerGateway:{providerId:'target'}});
-  await resumed;
-  assert.deepEqual(rpc.at(-1).params,{threadId:'source',modelProvider:'legacy',config:{custom:true,model_provider:'legacy'}});
+  const pending=codexGatewayCommand({action:'providerCompatibilityHelp'});
+  applyGatewayCommandStatus({requestId:commands[0].requestId,providerCompatibility:{version:'0.165.0'}});
+  assert.equal((await pending).version,'0.165.0');
+  assert.equal(manager.sendRequest,original);
+  assert.equal((await manager.sendRequest()).thread.modelProvider,'alpha');
+  const canceled=codexGatewayCommand({action:'providerBindSession'});
+  const rejected=assert.rejects(canceled,/HUD 已关闭/);
+  disposeGatewayCommands();await rejected;
   assert.equal(timers.size,0);
-  saved='';await assert.rejects(manager.sendRequest('thread/resume',{threadId:'missing'}),/无法确认/);
-  assert.equal(rpc.filter(x=>x.method==='thread/resume').length,1);
-  settings.provider_gateway.active=false;
-  await manager.sendRequest('thread/resume',{threadId:'direct',modelProvider:'beta'});
-  assert.equal(rpc.at(-1).params.modelProvider,'beta');
-  const pending=codexGatewayCommand({action:'providerBindSession'});const rejected=assert.rejects(pending,/HUD 已关闭/);
-  disposeGatewayResumeAdapter();await rejected;
-  assert.equal(manager.sendRequest,original);assert.equal(timers.size,0);
 })().catch(error=>{console.error(error);process.exitCode=1;});
 ''')
 

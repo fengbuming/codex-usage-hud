@@ -207,7 +207,13 @@ def select_provider(provider: str, *, config_path: Path | None = None, thread_id
                 raise ValueError("已有会话不能原地更换供应商，请先复制会话。")
             if copied_from and (not canonical_thread_id(copied_from) or copied_from == thread_id):
                 raise ValueError("复制会话标识无效。")
-            historical = _historical_provider(path, thread_id, before=int(info.get("activated_at", 0)))
+            # Only an explicitly requested fresh copy may change its saved
+            # native identity. Direct chats created while takeover was disabled
+            # remain owned by their native provider regardless of creation time.
+            historical = _historical_provider(
+                path, thread_id,
+                before=int(info.get("activated_at", 0)) if copied_from else 0,
+            )
             if historical and historical not in {PROVIDER_ID, provider}:
                 raise ValueError("历史会话必须使用原供应商，请先复制会话。")
             db.execute("INSERT OR IGNORE INTO sessions VALUES (?, ?)", (thread_id, provider))
@@ -237,11 +243,13 @@ def resolve_route(path: Path, headers: Mapping, *, generation: bool) -> dict:
         row = db.execute("SELECT provider FROM sessions WHERE id = ?", (thread_id,)).fetchone() if thread_id else None
         provider = str(row[0]) if row else ""
         if not provider:
-            historical = _historical_provider(path, thread_id, before=int(info.get("activated_at", 0))) if thread_id else ""
+            historical = _historical_provider(path, thread_id) if thread_id else ""
             parent = _parent_thread_id(path, thread_id) if thread_id else ""
             parent_row = db.execute("SELECT provider FROM sessions WHERE id = ?", (parent,)).fetchone() if parent else None
-            inherited = str(parent_row[0]) if parent_row else ""
-            provider = (historical if historical != PROVIDER_ID else "") or inherited or info["default_provider"]
+            inherited = str(parent_row[0]) if parent_row else (_historical_provider(path, parent) if parent else "")
+            if inherited == PROVIDER_ID:
+                inherited = ""
+            provider = inherited or (historical if historical != PROVIDER_ID else "") or info["default_provider"]
         definitions = config.read_provider_definitions(path)
         route = _provider_route(path, provider, definitions)
         if generation and thread_id and not row:

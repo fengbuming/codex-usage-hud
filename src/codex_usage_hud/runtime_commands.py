@@ -1459,6 +1459,10 @@ def handle_general_command(
             status["providerSetDefault"] = dict(result)
             status["providerSetDefaultProvider"] = str(provider).strip().lower()
             return status
+        if action == "providerCompatibilityHelp":
+            from .provider_compatibility import manual_instructions
+
+            return {**_status("手动兼容启动步骤已准备。"), "providerCompatibility": manual_instructions()}
         if action in {"providerBindSession", "providerPrepareExit", "providerGatewayToggle"}:
             if ports.gateway_command is None:
                 return _status("HUD 统一代理当前不可用。", kind="error")

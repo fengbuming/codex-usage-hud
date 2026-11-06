@@ -132,6 +132,41 @@ def test_concurrent_first_requests_and_later_default_change_keep_one_binding(act
     assert gateway.resolve_route(path, headers(A), generation=True)["provider"] == "alpha"
 
 
+def test_direct_chat_created_between_takeovers_keeps_native_provider(active):
+    path, relay, _ = active
+    created = gateway.gateway_info(path)["activated_at"] + 1
+    gateway.prepare_exit("beta", config_path=path)
+    state_thread(path, B, "beta", created)
+    gateway.activate_gateway(path, relay)
+    gateway.select_provider("alpha", config_path=path)
+    with pytest.raises(ValueError, match="原供应商"):
+        gateway.select_provider("alpha", config_path=path, thread_id=B)
+    route = gateway.resolve_route(path, headers(B), generation=True)
+    assert route["provider"] == "beta"
+    assert gateway.session_provider(B, config_path=path) == "beta"
+
+
+def test_recent_native_provider_is_not_replaced_when_deleted(active):
+    path, _, _ = active
+    state_thread(path, B, "missing", gateway.gateway_info(path)["activated_at"] + 1)
+    with pytest.raises(ValueError, match="已删除"):
+        gateway.resolve_route(path, headers(B), generation=True)
+    assert gateway.session_provider(B, config_path=path) == ""
+
+
+def test_subagent_of_cross_provider_copy_inherits_real_binding(active):
+    path, _, _ = active
+    state_thread(path, A, "alpha")
+    created = gateway.gateway_info(path)["activated_at"] + 1
+    state_thread(path, B, "alpha", created)
+    gateway.select_provider("beta", config_path=path, thread_id=B, copied_from=A)
+    state_thread(path, C, "alpha", created)
+    with sqlite3.connect(path.parent / "state_5.sqlite") as db:
+        db.execute("ALTER TABLE threads ADD COLUMN source TEXT")
+        db.execute("UPDATE threads SET source = ? WHERE id = ?", (json.dumps({"subAgent":{"thread_spawn":{"parent_thread_id":B}}}), C))
+    assert gateway.resolve_route(path, headers(C), generation=True)["provider"] == "beta"
+
+
 def test_missing_conflicting_ids_credentials_and_deleted_provider_do_not_fallback(active, monkeypatch):
     path, _, _ = active
     for request_headers in ({}, {**headers(A), "session_id": B}):

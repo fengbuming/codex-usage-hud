@@ -110,8 +110,6 @@ _TEXT_PREFIX = r"""
       };
       const gatewayCommandRequests = new Map();
       const codexProviderGatewayDialogState = { layer: null, busy: false };
-      let gatewayResumeAdapter = null;
-      let gatewayAdapterAttempted = false;
 
       function codexGatewayCommand(command) {
         const requestId = typedSettingsRequestId("provider-gateway");
@@ -136,46 +134,10 @@ _TEXT_PREFIX = r"""
         gatewayCommandRequests.delete(requestId);
         window.clearTimeout(request.timer);
         if (status.kind === "error") request.reject(new Error(status.message || "代理操作失败。"));
-        else request.resolve(status.developmentReload || status.providerGateway || {});
+        else request.resolve(status.developmentReload || status.providerGateway || status.providerCompatibility || {});
       }
 
-      function installGatewayResumeAdapter() {
-        if (!hudSettingsFromPayload()?.provider_gateway?.active || gatewayAdapterAttempted) return;
-        gatewayAdapterAttempted = true;
-        // Electron freezes its preload bridge. Adapt the live local manager,
-        // the same supported RPC owner used for native config refreshes.
-        resolveCodexProviderRuntime().then(async ({ manager, scope }) => {
-          if (!gatewayAdapterAttempted) return;
-          const original = manager.sendRequest;
-          const wrapped = async function(method, params, ...args) {
-            if (hudSettingsFromPayload()?.provider_gateway?.active && method === "thread/resume" && params?.threadId) {
-              const response = await original.call(this, "thread/read", { threadId: params.threadId, includeTurns: false });
-              const saved = String(response?.thread?.modelProvider || "").trim();
-              if (!saved) throw new Error("无法确认历史会话供应商，请重新打开该会话。");
-              if (saved !== hudSettingsFromPayload().provider_gateway.provider_id) {
-                await codexGatewayCommand({ action: "providerBindSession", provider: saved,
-                  sessionId: params.threadId, preserveExisting: true });
-              }
-              params = { ...params, modelProvider: saved, config: { ...(params.config || {}), model_provider: saved } };
-            }
-            return original.call(this, method, params, ...args);
-          };
-          manager.sendRequest = wrapped;
-          gatewayResumeAdapter = { manager, original, wrapped };
-          // Only takeover invalidates native prewarm. Later upstream switches
-          // are entirely internal to the gateway.
-          await scope?.queryClient?.invalidateQueries?.({ queryKey: ["user-saved-config"] });
-          await manager.clearPrewarmedThreads?.();
-        }).catch((error) => {
-          console.warn("[Codex HUD] History provider adapter unavailable", error);
-        });
-      }
-
-      function disposeGatewayResumeAdapter() {
-        const adapter = gatewayResumeAdapter;
-        if (adapter && adapter.manager.sendRequest === adapter.wrapped) adapter.manager.sendRequest = adapter.original;
-        gatewayResumeAdapter = null;
-        gatewayAdapterAttempted = false;
+      function disposeGatewayCommands() {
         gatewayCommandRequests.forEach(({ reject, timer }) => {
           window.clearTimeout(timer);
           reject(new Error("HUD 已关闭，代理操作未确认。"));
@@ -8978,6 +8940,7 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
         if (state.context?.key === key && state.layer?.isConnected) return;
         closeCodexProviderMismatchDialog();
         const settings = hudSettingsFromPayload();
+        const gateway = !!settings.provider_gateway?.active;
         const name = providerDisplayName(settings, mismatch.provider);
         const currentName = providerDisplayName(settings, mismatch.currentProvider);
         const attempt = state.attempt;
@@ -8993,14 +8956,14 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
           <div class="codex-usage-hud-provider-migrate-surface">
             <div class="codex-usage-hud-provider-migrate-head"><strong>该会话需要供应商 ${escapeHtml(name)}</strong></div>
             <div class="codex-usage-hud-provider-migrate-body">
-              当前默认供应商为「${escapeHtml(currentName)}」。是否切换到「${escapeHtml(name)}」后重试？
-              <p>这会修改所有窗口共用的默认供应商，并持续生效。已发出的请求通常不受影响；其他供应商会话后续发送可能需要切回。</p>
-              <p>通常无需重启。HUD 确认生效后会尝试重试；若草稿已变化，请手动发送。</p>
+              ${gateway
+                ? `当前 Codex 核心限制恢复使用「${escapeHtml(name)}」的历史会话。可手动重启并使用兼容核心继续，原会话与供应商绑定会保留。<p>请先等待任务结束并保存草稿。HUD 将提供安装及启动步骤，由你手动执行；也可关闭 HUD 请求代理、选择原供应商后重试。</p>`
+                : `当前默认供应商为「${escapeHtml(currentName)}」。是否切换到「${escapeHtml(name)}」后重试？<p>这会修改所有窗口共用的默认供应商，并持续生效。已发出的请求通常不受影响；其他供应商会话后续发送可能需要切回。</p><p>通常无需重启。HUD 确认生效后会尝试重试；若草稿已变化，请手动发送。</p>`}
             </div>
             <div class="codex-usage-hud-provider-migrate-actions">
               <button type="button" data-provider-mismatch-cli="true" data-variant="ghost">使用此供应商启动 CLI</button>
-              <button type="button" data-provider-mismatch-cancel="true" data-variant="ghost">暂不切换</button>
-              <button type="button" data-provider-mismatch-confirm="true" data-primary="true">切换到 ${escapeHtml(name)} 并重试</button>
+              <button type="button" data-provider-mismatch-cancel="true" data-variant="ghost">${gateway ? "稍后处理" : "暂不切换"}</button>
+              <button type="button" data-provider-mismatch-confirm="true" data-primary="true">${gateway ? "手动兼容启动说明" : `切换到 ${escapeHtml(name)} 并重试`}</button>
             </div>
           </div>`;
         layer.querySelector('[data-provider-mismatch-cli]')?.addEventListener("click", () => {
@@ -9020,6 +8983,10 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
         const context = state.context;
         if (!context || state.checking || state.requestId || codexProviderSwitchMenuState.pendingRequestId) return;
         if (codexProviderMismatchThreadId() !== context.threadId) { closeCodexProviderMismatchDialog(); return; }
+        if (hudSettingsFromPayload()?.provider_gateway?.active) {
+          await openCodexProviderCompatibilityHelp(context);
+          return;
+        }
         const requestId = typedSettingsRequestId("provider-mismatch");
         state.checking = true;
         try {
@@ -9053,6 +9020,36 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
         } catch (error) {
           if (state.requestId === requestId) finishDefaultProviderSwitch({ requestId, ok: false, message: String(error?.message || error) });
           else if (state.context === context) { closeCodexProviderMismatchDialog(); showDefaultProviderSwitchFeedback(String(error?.message || error), true); }
+        } finally {
+          state.checking = false;
+        }
+      }
+
+      async function openCodexProviderCompatibilityHelp(context) {
+        const state = codexProviderMismatchState;
+        state.checking = true;
+        try {
+          const help = await codexGatewayCommand({ action: "providerCompatibilityHelp" });
+          if (state.context !== context || codexProviderMismatchThreadId() !== context.threadId || !state.layer?.isConnected) return;
+          const layer = state.layer;
+          layer.innerHTML = `<div class="codex-usage-hud-provider-migrate-surface">
+            <div class="codex-usage-hud-provider-migrate-head"><strong>手动使用兼容核心 ${escapeHtml(help.version)}</strong></div>
+            <div class="codex-usage-hud-provider-migrate-body">
+              <p>1. 等待所有任务结束，保存草稿，关闭所有 Codex 窗口。HUD 与独立代理可保持运行。</p>
+              <p>2. 在终端执行安装命令，首次需要 Node.js/npm。兼容核心安装在独立目录。</p>
+              <textarea readonly rows="3" aria-label="安装兼容核心命令" style="width:100%;box-sizing:border-box">${escapeHtml(help.installCommand)}</textarea>
+              <p>3. 执行启动命令，重新打开原会话。只有这次启动使用兼容核心；下次从系统正常打开会使用应用自带核心。</p>
+              <textarea readonly rows="3" aria-label="启动兼容核心命令" style="width:100%;box-sizing:border-box">${escapeHtml(help.launchCommand)}</textarea>
+              <p>此方案已通过离线跨供应商恢复检查，完整桌面功能仍需实际使用确认。</p>
+            </div>
+            <div class="codex-usage-hud-provider-migrate-actions"><button type="button" data-provider-mismatch-cancel="true">关闭</button></div>
+          </div>`;
+          layer.querySelector('[data-provider-mismatch-cancel]')?.addEventListener("click", closeCodexProviderMismatchDialog);
+        } catch (error) {
+          if (state.context === context) {
+            closeCodexProviderMismatchDialog();
+            showDefaultProviderSwitchFeedback(`无法准备兼容启动说明：${error?.message || error}`, true);
+          }
         } finally {
           state.checking = false;
         }
@@ -9555,7 +9552,6 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
       }
 
       function syncCodexCliQuickLaunchMenu() {
-        installGatewayResumeAdapter();
         const providers = codexCliQuickLaunchMenuProviders();
         const menubar = codexDesktopApplicationMenu();
         const existing = document.querySelector('[data-codex-usage-hud-cli-menu-toggle="true"]');
@@ -9713,7 +9709,7 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
       }
 
       function disposeCodexCliQuickLaunchMenu() {
-        disposeGatewayResumeAdapter();
+        disposeGatewayCommands();
         closeCodexProviderGatewayDialog({ force: true });
         codexProviderGatewayDialogState.busy = false;
         closeCodexProviderMismatchDialog();

@@ -410,12 +410,13 @@ def run_daemon(args: argparse.Namespace) -> int:
     # this HUD process is stopped.
     def activate_providers():
         try:
-            if not UserConfigStore().load().provider_gateway_enabled:
-                return
             from .codex_provider_config import default_codex_config_path
             from .provider_proxy import provider_proxy_relay
 
-            provider_proxy_relay.activate(default_codex_config_path())
+            path = default_codex_config_path()
+            provider_proxy_relay.restore_legacy_routes(path)
+            if UserConfigStore().load().provider_gateway_enabled:
+                provider_proxy_relay.activate(path)
         except (OSError, RuntimeError, ValueError) as exc:
             _append_renderer_diagnostic("provider_proxy_start_failed", reason=str(exc))
     services = _daemon_runtime_owner.DaemonServices(
@@ -436,6 +437,10 @@ def run_daemon(args: argparse.Namespace) -> int:
 
 def main(argv: Sequence[str] | None = None) -> int:
     helper_args = list(sys.argv[1:] if argv is None else argv)
+    if "--provider-compatible-codex" in helper_args:
+        from .provider_compatibility import main as run_compatible_codex
+
+        return run_compatible_codex(helper_args)
     if "--provider-proxy-helper" in helper_args:
         from .provider_proxy_service import main as run_provider_proxy_helper
 

@@ -112,11 +112,14 @@ def test_renderer_bridge_only_activates_opted_in_gateway(setup, monkeypatch, ena
     store.save(replace(store.load(), provider_gateway_enabled=enabled))
     activate = MagicMock()
     monkeypatch.setattr("codex_usage_hud.provider_proxy.provider_proxy_relay.activate", activate)
+    restore = MagicMock()
+    monkeypatch.setattr("codex_usage_hud.provider_proxy.provider_proxy_relay.restore_legacy_routes", restore)
     server = MagicMock()
     server.server_address = ("127.0.0.1", 10000)
     monkeypatch.setattr("codex_usage_hud.settings_bridge.ThreadingHTTPServer", MagicMock(return_value=server))
     monkeypatch.setattr("codex_usage_hud.settings_bridge.Thread", MagicMock())
     SettingsBridgeServer(store, manage_provider_proxy=True).start()
+    restore.assert_called_once_with(path)
     assert activate.call_count == int(enabled)
     if enabled:
         activate.assert_called_once_with(path)
@@ -131,6 +134,8 @@ def test_daemon_only_activates_opted_in_gateway(setup, monkeypatch, enabled):
     monkeypatch.setattr(runtime, "UserConfigStore", lambda: store)
     activate = MagicMock()
     monkeypatch.setattr("codex_usage_hud.provider_proxy.provider_proxy_relay.activate", activate)
+    restore = MagicMock()
+    monkeypatch.setattr("codex_usage_hud.provider_proxy.provider_proxy_relay.restore_legacy_routes", restore)
 
     def run(_args, *, services):
         services.activate_providers()
@@ -138,6 +143,7 @@ def test_daemon_only_activates_opted_in_gateway(setup, monkeypatch, enabled):
 
     monkeypatch.setattr(runtime._daemon_runtime_owner, "run_daemon", run)
     assert runtime.run_daemon(SimpleNamespace()) == 0
+    restore.assert_called_once_with(path)
     assert activate.call_count == int(enabled)
     if enabled:
         activate.assert_called_once_with(path)
