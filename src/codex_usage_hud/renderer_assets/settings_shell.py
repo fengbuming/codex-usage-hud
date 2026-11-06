@@ -9860,6 +9860,7 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
       moveSessionTransferPage,
       applySessionTransferPayload,
       submitSettingsCommand,
+      codexGatewayCommand,
       settingsDialogRoot,
       closeSettingsConfirm,
       discardPricingPreviewRequest,

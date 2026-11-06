@@ -443,7 +443,18 @@ class ProviderProxyRelay:
                         headers = {k: v for k, v in headers.items() if k.lower() != "content-encoding"}
                     request_path = urlsplit(target).path.rstrip("/")
                     if request_path.endswith(("/responses", "/responses/compact")):
+                        if gateway and request_path.endswith("/responses") and not upgrade:
+                            from .provider_gateway import bind_image_draft
+
+                            body = bind_image_draft(gateway_path, route, body)
                         relay._report_source_evidence(self.headers, body)
+                        if gateway and route.get("image_generation"):
+                            if upgrade or request_path.endswith("/compact"):
+                                raise ValueError("生图模式需要 HTTP Responses 请求，不支持 WebSocket 或上下文压缩。")
+                            from .image_generation import serve_image_generation
+
+                            serve_image_generation(self, gateway_path, route, body)
+                            return
                         body = _rewrite_model(body, route.get("model"), route.get("models"))
                         if gateway:
                             from .provider_gateway import prepare_request_body
@@ -516,7 +527,7 @@ class ProviderProxyRelay:
                                     self.wfile.write(sse.finish())
                                     self.wfile.flush()
                 except (OSError, ValueError, LookupError, sqlite3.Error, http.client.HTTPException) as exc:
-                    if not upstream_response_received:
+                    if not upstream_response_received and not getattr(self, "hud_image_response_started", False):
                         self._send_relay_failure(exc, route, upstream_id, response.status if response else None)
                     else:
                         _LOGGER.warning("provider_upstream_stream_failure %s error=%s", diagnostic_text(route, self.hud_request_id, upstream_id), type(exc).__name__)

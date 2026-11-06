@@ -70,6 +70,8 @@ def _state_db(path: Path):
             db.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
             db.execute("CREATE TABLE IF NOT EXISTS copies (id TEXT PRIMARY KEY, source_provider TEXT NOT NULL, prepared INTEGER NOT NULL DEFAULT 0)")
             db.execute("CREATE TABLE IF NOT EXISTS foreign_seals (id TEXT NOT NULL, digest TEXT NOT NULL, PRIMARY KEY(id, digest))")
+            db.execute("CREATE TABLE IF NOT EXISTS image_sessions (id TEXT PRIMARY KEY, provider TEXT NOT NULL, model TEXT NOT NULL)")
+            db.execute("CREATE TABLE IF NOT EXISTS image_drafts (token TEXT PRIMARY KEY, provider TEXT NOT NULL, thread_id TEXT NOT NULL, expires INTEGER NOT NULL)")
             db.execute("BEGIN IMMEDIATE")
             yield db
             db.commit()
@@ -255,8 +257,117 @@ def resolve_route(path: Path, headers: Mapping, *, generation: bool) -> dict:
         if generation and thread_id and not row:
             db.execute("INSERT INTO sessions VALUES (?, ?)", (thread_id, provider))
         copy = db.execute("SELECT source_provider FROM copies WHERE id = ?", (thread_id,)).fetchone()
+    mode = image_sessions(path).get(thread_id, {})
     return {**route, "provider": provider, "thread_id": thread_id,
+            "image_generation": mode if mode.get("provider") == provider else {},
             "foreign_history": bool(copy and copy[0] != provider)}
+
+
+def image_sessions(path: Path | None = None) -> dict:
+    """Read explicit per-chat image modes, including stores created by older relays."""
+    from .codex_provider_config import default_codex_config_path
+
+    path = path or default_codex_config_path()
+    if not path.with_name("hud-provider-sessions.sqlite").exists():
+        return {}
+    with _read_state_db(path) as db:
+        if not db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='image_sessions'").fetchone():
+            return {}
+        return {row[0]: {"provider": row[1], "model": row[2]} for row in db.execute("SELECT id, provider, model FROM image_sessions")}
+
+
+def image_generation_context(thread_id: str, *, config_path: Path | None = None) -> dict:
+    """Resolve the live composer's route without borrowing the HUD's selection."""
+    from .codex_provider_config import default_codex_config_path
+
+    path = config_path or default_codex_config_path()
+    thread_id = canonical_thread_id(thread_id)
+    if not thread_id or not gateway_info(path):
+        raise ValueError("请在已开启 HUD 请求代理的会话中使用生图。")
+    route = resolve_route(path, {"session_id": thread_id}, generation=False)
+    return {"sessionId": thread_id, "provider": route["provider"]}
+
+
+def image_draft_model(value: object) -> tuple[str, str] | None:
+    match = re.fullmatch(r"hud-image/([0-9a-f]{32})/(.+)", str(value or ""))
+    return (match[1], match[2]) if match else None
+
+
+def set_image_draft(enabled: bool, model: str = "", token: str = "", *, config_path: Path | None = None) -> dict:
+    """Arm a particular native draft, never the next arbitrary new conversation."""
+    from .codex_provider_config import default_codex_config_path, read_provider_definitions
+    from .image_generation import is_image_model
+
+    path = config_path or default_codex_config_path()
+    info = gateway_info(path)
+    if not info or not isinstance(enabled, bool):
+        raise ValueError("请先开启 HUD 供应商请求代理。")
+    if not enabled:
+        with _state_db(path) as db:
+            row = db.execute("SELECT thread_id FROM image_drafts WHERE token = ?", (token,)).fetchone()
+            # A copied native preference in another empty composer must not
+            # disable the conversation that already consumed this token.
+            if row and not row[0]:
+                db.execute("DELETE FROM image_drafts WHERE token = ?", (token,))
+        return {"enabled": False, "draft": True}
+    provider = info["default_provider"]
+    route = _provider_route(path, provider, read_provider_definitions(path))
+    if not is_image_model(model) or model not in route.get("models", []):
+        raise ValueError("当前新会话供应商未配置所选图片模型。")
+    token = uuid.uuid4().hex
+    with _state_db(path) as db:
+        db.execute("DELETE FROM image_drafts WHERE expires < ? AND thread_id = ''", (int(time.time()),))
+        db.execute("INSERT INTO image_drafts VALUES (?, ?, '', ?)", (token, provider, int(time.time()) + 1800))
+    return {"enabled": True, "draft": True, "provider": provider, "model": model,
+            "nativeModel": f"hud-image/{token}/{model}"}
+
+
+def bind_image_draft(path: Path, route: dict, body: bytes | None) -> bytes | None:
+    if not body:
+        return body
+    payload = json.loads(body)
+    alias = image_draft_model(payload.get("model")) if isinstance(payload, dict) else None
+    if not alias:
+        return body
+    from .image_generation import is_image_model
+
+    token, model = alias
+    thread_id = canonical_thread_id(route.get("thread_id"))
+    with _state_db(path) as db:
+        row = db.execute("SELECT provider, thread_id, expires FROM image_drafts WHERE token = ?", (token,)).fetchone()
+        if not row or (not row[1] and row[2] < time.time()) or not thread_id:
+            raise ValueError("生图草稿已失效，请关闭后重新开启生图。")
+        if row[0] != route["provider"] or (row[1] and row[1] != thread_id):
+            raise ValueError("生图草稿不属于当前会话或供应商，请重新开启生图。")
+        if not is_image_model(model) or model not in route.get("models", []):
+            raise ValueError("当前供应商不支持所选图片模型。")
+        db.execute("UPDATE image_drafts SET thread_id = ? WHERE token = ?", (thread_id, token))
+        db.execute("INSERT OR REPLACE INTO image_sessions VALUES (?, ?, ?)", (thread_id, row[0], model))
+    route["image_generation"] = {"provider": row[0], "model": model}
+    payload["model"] = model
+    return json.dumps(payload, ensure_ascii=False).encode("utf-8")
+
+
+def set_image_generation(thread_id: str, enabled: bool, model: str = "", *, config_path: Path | None = None) -> dict:
+    from .codex_provider_config import default_codex_config_path
+    from .image_generation import is_image_model
+
+    path = config_path or default_codex_config_path()
+    thread_id = canonical_thread_id(thread_id)
+    if not thread_id or not isinstance(enabled, bool):
+        raise ValueError("请在当前会话中切换生图模式。")
+    if not gateway_info(path):
+        raise ValueError("请先开启 HUD 供应商请求代理，再使用生图。")
+    route = resolve_route(path, {"session_id": thread_id}, generation=False)
+    if enabled and (not is_image_model(model) or model not in route.get("models", [])):
+        raise ValueError("请先在当前供应商中配置并选择图片模型。")
+    with _state_db(path) as db:
+        if enabled:
+            db.execute("INSERT OR IGNORE INTO sessions VALUES (?, ?)", (thread_id, route["provider"]))
+            db.execute("INSERT OR REPLACE INTO image_sessions VALUES (?, ?, ?)", (thread_id, route["provider"], model))
+        else:
+            db.execute("DELETE FROM image_sessions WHERE id = ?", (thread_id,))
+    return {"sessionId": thread_id, "enabled": enabled, "provider": route["provider"], "model": model if enabled else ""}
 
 
 def prepare_request_body(path: Path, route: Mapping, body: bytes | None) -> bytes | None:

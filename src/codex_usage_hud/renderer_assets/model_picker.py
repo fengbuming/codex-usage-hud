@@ -11,7 +11,170 @@ TEXT = r"""
     let observedTriggerParent = null;
     const ownedLabels = new Map();
     const syntheticSelect = Symbol("codexUsageHudModelPickerSelect");
+    const previousTextModels = new Map();
+    const imagePending = new Set();
+    const imageErrors = new Map();
+    const imagePanels = new Map();
+    const imageProviders = new Map();
+    const imageContextPending = new Set();
+    const imageContextErrors = new Set();
     let installed = false;
+
+    function isImageModel(model) {
+      return /^(?:gpt-image-[\w.-]+|gemini-[\w.-]*image[\w.-]*|gemini-nano-banana[\w.-]*)$/i.test(String(model || ""));
+    }
+
+    function imageDraftModel(model) {
+      const match = /^hud-image\/([0-9a-f]{32})\/(.+)$/.exec(String(model || ""));
+      return match ? { token: match[1], model: match[2] } : null;
+    }
+
+    function imageModelLabel(model) {
+      return imageDraftModel(model)?.model || String(model || "");
+    }
+
+    function imageContext(selection) {
+      const payload = ctx.state?.payload?.() || {};
+      const settings = payload.settings || {};
+      const gateway = settings.provider_gateway || {};
+      // Bind to the live composer, never a stale HUD snapshot from another tab.
+      const raw = String(selection?.conversationId || "").replace(/^local:/, "");
+      const sessionId = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(raw) ? raw.toLowerCase() : "";
+      const draft = !!selection && !raw;
+      const alias = imageDraftModel(selection?.selectedModel);
+      const provider = String(draft ? gateway.default_provider || settings.default_provider || ""
+        : sessionId && sessionId === payload.sessionId && !payload.cachedPreview
+        ? payload.activeSessionProvider : imageProviders.get(sessionId) || "").toLowerCase();
+      const entry = settings.provider_registry?.[provider] || {};
+      const imageModels = (Array.isArray(entry.desktopModels) ? entry.desktopModels : [entry.desktopModel]).filter(isImageModel);
+      const saved = gateway.image_sessions?.[sessionId];
+      const enabled = !!alias || (!!saved && saved.provider === provider);
+      const selected = imageModelLabel(selection?.selectedModel);
+      const model = isImageModel(selected) && imageModels.includes(selected)
+        ? selected : saved?.model || imageModels[0] || "";
+      return { payload, gateway, sessionId, provider, imageModels, enabled, model, draft, alias,
+        key: sessionId || (draft ? "draft" : ""), loading: !!sessionId && !provider };
+    }
+
+    async function resolveImageContext(state, retry = false) {
+      if (!state.gateway.active || !state.loading || imageContextPending.has(state.sessionId)
+        || (!retry && imageContextErrors.has(state.sessionId))) return;
+      const command = ctx.domains?.get?.("settings_shell")?.codexGatewayCommand;
+      if (typeof command !== "function") return;
+      imageContextPending.add(state.sessionId);
+      imageContextErrors.delete(state.sessionId);
+      imageErrors.delete(state.sessionId);
+      try {
+        const result = await command({ action: "imageGenerationContext", sessionId: state.sessionId });
+        if (installed && result.sessionId === state.sessionId && result.provider) imageProviders.set(state.sessionId, result.provider);
+      } catch (error) {
+        if (installed) {
+          imageContextErrors.add(state.sessionId);
+          imageErrors.set(state.sessionId, String(error?.message || "无法确认当前会话，请重试。"));
+        }
+      } finally {
+        imageContextPending.delete(state.sessionId);
+        schedulePatch();
+      }
+    }
+
+    async function toggleImageGeneration(event) {
+      event.preventDefault();
+      event.stopPropagation();
+      const selection = selectionContext();
+      const state = imageContext(selection);
+      if (state.loading) { resolveImageContext(state, true); return; }
+      if (!state.gateway.active || !state.key || (!state.enabled && !state.model) || imagePending.has(state.key)) return;
+      const command = ctx.domains?.get?.("settings_shell")?.codexGatewayCommand;
+      if (typeof command !== "function") return;
+      imagePending.add(state.key);
+      imageErrors.delete(state.key);
+      schedulePatch();
+      try {
+        const result = await command(state.draft
+          ? { action: "imageGenerationDraft", enabled: !state.enabled, model: state.model, token: state.alias?.token || "" }
+          : { action: "imageGenerationSet", sessionId: state.sessionId, enabled: !state.enabled, model: state.model });
+        if (!installed) return;
+        const payload = ctx.state?.payload?.() || {};
+        const gateway = payload.settings?.provider_gateway;
+        if (gateway && !result.draft) {
+          gateway.image_sessions = { ...(gateway.image_sessions || {}) };
+          if (result.enabled) gateway.image_sessions[result.sessionId] = { provider: result.provider, model: result.model };
+          else delete gateway.image_sessions[result.sessionId];
+        }
+        // An acknowledgement for chat A must never change chat B's native model.
+        const live = selectionContext();
+        const liveState = imageContext(live);
+        if (liveState.key === state.key && live?.trigger === selection?.trigger) {
+          if (result.enabled) {
+            if (!isImageModel(imageModelLabel(selection.selectedModel))) previousTextModels.set(state.key,
+              { model: selection.selectedModel, effort: selection.reasoningEffort || "low" });
+            live.props.onSelectModel(result.nativeModel || result.model, "low");
+          } else if (isImageModel(imageModelLabel(live.selectedModel))) {
+            const previous = previousTextModels.get(state.key);
+            const fallback = previous?.model || live.nativeModels.find((item) => !isImageModel(item.model))?.model;
+            if (fallback) live.props.onSelectModel(fallback, previous?.effort || "low");
+          }
+        }
+      } catch (error) {
+        if (installed) imageErrors.set(state.key, String(error?.message || "生图模式切换失败，请重试。"));
+      } finally {
+        imagePending.delete(state.key);
+        schedulePatch();
+      }
+    }
+
+    function patchImageToggle(selection) {
+      for (const [panel] of imagePanels) {
+        if (!panel.isConnected) imagePanels.delete(panel);
+      }
+      const slider = document.querySelector('[data-reasoning-slider="true"]');
+      if (!visible(slider)) return;
+      const container = slider.closest?.('[role="menu"], [role="dialog"]') || slider.parentElement;
+      if (!container?.appendChild || !container.style || typeof document.createElement !== "function") return;
+      const state = imageContext(selection);
+      if (state.loading) resolveImageContext(state);
+      // Once the first request has bound the actual UUID, drop the temporary
+      // model alias so later new chats do not inherit a consumed draft token.
+      if (state.sessionId && state.alias && state.gateway.image_sessions?.[state.sessionId]) {
+        if (previousTextModels.has("draft")) previousTextModels.set(state.sessionId, previousTextModels.get("draft"));
+        previousTextModels.delete("draft");
+        selection.props.onSelectModel(state.alias.model, "low");
+      }
+      const busy = imagePending.has(state.key);
+      const disabled = busy || state.loading || !state.gateway.active || !state.key || (!state.enabled && !state.model);
+      let row = container.querySelector('[data-codex-usage-hud-image-toggle="true"]');
+      if (!row) {
+        row = document.createElement("button");
+        row.type = "button";
+        row.innerHTML = '<span>生图</span><span data-image-mode-track aria-hidden="true" style="display:inline-flex;align-items:center;width:18px;height:11px;border-radius:8px;background:color-mix(in srgb,currentColor 22%,transparent);padding:2px;box-sizing:border-box"><span data-image-mode-thumb style="width:7px;height:7px;border-radius:50%;background:currentColor;transition:transform .12s"></span></span>';
+        row.setAttribute("data-codex-usage-hud-image-toggle", "true");
+        row.setAttribute("role", "switch");
+        row.setAttribute("aria-label", "生图，仅当前会话");
+        row.style.cssText = "position:absolute;left:10px;top:7px;z-index:1;display:inline-flex;align-items:center;gap:4px;height:20px;padding:0 2px;border:0;border-radius:4px;background:transparent;color:inherit;font:inherit;font-size:11px;cursor:pointer";
+        if (getComputedStyle(container).position === "static") {
+          imagePanels.set(container, container.style.position);
+          container.style.position = "relative";
+        }
+        row[syntheticSelect] = toggleImageGeneration;
+        container.appendChild(row);
+      }
+      const error = imageErrors.get(state.key);
+      const detail = busy ? "保存中…" : !state.gateway.active ? "请先开启请求代理" : !state.key
+        ? "等待会话就绪" : error || (state.loading ? "正在确认当前会话供应商…"
+          : !state.model ? "当前会话供应商未配置图片模型" : state.enabled ? state.model : "仅当前会话");
+      const signature = JSON.stringify([state.enabled, disabled, detail]);
+      if (row.getAttribute("data-image-signature") === signature) return;
+      row.setAttribute("data-image-signature", signature);
+      row.setAttribute("aria-checked", String(state.enabled));
+      row.setAttribute("aria-disabled", String(disabled));
+      row.title = detail + "。" + (state.enabled ? "关闭后恢复对话；生成的图片保存在本机。" : "开启后，将当前会话的下一条文字消息用于生图，每次生成一张图片。");
+      row.style.opacity = disabled ? ".55" : "1";
+      row.style.cursor = disabled ? "not-allowed" : "pointer";
+      row.querySelector("[data-image-mode-thumb]").style.transform = state.enabled ? "translateX(7px)" : "translateX(0)";
+      row.querySelector("[data-image-mode-track]").style.background = state.enabled
+        ? "var(--color-token-button-primary-background, #008ddd)" : "color-mix(in srgb,currentColor 22%,transparent)";
+    }
 
     function reactFiberForNode(node) {
       if (!node) return null;
@@ -127,7 +290,7 @@ TEXT = r"""
       const preferred = Array.isArray(entry.desktopModels)
         ? entry.desktopModels.map((model) => String(model || "").trim()).filter(Boolean)
         : [String(entry.desktopModel || "").trim()].filter(Boolean);
-      const current = selection && !selection.nativeModels.some((model) => model.model === selection.selectedModel)
+      const current = selection && !imageDraftModel(selection.selectedModel) && !selection.nativeModels.some((model) => model.model === selection.selectedModel)
         ? selection.selectedModel : "";
       const signature = JSON.stringify([provider, preferred, current, selection?.reasoningEffort || ""]);
       if (signature === catalogSignature) return;
@@ -159,7 +322,7 @@ TEXT = r"""
       }
       if (custom && label) {
         const state = ownedLabels.get(label) || { original: label.textContent, title: label.getAttribute("title") };
-        state.applied = selection.selectedModel;
+        state.applied = imageModelLabel(selection.selectedModel);
         ownedLabels.set(label, state);
         if (label.textContent !== state.applied) label.textContent = state.applied;
         if (label.getAttribute("title") !== state.applied) label.setAttribute("title", state.applied);
@@ -320,6 +483,12 @@ TEXT = r"""
       if (typeof select === "function") select(event);
     }
 
+    function handleImageToggleSelection(event) {
+      if (event.type === "keydown" && event.key !== "Enter" && event.key !== " ") return;
+      const node = event.target?.closest?.('[data-codex-usage-hud-image-toggle="true"]');
+      if (node?.[syntheticSelect]) toggleImageGeneration(event);
+    }
+
     function removeSyntheticItems() {
       document.querySelectorAll(
         "[data-codex-usage-hud-model-option], [data-codex-usage-hud-reasoning-option]"
@@ -330,16 +499,21 @@ TEXT = r"""
       const selection = selectionContext();
       refreshProviderModels(selection);
       patchModelLabel(selection);
-      if (!models.length) return;
       const context = modelPickerContext();
+      patchImageToggle(selection);
+      if (!models.length) return;
       if (context?.items?.length && typeof context.selectModel === "function") {
         const first = context.items[0];
         const container = first.parentElement;
         const existing = new Set(context.nativeModels.map((item) => String(item?.model || item?.id || "")));
         const modelProps = {
           modelOption: context.prototypeOption,
-          selectedModel: context.selectedModel,
-          onSelect: context.selectModel,
+          selectedModel: imageModelLabel(context.selectedModel),
+          onSelect(option, tier) {
+            const alias = imageDraftModel(selection?.selectedModel);
+            context.selectModel(alias && isImageModel(option.model)
+              ? { ...option, model: `hud-image/${alias.token}/${option.model}` } : option, tier);
+          },
         };
         for (const model of models) {
           if (!existing.has(String(model.model))) {
@@ -387,6 +561,10 @@ TEXT = r"""
       ctx.lifecycle.listen("model_picker", document, "pointerover", schedulePatch, true);
       ctx.lifecycle.listen("model_picker", document, "focusin", schedulePatch, true);
       ctx.lifecycle.listen("model_picker", document, "keydown", schedulePatch, true);
+      // Native popup portals stop bubbling at their React root. Observe the
+      // owned switch in capture, before native menu handlers can swallow it.
+      ctx.lifecycle.listen("model_picker", document, "click", handleImageToggleSelection, true);
+      ctx.lifecycle.listen("model_picker", document, "keydown", handleImageToggleSelection, true);
       ctx.lifecycle.listen("model_picker", document, "click", handleSyntheticSelection);
       ctx.lifecycle.listen("model_picker", document, "keydown", handleSyntheticSelection);
       return true;
@@ -403,6 +581,15 @@ TEXT = r"""
         ctx.lifecycle.clearTimeout(timer);
       }
       removeSyntheticItems();
+      document.querySelectorAll('[data-codex-usage-hud-image-toggle="true"]').forEach((node) => node.remove());
+      previousTextModels.clear();
+      imageErrors.clear();
+      imageProviders.clear();
+      imageContextErrors.clear();
+      for (const [panel, original] of imagePanels) {
+        if (panel.style.position === "relative") panel.style.position = original;
+      }
+      imagePanels.clear();
       for (const [node, state] of ownedLabels) restoreModelLabel(node, state);
       ctx.observers?.clear?.("model_picker_trigger");
       observedTriggerParent = null;

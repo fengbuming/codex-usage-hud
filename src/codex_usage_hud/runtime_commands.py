@@ -1463,11 +1463,12 @@ def handle_general_command(
             from .provider_compatibility import manual_instructions
 
             return {**_status("手动兼容启动步骤已准备。"), "providerCompatibility": manual_instructions()}
-        if action in {"providerBindSession", "providerPrepareExit", "providerGatewayToggle"}:
+        if action in {"providerBindSession", "providerPrepareExit", "providerGatewayToggle", "imageGenerationSet", "imageGenerationContext", "imageGenerationDraft"}:
             if ports.gateway_command is None:
                 return _status("HUD 统一代理当前不可用。", kind="error")
             result = ports.gateway_command(command)
-            return {**_status("供应商路由已保存。"), "providerGateway": dict(result)}
+            message = "会话供应商已确认。" if action == "imageGenerationContext" else "供应商路由已保存。"
+            return {**_status(message), "providerGateway": dict(result)}
         if action == "providerCloneSwitch":
             if ports.clone_provider_with_bearer_key is None:
                 return _status("供应商克隆切换当前不可用。", kind="error")
@@ -2503,6 +2504,19 @@ def _handle_renderer_settings_command(
         from .provider_gateway import prepare_exit, select_provider, session_provider
 
         provider = str(command.get("provider") or "")
+        if command.get("action") == "imageGenerationDraft":
+            from .provider_gateway import set_image_draft
+
+            return set_image_draft(command.get("enabled"), str(command.get("model") or ""), str(command.get("token") or ""))
+        if command.get("action") == "imageGenerationContext":
+            from .provider_gateway import image_generation_context
+
+            return image_generation_context(str(command.get("sessionId") or ""))
+        if command.get("action") == "imageGenerationSet":
+            from .provider_gateway import set_image_generation
+
+            return set_image_generation(str(command.get("sessionId") or ""), command.get("enabled"),
+                                        str(command.get("model") or ""))
         if command.get("action") == "providerGatewayToggle":
             from .provider_gateway_settings import set_gateway_enabled
 
