@@ -467,7 +467,28 @@ TEXT = r"""
           });
       }
 
+      function activeSessionHomeLooksNewSession() {
+        if (activeSessionLocationId() || !activeSessionComposerVisible()) return false;
+        // Native project/global new-chat hero (Codex and Work). The sidebar
+        // can retain its previous selected thread while this page is visible.
+        // Use the hero's structural marker, not its translated/project text.
+        return Array.from(document.querySelectorAll('div.heading-xl[data-feature="game-source"]'))
+          .some((node) => !activeSessionNodeOwnedByHud(node) && visible(node));
+      }
+
       function readActiveSessionRef() {
+        if (activeSessionHomeLooksNewSession()) {
+          return {
+            sessionId: "",
+            rendererSessionId: "",
+            title: "",
+            url: location.href,
+            newSession: true,
+            pendingSession: false,
+            matchedBy: "home-hero",
+            draftText: activeSessionComposerDraftText(),
+          };
+        }
         const rows = activeSessionRows();
         const headerTitle = activeSessionHeaderTitleText();
         if (activeSessionHeaderLooksNewSession(rows)) {
@@ -589,6 +610,7 @@ TEXT = r"""
         );
         if (
           transientWithoutCanonicalId
+          && ref.matchedBy !== "home-hero"
           && reason !== "click"
           && lastCanonicalSessionId
           && Date.now() - lastCanonicalAt < 2500
