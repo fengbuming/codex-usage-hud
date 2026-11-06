@@ -469,6 +469,7 @@ TEXT = r"""
         const root = container || document;
         return Array.from(root.querySelectorAll(activeSessionRowSelector))
           .filter((row) => !activeSessionNodeOwnedByHud(row))
+          .filter(visible)
           .filter((row) => activeSessionRowLooksThread(row))
           .filter((row) => {
             const ref = activeSessionRefFromRow(row);
@@ -545,8 +546,12 @@ TEXT = r"""
 
       function activeSessionContainer() {
         const titleNode = activeSessionFirstOutsideHud(activeSessionTitleSelector);
+        // Desktop keeps inactive sidebar trees mounted with selected rows.
+        // Exclude those before choosing a list, or a hidden tree can own the
+        // entire candidate search even while another conversation is visible.
         const identityRows = Array.from(document.querySelectorAll(activeSessionIdentitySelector))
-          .filter((node) => !activeSessionNodeOwnedByHud(node));
+          .filter((node) => !activeSessionNodeOwnedByHud(node))
+          .filter(visible);
         const selectedIdentityRow = identityRows.find(activeSessionRowSelected) || null;
         const row = selectedIdentityRow
           || identityRows[0]
