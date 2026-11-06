@@ -14,6 +14,7 @@ authors = [
 ]
 dependencies = [
   "zstandard>=0.23",
+  "tomli>=2.0; python_version < '3.11'",
 ]
 keywords = [
   "Codex App token usage",

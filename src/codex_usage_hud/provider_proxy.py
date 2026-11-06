@@ -24,7 +24,7 @@ import sqlite3
 import uuid
 from socketserver import TCPServer
 from threading import RLock, Thread
-from urllib.parse import SplitResult, urlsplit
+from urllib.parse import SplitResult, parse_qsl, urlencode, urlsplit
 
 from .provider_gateway_auth import GATEWAY_AUTH_HEADER, GATEWAY_PATH_ID, gateway_authorized
 from .provider_proxy_diagnostics import (
@@ -364,6 +364,13 @@ class ProviderProxyRelay:
                     if suffix.startswith("v1/codex/"):
                         target = upstream.path.rstrip("/") + "/" + suffix[len("v1/codex/"):]
                 query = "&".join(filter(None, (upstream.query, path.query)))
+                if gateway and route.get("query_params"):
+                    # The selected upstream owns configured keys, including
+                    # api-version; cached native-provider values cannot win.
+                    params = route["query_params"]
+                    pairs = [(key, value) for key, value in parse_qsl(query, keep_blank_values=True)
+                             if key not in params]
+                    query = urlencode([*pairs, *params.items()])
                 if query:
                     target += "?" + query
                 connection = None

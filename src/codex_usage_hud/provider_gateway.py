@@ -6,7 +6,7 @@ provider identities. Selection never depends on the foreground window.
 """
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 import json
 import hashlib
 from pathlib import Path
@@ -47,7 +47,7 @@ def gateway_info(config_path: Path | None = None) -> dict:
     metadata = gateway_metadata(text)
     if not metadata:
         return {}
-    parsed = config._parse_toml_mapping(text)
+    parsed = config._parse_toml_mapping(text, strict=True)
     native = (parsed.get("model_providers") or {}).get(PROVIDER_ID) or {}
     if parsed.get("model_provider") != PROVIDER_ID or native.get("base_url") != metadata.get("endpoint"):
         # A different config manager owns the current route. Do not advertise
@@ -310,7 +310,7 @@ def _provider_route(path: Path, provider: str, definitions: Mapping) -> dict:
 
     text = config._read_text_exact(path)
     info = gateway_metadata(text, include_inactive=True)
-    builtin_urls = info.get("builtin_urls") or config._parse_toml_mapping(text)
+    builtin_urls = info.get("builtin_urls") or config._parse_toml_mapping(text, strict=True)
     definition = definitions.get(provider)
     if definition is None and provider != "openai":
         raise ValueError(f"会话供应商「{provider}」已删除；请恢复配置或复制到其他供应商。")
@@ -320,11 +320,15 @@ def _provider_route(path: Path, provider: str, definitions: Mapping) -> dict:
         route = {"base_url": definition.base_url, "enabled": definition.use_proxy,
                  "port": definition.proxy_port, "model": definition.desktop_model,
                  "models": list(definition.desktop_models), "headers": {}}
-        raw = config._parse_toml_mapping(text)
+        raw = config._parse_toml_mapping(text, strict=True)
         entry = next((v for k, v in raw.get("model_providers", {}).items()
                       if str(k).casefold() == definition.provider_id.casefold()), {})
         if entry.get("auth"):
             raise ValueError("此供应商使用命令获取凭据，请先在 HUD 保存 API key 后启用统一代理。")
+        query_params = entry.get("query_params", {})
+        if not isinstance(query_params, Mapping) or any(not isinstance(v, str) for v in query_params.values()):
+            raise ValueError("供应商 query_params 必须是字符串映射。")
+        route["query_params"] = dict(query_params)
         route["headers"].update(entry.get("http_headers") or {})
         for name, env in (entry.get("env_http_headers") or {}).items():
             value = config._user_environment_value(str(env))
@@ -361,15 +365,16 @@ def _provider_route(path: Path, provider: str, definitions: Mapping) -> dict:
     return route
 
 
-def activate_gateway(path: Path, relay) -> None:
+def activate_gateway(path: Path, relay, *, on_config_written: Callable[[str], None] | None = None) -> None:
     from . import codex_provider_config as config
     from .provider_proxy import with_proxy_metadata
     from .provider_gateway_auth import GATEWAY_PATH_ID, with_gateway_auth
+    from .provider_gateway_config import clear_provider_subtables
 
     if not path.exists():
         return
     original = config._read_text_exact(path)
-    parsed = config._parse_toml_mapping(original)
+    parsed = config._parse_toml_mapping(original, strict=True)
     metadata = gateway_metadata(original, include_inactive=True)
     was_gateway = bool(metadata)
     if not metadata and PROVIDER_ID in (parsed.get("model_providers") or {}):
@@ -415,6 +420,7 @@ def activate_gateway(path: Path, relay) -> None:
         # Keep Codex's own OAuth refresh active when an official login exists.
         body = body.replace('requires_openai_auth = false', 'requires_openai_auth = true')
         body = re.sub(r'\nexperimental_bearer_token = .+', '', body)
+    candidate = clear_provider_subtables(candidate, PROVIDER_ID)
     if config._section_range(candidate, PROVIDER_ID):
         candidate = config._replace_section_body(candidate, PROVIDER_ID, body)
     else:
@@ -435,15 +441,21 @@ def activate_gateway(path: Path, relay) -> None:
         if not backup.exists():
             config._write_new_text_atomically(backup, original)
         config._write_text_atomically(path, candidate, original, private=True)
+        if on_config_written is not None:
+            on_config_written(candidate)
 
 
-def prepare_exit(provider: str, *, config_path: Path | None = None) -> dict:
+def prepare_exit(provider: str, *, config_path: Path | None = None,
+                 on_config_written: Callable[[str], None] | None = None) -> dict:
     """Restore a usable direct config before authorizing normal HUD shutdown."""
     from . import codex_provider_config as config
     from .provider_gateway_auth import with_gateway_auth
+    from .provider_gateway_config import clear_provider_subtables, copy_provider_settings
+    from .provider_proxy import updated_proxy_metadata, with_proxy_metadata
 
     path = config_path or config.default_codex_config_path()
     original = config._read_text_exact(path)
+    config._parse_toml_mapping(original, strict=True)
     if not gateway_metadata(original, include_inactive=True):
         return config.set_default_codex_provider(provider, config_path=path)
     provider = provider.strip().lower()
@@ -457,7 +469,15 @@ def prepare_exit(provider: str, *, config_path: Path | None = None) -> dict:
         if key == PROVIDER_ID:
             continue
         body = config._section_range(candidate, definition.provider_id)[2]
-        body = config._set_quoted_value(body, "base_url", definition.base_url, newline)
+        route_metadata = config.proxy_metadata(definition.section_text)
+        route_metadata.pop("gateway", None)
+        route_metadata = updated_proxy_metadata(
+            route_metadata, base_url=definition.base_url, enabled=definition.use_proxy,
+            port=definition.proxy_port, model=definition.desktop_model, models=list(definition.desktop_models),
+        )
+        restored_url = config.provider_proxy_relay.config_base_url(route_metadata, path)
+        body = config._set_quoted_value(body, "base_url", restored_url, newline)
+        body = with_proxy_metadata(body, route_metadata, newline)
         candidate = config._replace_section_body(candidate, definition.provider_id, body)
         candidate = with_gateway_auth(candidate, definition.provider_id, None)
     metadata = gateway_metadata(original, include_inactive=True)
@@ -465,12 +485,12 @@ def prepare_exit(provider: str, *, config_path: Path | None = None) -> dict:
     # after exit. Codex rejects a saved identity with no provider table.
     selected = definitions.get(provider)
     if selected:
-        body = config._section_range(candidate, selected.provider_id)[2]
-        body = config._without_hud_comment(body, "# codex-hud-proxy: ")
+        candidate = copy_provider_settings(candidate, selected.provider_id, PROVIDER_ID)
     else:
         body = newline.join(['name = "OpenAI"', f'base_url = "{direct_route["base_url"]}"',
                              'wire_api = "responses"', 'requires_openai_auth = true'])
-    candidate = config._replace_section_body(candidate, PROVIDER_ID, body)
+        candidate = clear_provider_subtables(candidate, PROVIDER_ID)
+        candidate = config._replace_section_body(candidate, PROVIDER_ID, body)
     candidate = with_gateway_auth(candidate, PROVIDER_ID, None)
     metadata["active"] = False
     metadata["default_provider"] = provider
@@ -484,6 +504,8 @@ def prepare_exit(provider: str, *, config_path: Path | None = None) -> dict:
     candidate, _ = config._apply_default_desktop_model(candidate, provider, selected.desktop_model if selected else "")
     config._validate_toml(candidate)
     config._write_text_atomically(path, candidate, original, private=True)
+    if on_config_written is not None:
+        on_config_written(candidate)
     with _state_db(path) as db:
         db.execute("INSERT OR REPLACE INTO settings VALUES ('default_provider', ?)", (provider,))
     return {"providerId": provider, "gateway": False, "configPath": str(path),

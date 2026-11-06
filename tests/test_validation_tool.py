@@ -14,6 +14,9 @@ def test_validation_defaults_to_fast_focused_closeout() -> None:
     ]
     assert phases[-1][1] == [sys.executable, "-m", "pytest", *DEFAULT_FOCUSED_TESTS, "-q"]
     assert "tests/test_renderer_contract_tool.py" in DEFAULT_FOCUSED_TESTS
+    assert "tests/test_renderer_provider_resume.py" in DEFAULT_FOCUSED_TESTS
+    assert "tests/test_provider_gateway.py" in DEFAULT_FOCUSED_TESTS
+    assert "tests/test_provider_gateway_toggle.py" in DEFAULT_FOCUSED_TESTS
 
 
 def test_validation_full_mode_appends_timed_full_suite() -> None:

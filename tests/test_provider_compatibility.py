@@ -59,6 +59,10 @@ def test_manual_launch_keeps_parent_environment_and_gateway_alive(tmp_path, monk
     monkeypatch.setenv("_PYI_ARCHIVE_FILE", "frozen-parent")
     popen = MagicMock(return_value=SimpleNamespace(pid=123))
     monkeypatch.setattr(compat.subprocess, "Popen", popen)
+    # These constants do not exist on Linux/macOS, even when this test asks
+    # the launcher to exercise its Windows branch.
+    monkeypatch.setattr(compat.subprocess, "DETACHED_PROCESS", 0x00000008, raising=False)
+    monkeypatch.setattr(compat.subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200, raising=False)
     assert compat.launch_compatible_codex(tmp_path, check=True)["desktopRunning"] is False
     popen.assert_not_called()
     result = compat.launch_compatible_codex(tmp_path)

@@ -7,7 +7,7 @@ import json
 import sqlite3
 from threading import Event, Thread
 from types import SimpleNamespace
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -261,21 +261,25 @@ def test_gateway_streams_replaces_credentials_and_preserves_status(home):
     server = ThreadingHTTPServer(("127.0.0.1", 0), Upstream)
     worker = Thread(target=server.serve_forever, daemon=True)
     worker.start()
-    home.write_text(home.read_text().replace("https://alpha.example/v1", f"http://127.0.0.1:{server.server_port}/api/custom"), encoding="utf-8")
+    home.write_text(home.read_text().replace("https://alpha.example/v1", f"http://127.0.0.1:{server.server_port}/api/custom?base=keep&api-version=base")
+                    .replace('name = "Alpha"', 'name = "Alpha"\nquery_params = { "api-version" = "target", "tenant" = "space & slash/" }'), encoding="utf-8")
     relay = ProviderProxyRelay()
     client = None
     try:
         gateway.activate_gateway(home, relay)
         endpoint = urlsplit(gateway.gateway_info(home)["endpoint"])
         client = http.client.HTTPConnection(endpoint.hostname, endpoint.port, timeout=3)
-        client.request("POST", endpoint.path + "/responses?custom=1", b'{"input":[]}',
+        client.request("POST", endpoint.path + "/responses?custom=1&api-version=stale", b'{"input":[]}',
                        {**headers(A), GATEWAY_AUTH_HEADER: gateway.gateway_info(home)["token"], "Authorization": "Bearer caller", "X-Api-Key": "caller", "Cookie": "secret", "OpenAI-Project": "foreign"})
         response = client.getresponse()
         assert started.wait(1)
         assert response.read(len(b"data: first\n\n")) == b"data: first\n\n"
         assert not release.is_set(), "first SSE frame must reach the client before completion"
         gateway.select_provider("beta", config_path=home)
-        assert calls[0][0] == "/api/custom/responses?custom=1"
+        assert urlsplit(calls[0][0]).path == "/api/custom/responses"
+        assert parse_qs(urlsplit(calls[0][0]).query) == {
+            "base":["keep"], "custom":["1"], "api-version":["target"], "tenant":["space & slash/"],
+        }
         sent = {k.lower(): v for k, v in calls[0][1].items()}
         assert sent["authorization"] == "Bearer alpha-test-only"
         assert not {"x-api-key", "cookie", "openai-project", GATEWAY_AUTH_HEADER.lower()} & sent.keys()
@@ -381,7 +385,74 @@ def test_gateway_auth_headers_preserve_custom_headers_and_are_removed_on_exit(ho
         gateway.prepare_exit("alpha", config_path=home)
         parsed = config._parse_toml_mapping(home.read_text(encoding="utf-8"))
         assert parsed["model_providers"]["alpha"]["http_headers"] == {"X-Custom": "keep"}
+        assert parsed["model_providers"]["codex_hud"]["http_headers"] == {"X-Custom": "keep"}
         assert all(GATEWAY_AUTH_HEADER not in entry.get("http_headers", {}) for entry in parsed["model_providers"].values())
+    finally:
+        relay.close()
+
+
+@pytest.mark.parametrize("proxy_enabled,model", [(True, ""), (False, "private-model"), (True, "private-model")])
+def test_exit_preserves_independent_proxy_and_model_relay(home, monkeypatch, proxy_enabled, model):
+    from codex_usage_hud.provider_proxy import with_proxy_metadata
+
+    original = home.read_text(encoding="utf-8")
+    body = config._section_range(original, "alpha")[2]
+    if model:
+        body = config._with_hud_comment(body, config.DESKTOP_MODEL_MARKER, model, "\n")
+    body = with_proxy_metadata(body, {"base_url":"https://alpha.example/v1", "enabled":proxy_enabled, "port":7897}, "\n")
+    home.write_text(config._replace_section_body(original, "alpha", body), encoding="utf-8")
+    gateway_relay, ordinary_relay = ProviderProxyRelay(), ProviderProxyRelay()
+    monkeypatch.setattr(config, "provider_proxy_relay", ordinary_relay)
+    try:
+        gateway.activate_gateway(home, gateway_relay)
+        gateway.prepare_exit("alpha", config_path=home)
+        parsed = config._parse_toml_mapping(home.read_text(encoding="utf-8"))
+        alpha = parsed["model_providers"]["alpha"]
+        assert alpha["base_url"] == parsed["model_providers"]["codex_hud"]["base_url"]
+        endpoint = urlsplit(alpha["base_url"])
+        assert endpoint.port == ordinary_relay.server.server_port
+        assert endpoint.port != gateway_relay.server.server_port
+        route = ordinary_relay.routes[endpoint.path.split("/")[1]]
+        assert route["enabled"] is proxy_enabled
+        assert route["model"] == model
+        assert route["port"] == 7897
+        assert config.read_provider_definitions(home)["alpha"].base_url == "https://alpha.example/v1"
+        assert not gateway.gateway_info(home)
+    finally:
+        ordinary_relay.close()
+        gateway_relay.close()
+
+
+@pytest.mark.parametrize("quoted", [False, True])
+def test_exit_copies_full_provider_tree_and_reactivation_clears_stale_compatibility_tables(home, quoted):
+    name = '"alpha"' if quoted else 'alpha'
+    text = home.read_text(encoding="utf-8") + f'''
+[model_providers.{name}.http_headers]
+"X-Tenant" = "required"
+[model_providers.{name}.env_http_headers]
+"X-Environment" = "TENANT_ENV"
+[model_providers.{name}.query_params]
+api-version = "2026-01-01"
+[profiles.keep]
+model_provider = "codex_hud"
+'''
+    home.write_text(text, encoding="utf-8")
+    relay = ProviderProxyRelay()
+    try:
+        gateway.activate_gateway(home, relay)
+        gateway.prepare_exit("alpha", config_path=home)
+        direct = config._parse_toml_mapping(home.read_text(encoding="utf-8"))
+        assert direct["model_providers"]["codex_hud"] == direct["model_providers"]["alpha"]
+        assert direct["profiles"]["keep"]["model_provider"] == "codex_hud"
+        gateway.activate_gateway(home, relay)
+        active = config._parse_toml_mapping(home.read_text(encoding="utf-8"))
+        native = active["model_providers"]["codex_hud"]
+        assert set(native["http_headers"]) == {GATEWAY_AUTH_HEADER}
+        assert "env_http_headers" not in native and "query_params" not in native
+        assert active["profiles"]["keep"]["model_provider"] == "codex_hud"
+        stable = home.read_bytes()
+        gateway.activate_gateway(home, relay)
+        assert home.read_bytes() == stable
     finally:
         relay.close()
 

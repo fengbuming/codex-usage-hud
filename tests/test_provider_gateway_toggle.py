@@ -1,6 +1,8 @@
 """Gateway opt-in and failure paths without launching a proxy or Codex."""
 
 from dataclasses import replace
+import json
+import sys
 from threading import Event
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -104,6 +106,75 @@ def test_failed_activation_never_persists_opt_in(setup):
         set_gateway_enabled(store, True, config_path=path, relay=relay)
     assert store.load().provider_gateway_enabled is False
     assert path.read_bytes() == original
+
+
+def test_missing_toml_parser_fails_before_credentials_or_configuration_are_changed(setup, monkeypatch):
+    path, store, relay = setup
+    path.with_name("auth.json").write_text(json.dumps({"OPENAI_API_KEY":"test-only-key"}), encoding="utf-8")
+    original = path.read_bytes()
+    monkeypatch.setitem(sys.modules, "tomllib", None)
+    monkeypatch.setitem(sys.modules, "tomli", None)
+    with pytest.raises(RuntimeError, match="TOML 解析器"):
+        set_gateway_enabled(store, True, config_path=path, relay=relay)
+    assert path.read_bytes() == original
+    assert not store.load().provider_gateway_enabled
+    assert not path.with_name(path.name + ".hud-gateway-backup").exists()
+    relay.route.assert_not_called()
+
+
+def test_python310_tomli_fallback_can_activate_gateway(setup, monkeypatch):
+    from types import SimpleNamespace
+    try:
+        import tomllib as parser
+    except ModuleNotFoundError:
+        import tomli as parser
+
+    path, store, relay = setup
+    monkeypatch.setitem(sys.modules, "tomllib", None)
+    monkeypatch.setitem(sys.modules, "tomli", SimpleNamespace(loads=parser.loads))
+    assert set_gateway_enabled(store, True, config_path=path, relay=relay)["gateway"]
+    assert store.load().provider_gateway_enabled
+    assert gateway.gateway_info(path)["default_provider"] == "alpha"
+
+
+def test_invalid_toml_is_rejected_before_starting_relay(setup):
+    path, store, relay = setup
+    path.write_text('model_provider = "unterminated\n', encoding="utf-8")
+    original = path.read_bytes()
+    with pytest.raises(ValueError, match="有效 TOML"):
+        set_gateway_enabled(store, True, config_path=path, relay=relay)
+    assert path.read_bytes() == original
+    assert not store.load().provider_gateway_enabled
+    relay.route.assert_not_called()
+
+
+def test_failed_post_write_confirmation_rolls_back_only_the_gateway_candidate(setup, monkeypatch):
+    from codex_usage_hud import provider_gateway_settings as settings
+
+    path, store, relay = setup
+    original = path.read_bytes()
+    monkeypatch.setattr(settings, "gateway_info", MagicMock(side_effect=[{}, RuntimeError("confirmation failed")]))
+    with pytest.raises(RuntimeError, match="confirmation failed"):
+        set_gateway_enabled(store, True, config_path=path, relay=relay)
+    assert path.read_bytes() == original
+    assert not store.load().provider_gateway_enabled
+
+
+def test_settings_write_failure_does_not_overwrite_a_concurrent_external_edit(setup, monkeypatch):
+    path, store, relay = setup
+    concurrent = []
+
+    def save(_config):
+        text = config._read_text_exact(path) + "\n# concurrent edit\n"
+        path.write_text(text, encoding="utf-8", newline="")
+        concurrent.append(text)
+        raise OSError("cannot save preference")
+
+    monkeypatch.setattr(store, "save", save)
+    with pytest.raises(RuntimeError, match="发生了变化"):
+        set_gateway_enabled(store, True, config_path=path, relay=relay)
+    assert config._read_text_exact(path) == concurrent[0]
+    assert not store.load().provider_gateway_enabled
 
 
 @pytest.mark.parametrize("enabled", [False, True])

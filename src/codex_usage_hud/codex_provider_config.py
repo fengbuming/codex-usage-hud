@@ -623,30 +623,24 @@ def _add_provider_section_text(text: str, provider_id: str, body: str) -> str:
 
 
 def _validate_toml(text: str) -> None:
+    _parse_toml_mapping(text, strict=True)
+
+
+def _parse_toml_mapping(text: str, *, strict: bool = False) -> Mapping[str, Any]:
     try:
         import tomllib  # type: ignore[attr-defined]
     except ModuleNotFoundError:
         try:
             import tomli as tomllib  # type: ignore[no-redef]
         except ModuleNotFoundError:
-            return
-    try:
-        tomllib.loads(text)
-    except Exception as exc:
-        raise ValueError(f"编辑后的 Codex config.toml 不是有效 TOML：{exc}") from exc
-
-
-def _parse_toml_mapping(text: str) -> Mapping[str, Any]:
-    try:
-        import tomllib  # type: ignore[attr-defined]
-    except ModuleNotFoundError:
-        try:
-            import tomli as tomllib  # type: ignore[no-redef]
-        except ModuleNotFoundError:
+            if strict:
+                raise RuntimeError("缺少 TOML 解析器，未修改 Codex 配置。Python 3.10 请先安装 tomli。") from None
             return {}
     try:
         candidate = tomllib.loads(text)
-    except Exception:
+    except Exception as exc:
+        if strict:
+            raise ValueError(f"Codex config.toml 不是有效 TOML：{exc}") from exc
         return {}
     return candidate if isinstance(candidate, Mapping) else {}
 
