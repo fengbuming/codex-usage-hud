@@ -7,6 +7,41 @@ and this repository follows Semantic Versioning for release tags.
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-11-06
+
+### Added
+
+- Optional local provider gateway with durable routes per conversation, inherited
+  subagent routes, and confirmation before copying a chat to another provider.
+- Image generation through configured image models in the native model picker,
+  with durable local images and Responses-compatible replies.
+- Explicit HUD management controls for source reload and safe exit, plus manual
+  compatibility launch instructions for cores that reject historical providers.
+- Session average/minimum/maximum output speeds and refreshed desktop work bubbles.
+
+### Fixed
+
+- Isolated custom credentials, headers and query parameters between providers,
+  including copied conversations whose original provider was deleted.
+- Preserved JSON error codes and types while retaining upstream diagnostics.
+- Inherited foreign encrypted-history cleanup for subagents of provider copies.
+- Used HTTP Responses during gateway takeover and restored original WebSocket
+  settings when disabling the gateway or exiting normally.
+- Removed the unsupported response_format parameter from GPT image requests.
+- Improved session following across hidden sidebars, blank chats and temporary IDs,
+  title-bar layout, native title reveal, and progress-label contrast.
+- Improved update-download proxy selection, timeouts and slow-source fallback.
+- Added committed-snapshot push checks and pinned CI Qt to the verified version.
+
+### Notes
+
+- Provider gateway is off by default. Existing windows may need to be reopened
+  after enabling or disabling it so Codex reloads its provider configuration.
+- Image generation requires a provider implementing the Images API; reference
+  image editing and multi-turn image editing are not supported.
+- macOS remains source/pip supported with code-level CI checks; desktop
+  interaction has not been validated on a real Mac.
+
 ## [1.5.1] - 2026-10-30
 
 ### Added
