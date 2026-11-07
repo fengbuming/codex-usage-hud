@@ -14,7 +14,7 @@ from .refresh_diagnostics import RefreshDiagnosticTrace
 
 _LOGGER = logging.getLogger(__name__)
 
-# Debounce for non-immediate wake reasons (sessions-root, settings, sse-log).
+# Debounce for non-immediate wake reasons (session-map, sessions-root, settings, sse-log).
 # 0.2s balances new-session-file detection latency against coalescing frequent
 # tree/watch writes. The loop's own wait delay further throttles processing.
 DEFAULT_DEBOUNCE_SECONDS = 0.2
@@ -170,7 +170,7 @@ class RendererFileEventSource:
 
     @staticmethod
     def _should_wake_immediately(reasons: set[str]) -> bool:
-        return "session" in reasons or "session-map" in reasons
+        return "session" in reasons
 
     def _flush_debounced_change(self) -> None:
         with self._lock:

@@ -137,6 +137,7 @@ const mutationCallbacks = [];
 let now = 1000;
 Date.now = () => now;
 let previewDialogs = [];
+let previewQueries = 0;
 class EventProbe {
   constructor() { this.listeners = new Map(); }
   addEventListener(type, fn) { this.listeners.set(type, [...(this.listeners.get(type) || []), fn]); }
@@ -146,7 +147,7 @@ class EventProbe {
 global.window = new EventProbe();
 global.document = new EventProbe();
 global.document.documentElement = null;
-global.document.querySelectorAll = selector => selector === 'img' ? [] : previewDialogs;
+global.document.querySelectorAll = selector => { previewQueries++; return selector === 'img' ? [] : previewDialogs; };
 let titleToolbar = {};
 global.document.querySelector = () => titleToolbar;
 global.Node = {ELEMENT_NODE: 1};
@@ -267,6 +268,16 @@ assert.equal(scheduled.length, 5);
 document.dispatch('pointercancel', {pointerId: 19});
 assert.equal(scheduled.length, 7);
 
+// Ordinary typing and clicks must not scan every image/dialog in the page.
+frameCallbacks.clear();
+const queriesBeforeTyping = previewQueries;
+for (let i = 0; i < 100; i++) {
+  document.dispatch('keydown', {key: 'a', target: content});
+  document.dispatch('click', {target: content, composedPath: () => [content]});
+  flushPreviewFrame();
+}
+assert.equal(previewQueries, queriesBeforeTyping);
+
 // Clicking a large Codex image freezes geometry immediately, before the
 // preview layer has finished mounting. The modal keeps it frozen, and closing
 // the modal does not trigger a compensating layout pass.
@@ -293,6 +304,19 @@ assert.equal(scheduled.length, 0);
 now += 701;
 scheduleForPanels(['request']);
 assert.equal(scheduled.length, 1);
+
+// Keyboard activation does not need a global key listener: mounting/removing
+// the preview surface still freezes and releases geometry through mutations.
+dialog.isConnected = true; previewDialogs = [dialog];
+mutationCallbacks[0]([{target: document.documentElement, addedNodes: [dialog], removedNodes: []}]);
+flushPreviewFrame();
+assert.equal(layoutGeometryFrozen(), true);
+document.dispatch('keydown', {key: 'Escape', target: dialog});
+dialog.isConnected = false; previewDialogs = [];
+mutationCallbacks[0]([{target: document.documentElement, addedNodes: [], removedNodes: [dialog]}]);
+flushPreviewFrame();
+now += 701;
+assert.equal(layoutGeometryFrozen(), false);
 """
     script = harness + observers + checks
     result = subprocess.run(

@@ -522,8 +522,11 @@ TEXT = r"""
           cancelScheduledLayoutGeometry();
           scheduleCheck();
         }, true);
-        ctx.lifecycle.listen("layout_preview", document, "click", scheduleCheck, true);
-        ctx.lifecycle.listen("layout_preview", document, "keydown", scheduleCheck, true);
+        ctx.lifecycle.listen("layout_preview", document, "click", (event) => {
+          if (previewGeometryFrozen || isImagePreviewTrigger(event)) scheduleCheck();
+        }, true);
+        // Keyboard-opened/closed previews are detected by DOM mutations too.
+        // Ordinary typing must not query every image and dialog on the page.
         if (typeof MutationObserver === "function" && document.documentElement) {
           previewObserver = ctx.observers.set("layout_preview", new MutationObserver((mutations) => {
             const relevant = mutations.some((mutation) => {

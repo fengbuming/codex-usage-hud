@@ -7,6 +7,14 @@ and this repository follows Semantic Versioning for release tags.
 
 ## [Unreleased]
 
+### Fixed
+
+- Coalesced session-mapping file events and stopped refreshing the renderer
+  when reconciliation leaves the selected session unchanged, including during
+  CDP backoff. Pending sessions still refresh when their mapping becomes available.
+- Removed global image-preview scans from ordinary typing and clicks while
+  preserving pointer and keyboard preview open/close detection through DOM events.
+
 ## [1.6.0] - 2026-11-06
 
 ### Added

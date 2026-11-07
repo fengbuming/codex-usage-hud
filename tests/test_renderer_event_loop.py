@@ -875,6 +875,55 @@ def test_tick_sampler_idle_second_sample_has_no_refresh_work() -> None:
     assert not second.event_refresh_request.force_fast
 
 
+def test_tick_sampler_unchanged_mapping_events_do_not_request_renderer_work() -> None:
+    bus = RuntimeEventBus(clock=lambda: 20.0)
+    tracker = SimpleNamespace(rematerialize_renderer_mapping=MagicMock(return_value=False))
+    state = RendererLoopState(latest_snapshot=SimpleNamespace(selection_seq=1))
+    sampler = RendererTickSampler(
+        state,
+        _sampler_ports(
+            event_bus=bus, update_state={"phase": "idle"}, tracker=tracker,
+            file_changes_fn=lambda: ({"session-map"}, {Path("state_5.sqlite-wal")}),
+        ),
+    )
+
+    for _ in range(1000):
+        inputs = sampler.sample()
+        assert not inputs.runtime_events
+        assert not inputs.event_refresh_request.has_work
+        # Also avoid local snapshot rebuilds when CDP is in backoff.
+        assert not inputs.file_refresh_requested
+    assert state.activity_wake_pending == ""
+
+
+def test_tick_sampler_mapping_recovery_refreshes_once_and_preserves_session_writes() -> None:
+    bus = RuntimeEventBus(clock=lambda: 20.0)
+    tracker = SimpleNamespace(
+        rematerialize_renderer_mapping=MagicMock(side_effect=[True, False, False]),
+    )
+    changes = iter([
+        ({"session-map"}, {Path("state_5.sqlite-wal")}),
+        ({"session-map"}, {Path("state_5.sqlite-wal")}),
+        ({"session-map", "session"}, {Path("state_5.sqlite-wal"), Path("current.jsonl")}),
+    ])
+    sampler = RendererTickSampler(
+        RendererLoopState(latest_snapshot=SimpleNamespace(selection_seq=1)),
+        _sampler_ports(
+            event_bus=bus, update_state={"phase": "idle"}, tracker=tracker,
+            file_changes_fn=lambda: next(changes),
+        ),
+    )
+
+    recovered = sampler.sample()
+    assert recovered.event_refresh_request.snapshot
+    assert [event.type for event in recovered.runtime_events] == ["active_session_changed"]
+    assert not sampler.sample().event_refresh_request.has_work
+    session_write = sampler.sample()
+    assert session_write.file_change_reasons == {"session"}
+    assert session_write.event_refresh_request.snapshot
+    assert [event.type for event in session_write.runtime_events] == ["session_file_changed"]
+
+
 def test_tick_sampler_active_session_only_skips_deferred_state_sampling() -> None:
     bus = RuntimeEventBus(clock=lambda: 20.0)
     active_wake = Event()

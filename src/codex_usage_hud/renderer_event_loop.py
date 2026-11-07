@@ -157,9 +157,14 @@ class RendererTickSampler:
             self.ports.active_session_wake_event
         )
         reasons, paths = self.ports.take_file_changes()
-        session_map_changed = "session-map" in reasons
-        if session_map_changed:
-            self._rematerialize_mapping()
+        session_map_changed = False
+        if "session-map" in reasons:
+            session_map_changed = self._rematerialize_mapping()
+            if not session_map_changed:
+                # A database/WAL write need not change the selected thread.
+                # Do not manufacture a session switch (or a local rebuild
+                # during CDP backoff) when reconciliation did not advance.
+                reasons.discard("session-map")
         if "sessions-root" in reasons:
             self._heal_pending_session_from_file()
         command = self.ports.take_command()
@@ -343,20 +348,22 @@ class RendererTickSampler:
         self.state.latest_budget_window_keys = current
         return current
 
-    def _rematerialize_mapping(self) -> None:
+    def _rematerialize_mapping(self) -> bool:
         self.ports.invalidate_mapping()
         tracker = self.ports.tracker()
         rematerialize = getattr(tracker, "rematerialize_renderer_mapping", None)
         if not callable(rematerialize):
-            return
+            return False
         try:
             if rematerialize(force=True):
                 self.state.activity_wake_pending = ""
                 setter = getattr(self.ports.bridge_wake_event, "set", None)
                 if callable(setter):
                     setter()
+                return True
         except Exception as exc:
             _LOGGER.debug("renderer_mapping_rematerialize_failed error=%s", exc)
+        return False
 
     def _heal_pending_session_from_file(self) -> None:
         """When a new session JSONL appears on disk but the renderer DOM has

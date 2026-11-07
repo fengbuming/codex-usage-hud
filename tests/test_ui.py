@@ -17751,7 +17751,7 @@ class DaemonLifecycleTests(unittest.TestCase):
         self.assertEqual(reasons, {"session"})
         self.assertEqual(paths, {session_path})
 
-    def test_renderer_file_event_source_wakes_immediately_for_session_map(self) -> None:
+    def test_renderer_file_event_source_coalesces_session_map_writes(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             wake_event = threading.Event()
@@ -17790,6 +17790,15 @@ class DaemonLifecycleTests(unittest.TestCase):
                     {"session-map", "settings"},
                     {state_db_path, root / "hud_settings.json"},
                 )
+                self.assertFalse(wake_event.is_set())
+                timer = source._timer
+                self.assertIsNotNone(timer)
+                for _ in range(100):
+                    watcher.callback({"session-map"}, {state_db_path})
+                self.assertIs(source._timer, timer)
+                self.assertFalse(wake_event.is_set())
+                timer.cancel()
+                source._flush_debounced_change()
                 reasons, paths = source.take_changes()
                 source.close()
 
@@ -20245,6 +20254,7 @@ class DaemonLifecycleTests(unittest.TestCase):
             active_tracker = SimpleNamespace(
                 set_change_callback=MagicMock(),
                 invalidate_mapping_cache=MagicMock(),
+                rematerialize_renderer_mapping=MagicMock(return_value=True),
             )
             fake_context = SimpleNamespace(
                 poll_ms=500,
