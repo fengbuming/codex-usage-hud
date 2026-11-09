@@ -55,7 +55,7 @@ BUDGET_KEYS = frozenset(
     }
 )
 _SAFE_PARTIAL_KEYS = (
-    frozenset({"display_mode"})
+    frozenset({"display_mode", "show_native_fast_toggle"})
     | _OVERLAY_KEYS
     | _SESSION_ACTIVITY_KEYS
     | _QUICK_LAUNCH_KEYS
@@ -110,7 +110,7 @@ def partial_domains_for_command(
     # that closes the clone loading overlay.
     if action == "providerCloneSwitch":
         return {"settings"}
-    if action in {"providerSetDefault", "providerBindSession", "providerPrepareExit", "providerGatewayToggle", "providerCompatibilityHelp", "imageGenerationSet", "imageGenerationContext", "imageGenerationDraft"}:
+    if action in {"providerSetDefault", "providerBindSession", "providerPrepareExit", "providerGatewayToggle", "providerCompatibilityHelp", "imageGenerationSet", "imageGenerationContext", "imageGenerationDraft", "fastRequestSet"}:
         return {"settings"}
     # Confirming an official price update changes pricing tables, but the
     # visible session snapshot already contains all usage data. Reapply the

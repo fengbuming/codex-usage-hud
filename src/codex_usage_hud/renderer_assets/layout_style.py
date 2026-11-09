@@ -10,6 +10,28 @@ TEXT = r"""
         style.id = styleId;
         style.dataset.version = version;
         style.textContent = `
+          [data-codex-usage-hud-fast-toggle] {
+            display: inline-flex;
+            align-items: center;
+            flex-shrink: 0;
+            min-height: 26px;
+            padding: 2px 7px;
+            border: 0;
+            border-radius: 7px;
+            background: transparent;
+            color: var(--color-text-tertiary, inherit);
+            font: inherit;
+            font-size: 12px;
+            cursor: pointer;
+          }
+          [data-codex-usage-hud-fast-toggle]:hover,
+          [data-codex-usage-hud-fast-toggle]:focus-visible {
+            background: var(--color-background-primary-ghost-hover, #80808020);
+          }
+          [data-codex-usage-hud-fast-toggle][aria-checked="true"] {
+            color: var(--color-chart-blue, #5294ff);
+          }
+          [data-codex-usage-hud-fast-toggle]:disabled { opacity: .5; cursor: default; }
           #${rootId} {
             --codex-usage-hud-surface: #10161d;
             --codex-usage-hud-panel-surface: #141b24;
@@ -2650,6 +2672,22 @@ TEXT = r"""
             padding: 5px 7px;
             outline: none;
           }
+          #${rootId} .codex-usage-hud-native-fast-setting {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            color: var(--codex-usage-hud-muted, #8492a6);
+            font-size: 11px;
+            white-space: nowrap;
+            cursor: pointer;
+          }
+          #${rootId} .codex-usage-hud-native-fast-setting input[type="checkbox"] {
+            width: 14px;
+            height: 14px;
+            min-height: 0;
+            padding: 0;
+            margin: 0;
+          }
           #${rootId} .codex-usage-hud-settings-field input:focus,
           #${rootId} .codex-usage-hud-settings-field select:focus,
           #${rootId} .codex-usage-hud-price-row input:focus {
@@ -3641,8 +3679,13 @@ TEXT = r"""
             overflow-wrap: anywhere;
           }
           #${rootId} .codex-usage-hud-settings-dialog[data-active-tab="settings"] .codex-usage-hud-settings-actions > div:last-child {
+            display: flex;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 10px;
             flex: 0 0 auto;
             width: auto;
+            max-width: 100%;
             margin-left: auto;
             align-self: flex-end;
           }

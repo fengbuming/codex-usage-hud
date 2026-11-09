@@ -1463,11 +1463,13 @@ def handle_general_command(
             from .provider_compatibility import manual_instructions
 
             return {**_status("手动兼容启动步骤已准备。"), "providerCompatibility": manual_instructions()}
-        if action in {"providerBindSession", "providerPrepareExit", "providerGatewayToggle", "imageGenerationSet", "imageGenerationContext", "imageGenerationDraft"}:
+        if action in {"providerBindSession", "providerPrepareExit", "providerGatewayToggle", "imageGenerationSet", "imageGenerationContext", "imageGenerationDraft", "fastRequestSet"}:
             if ports.gateway_command is None:
                 return _status("HUD 统一代理当前不可用。", kind="error")
             result = ports.gateway_command(command)
             message = "会话供应商已确认。" if action == "imageGenerationContext" else "供应商路由已保存。"
+            if action == "fastRequestSet":
+                message = "Fast 请求偏好已保存。" if result.get("gateway") else "Fast 偏好已保存，开启 HUD 请求代理后生效。"
             return {**_status(message), "providerGateway": dict(result)}
         if action == "providerCloneSwitch":
             if ports.clone_provider_with_bearer_key is None:
@@ -2504,6 +2506,10 @@ def _handle_renderer_settings_command(
         from .provider_gateway import prepare_exit, select_provider, session_provider
 
         provider = str(command.get("provider") or "")
+        if command.get("action") == "fastRequestSet":
+            from .provider_gateway import set_fast_request
+
+            return set_fast_request(str(command.get("sessionId") or ""), command.get("enabled"))
         if command.get("action") == "imageGenerationDraft":
             from .provider_gateway import set_image_draft
 

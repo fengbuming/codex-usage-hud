@@ -62,6 +62,7 @@ Renderer 模式通过 HUD 统一代理接管供应商。标题栏菜单为新会
 
 ## 主要功能
 
+- Fast 开关：在 HUD 设置中开启“显示原生 Fast 开关”，即可在模型按钮旁选择是否请求 Fast。原生入口可用且无代理覆盖时复用原生回调；否则在 HUD 请求代理中为当前聊天附加 `service_tier=fast`，关闭时使用 `default`。不按账号或模型能力禁用按钮，实际档位和计费由上游决定。新聊天页面设置的是后续新聊天的默认值；历史聊天互不影响。关闭显示不会清除请求偏好。没有开启请求代理时可保存偏好，代理开启后生效。
 - Renderer-only：Codex 暴露配置的本地 CDP target 时，HUD 直接显示在 Codex App 内部；HUD 存活期间新启动的 Codex 会按来源区分为直接接入或一次性 CDP 接管，已有/不明确的实例仍在右上角启动面板提供显式重启入口，不回退到 Qt/Tk 独立窗口。
 - PySide6 桌面会话气泡：源码 / pip 安装时可通过 `codex-usage-hud[desktop-overlay]` 启用桌面级方形运行气泡和完成态圆气泡；主 HUD 仍保持 renderer-only。
 - Windows CLI 会话气泡支持点击工作目录，恢复对应的 Windows Terminal 标签页或独立 PowerShell/cmd 窗口。HUD 启动的终端具有唯一标签，支持 `--no-daemon` 的 CLI 会采用独立后台，并在命令预览中显示该选项，以便准确核验会话归属。手动启动的 CLI 仅在归属可确认时跳转；共享后台、重复标签标题及 VS Code/WSL 终端无法确认时会提示。CLI 已退出时，可从会话管理中选择“在 CLI 中恢复”。

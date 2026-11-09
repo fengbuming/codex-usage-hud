@@ -292,6 +292,7 @@ class UserConfig:
     support_url: str = DEFAULT_SUPPORT_URL
     stop_hud_on_lock_screen: bool = DEFAULT_STOP_HUD_ON_LOCK_SCREEN
     provider_gateway_enabled: bool = False
+    show_native_fast_toggle: bool = False
     rest_reminder_enabled: bool = DEFAULT_REST_REMINDER_ENABLED
     rest_reminder_interval_minutes: int = DEFAULT_REST_REMINDER_INTERVAL_MINUTES
     rest_reminder_break_minutes: int = DEFAULT_REST_REMINDER_BREAK_MINUTES
@@ -411,6 +412,7 @@ class UserConfig:
             support_url=_optional_str(value.get("support_url")) or DEFAULT_SUPPORT_URL,
             stop_hud_on_lock_screen=stop_hud_on_lock_screen,
             provider_gateway_enabled=_optional_bool(value.get("provider_gateway_enabled")) is True,
+            show_native_fast_toggle=_optional_bool(value.get("show_native_fast_toggle")) is True,
             rest_reminder_enabled=_optional_bool(value.get("rest_reminder_enabled"))
             if value.get("rest_reminder_enabled") is not None
             else defaults.rest_reminder_enabled,
@@ -494,6 +496,7 @@ class UserConfig:
             "support_url": self.support_url,
             "stop_hud_on_lock_screen": bool(self.stop_hud_on_lock_screen),
             "provider_gateway_enabled": bool(self.provider_gateway_enabled),
+            "show_native_fast_toggle": bool(self.show_native_fast_toggle),
             "rest_reminder_enabled": bool(self.rest_reminder_enabled),
             "rest_reminder_interval_minutes": int(self.rest_reminder_interval_minutes),
             "rest_reminder_break_minutes": int(self.rest_reminder_break_minutes),

@@ -192,9 +192,10 @@ def payload_from_snapshot(
     # 会话供应商观察覆盖的 app_provider 不同，它只随 config 重载变化，供渲染器
     # 菜单栏「默认」徽标与供应商编辑器「默认 Codex App Provider」判定使用。
     settings_payload["default_provider"] = str(default_provider or "")
-    from .provider_gateway import gateway_info, image_sessions
+    from .provider_gateway import fast_request_preferences, gateway_info, image_sessions
 
     gateway = gateway_info()
+    settings_payload["fast_request_preferences"] = fast_request_preferences()
     if gateway:
         settings_payload["default_provider"] = str(gateway["default_provider"])
     settings_payload["provider_gateway"] = {

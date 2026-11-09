@@ -482,6 +482,10 @@ class ProviderProxyRelay:
                             if upgrade and route.get("foreign_history"):
                                 raise ValueError("跨供应商副本需要 HTTP Responses 传输；请重新打开副本后重试。")
                             body = prepare_request_body(gateway_path, route, body)
+                            if not upgrade and request_path.endswith("/responses"):
+                                from .provider_gateway import apply_request_service_tier
+
+                                body = apply_request_service_tier(body, route.get("service_tier_override"))
                     connection.request(self.command, target or "/", body=body, headers=headers)
                     response = connection.getresponse()
                     upstream_id = upstream_request_id(response.headers)

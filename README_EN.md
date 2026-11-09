@@ -1,5 +1,7 @@
 # codex-usage-hud
 
+Fast toggle: enable “显示原生 Fast 开关” in HUD settings to show a switch beside the model button. It uses the native callback when available without a gateway override; otherwise the HUD request gateway sends `service_tier=fast` for the current chat, or `default` when switched off. Account and model capabilities do not disable the switch; the upstream controls actual service and billing. In a new-chat composer, the choice sets the default for subsequent new chats. Existing chats retain their own choices. Hiding the switch preserves the preference. Gateway preferences can be saved while the gateway is off and apply when it is enabled.
+
 [中文](README.md) | English
 
 > **Live token usage, cache hit rate, and real cost inside Codex App — fully local, no data uploaded.**

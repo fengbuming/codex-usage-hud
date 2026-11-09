@@ -1759,6 +1759,7 @@ _TEXT_PREFIX = r"""
           support_url: "https://github.com/fengbuming/codex-usage-hud",
           stop_hud_on_lock_screen: false,
           provider_gateway_enabled: false,
+          show_native_fast_toggle: false,
           rest_reminder_enabled: false,
           rest_reminder_interval_minutes: 45,
           rest_reminder_break_minutes: 2,
@@ -3754,6 +3755,15 @@ _TEXT_PREFIX = r"""
         );
       }
 
+      function nativeFastSettingHtml(settings) {
+        return `
+          <label class="codex-usage-hud-native-fast-setting" title="显示输入区 Fast 开关；无原生入口时由 HUD 请求代理附加速度参数，实际档位和计费由上游决定。">
+            <input type="checkbox" data-setting-key="show_native_fast_toggle" ${settings.show_native_fast_toggle ? "checked" : ""}>
+            显示原生 Fast 开关
+          </label>
+        `;
+      }
+
         function renderSettingsModal(tab = "settings", status = "", { resetProviderDraft = false } = {}) {
         const root = document.getElementById(rootId);
         const modal = document.getElementById(settingsModalId);
@@ -3819,6 +3829,7 @@ _TEXT_PREFIX = r"""
             <div class="codex-usage-hud-settings-actions">
               <div class="codex-usage-hud-settings-status" data-settings-status="true">${escapeHtml(status || defaultStatus)}</div>
               <div>
+                ${activeTab === "settings" ? nativeFastSettingHtml(settings) : ""}
                 ${activeTab === "settings" ? '<button type="button" class="codex-usage-hud-settings-action" data-action="settings-manage" data-variant="ghost">重载/退出</button>' : ""}
                 ${activeTab === "settings" ? '<button type="button" class="codex-usage-hud-settings-action" data-action="settings-restart" hidden>立即重启 HUD</button>' : activeTab === "backgroundUsage" ? '<button type="button" class="codex-usage-hud-settings-action" data-action="background-usage-refresh">刷新</button> <button type="button" class="codex-usage-hud-settings-action" data-action="settings-close" data-primary="true">关闭</button>' : activeTab === "about" ? '<button type="button" class="codex-usage-hud-settings-action" data-action="settings-check-update">检查更新</button> <button type="button" class="codex-usage-hud-settings-action" data-action="settings-install-update" data-primary="true" disabled>安装更新</button>' : '<button type="button" class="codex-usage-hud-settings-action" data-action="settings-close" data-primary="true">关闭</button>'}
               </div>
@@ -6114,6 +6125,9 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
         };
         if (settingNode("stop_hud_on_lock_screen")) {
           next.stop_hud_on_lock_screen = !!settingNode("stop_hud_on_lock_screen").checked;
+        }
+        if (settingNode("show_native_fast_toggle")) {
+          next.show_native_fast_toggle = !!settingNode("show_native_fast_toggle").checked;
         }
         // Rest-reminder controls live on the support tab; keep previous values when absent.
         if (settingNode("rest_reminder_enabled")) {

@@ -72,6 +72,7 @@ def _state_db(path: Path):
             db.execute("CREATE TABLE IF NOT EXISTS foreign_seals (id TEXT NOT NULL, digest TEXT NOT NULL, PRIMARY KEY(id, digest))")
             db.execute("CREATE TABLE IF NOT EXISTS image_sessions (id TEXT PRIMARY KEY, provider TEXT NOT NULL, model TEXT NOT NULL)")
             db.execute("CREATE TABLE IF NOT EXISTS image_drafts (token TEXT PRIMARY KEY, provider TEXT NOT NULL, thread_id TEXT NOT NULL, expires INTEGER NOT NULL)")
+            db.execute("CREATE TABLE IF NOT EXISTS request_service_tiers (id TEXT PRIMARY KEY, tier TEXT NOT NULL)")
             db.execute("BEGIN IMMEDIATE")
             yield db
             db.commit()
@@ -121,6 +122,46 @@ def request_thread_id(headers: Mapping) -> str:
     if len(ids) > 1:
         raise ValueError("请求中的会话 ID 不一致，已停止路由。")
     return next(iter(ids), "")
+
+
+def fast_request_preferences(path: Path | None = None) -> dict:
+    """Read explicit request choices; an empty ID is the new-chat default."""
+    from .codex_provider_config import default_codex_config_path
+
+    path = path or default_codex_config_path()
+    if not path.with_name("hud-provider-sessions.sqlite").exists():
+        return {}
+    with _read_state_db(path) as db:
+        if not db.execute("SELECT 1 FROM sqlite_master WHERE name = 'request_service_tiers'").fetchone():
+            return {}
+        return dict(db.execute("SELECT id, tier FROM request_service_tiers"))
+
+
+def set_fast_request(thread_id: str, enabled: bool, *, config_path: Path | None = None) -> dict:
+    from .codex_provider_config import default_codex_config_path
+
+    path = config_path or default_codex_config_path()
+    if not isinstance(enabled, bool) or (thread_id and not canonical_thread_id(thread_id)):
+        raise ValueError("Fast 请求设置或会话 ID 无效。")
+    thread_id = canonical_thread_id(thread_id) if thread_id else ""
+    tier = "fast" if enabled else "default"
+    with _state_db(path) as db:
+        db.execute("INSERT OR REPLACE INTO request_service_tiers VALUES (?, ?)", (thread_id, tier))
+    return {"sessionId": thread_id, "serviceTier": tier, "enabled": enabled,
+            "gateway": bool(gateway_info(path))}
+
+
+def apply_request_service_tier(body: bytes | None, tier: object) -> bytes | None:
+    """Only explicit user choices override the outgoing Responses request."""
+    if tier not in {"fast", "default"} or not body:
+        return body
+    payload = json.loads(body)
+    if not isinstance(payload, dict):
+        raise ValueError("Fast 请求需要 JSON 对象。")
+    if payload.get("service_tier") == tier:
+        return body
+    payload["service_tier"] = tier
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
 
 
 def session_provider(thread_id: str, native_provider: str = "", *, config_path: Path | None = None) -> str:
@@ -266,6 +307,8 @@ def resolve_route(path: Path, headers: Mapping, *, generation: bool) -> dict:
     with _state_db(path) as db:
         row = db.execute("SELECT provider FROM sessions WHERE id = ?", (thread_id,)).fetchone() if thread_id else None
         provider = str(row[0]) if row else ""
+        historical = ""
+        parent = ""
         if not provider:
             historical = _historical_provider(path, thread_id) if thread_id else ""
             parent = _parent_thread_id(path, thread_id) if thread_id else ""
@@ -278,6 +321,14 @@ def resolve_route(path: Path, headers: Mapping, *, generation: bool) -> dict:
         route = _provider_route(path, provider, definitions)
         if generation and thread_id and not row:
             db.execute("INSERT INTO sessions VALUES (?, ?)", (thread_id, provider))
+        tier_row = db.execute("SELECT tier FROM request_service_tiers WHERE id = ?", (thread_id,)).fetchone() if thread_id else None
+        if tier_row is None and not row and thread_id:
+            if parent:
+                tier_row = db.execute("SELECT tier FROM request_service_tiers WHERE id = ?", (parent,)).fetchone()
+            if tier_row is None and historical in {"", PROVIDER_ID}:
+                tier_row = db.execute("SELECT tier FROM request_service_tiers WHERE id = ''").fetchone()
+            if tier_row and generation:
+                db.execute("INSERT INTO request_service_tiers VALUES (?, ?)", (thread_id, tier_row[0]))
         copy = db.execute("SELECT source_provider FROM copies WHERE id = ?", (thread_id,)).fetchone()
         if thread_id and not copy:
             _inherit_copy_history(db, path, thread_id, provider)
@@ -285,6 +336,7 @@ def resolve_route(path: Path, headers: Mapping, *, generation: bool) -> dict:
     # Legacy per-chat image flags remain readable for old clients, but routing
     # now follows each request's model, not persisted conversation state.
     return {**route, "provider": provider, "thread_id": thread_id,
+            "service_tier_override": tier_row[0] if tier_row else None,
             "image_generation": {},
             "foreign_history": bool(copy and copy[0] != provider)}
 

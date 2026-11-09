@@ -539,6 +539,8 @@ TEXT = r"""
         // descendants to a click target before measuring them.
         const explicitSelector = [
           "[data-codex-intelligence-trigger]",
+          "[data-codex-usage-hud-fast-toggle]",
+          "[data-fast-mode-enabled]",
           "[role='img'][aria-label*='上下文']",
           "[role='img'][aria-label*='context' i]",
         ].join(", ");
