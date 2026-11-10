@@ -235,6 +235,39 @@ def test_toggle_command_acknowledges_and_refreshes_settings(setup, monkeypatch):
     reload.assert_called_once_with(include_history=False)
 
 
+def test_enabling_force_fast_activates_gateway_and_persists_global_override(setup, monkeypatch):
+    path, store, relay = setup
+    monkeypatch.setattr("codex_usage_hud.provider_gateway_settings.provider_proxy_relay", relay)
+    context = SimpleNamespace(
+        settings_store=store,
+        settings_mtime=None,
+        reload_user_config=MagicMock(),
+    )
+    settings = store.load().to_dict()
+    settings["force_fast_requests"] = True
+
+    status = _handle_renderer_settings_command(
+        {"action": "save", "settings": settings, "requestId": "force-fast-1"},
+        context,
+        Event(),
+        Event(),
+    )
+
+    assert status["kind"] == ""
+    assert status["requestId"] == "force-fast-1"
+    assert status["forceFastRequests"] == {"enabled": True}
+    assert status["restartVisible"] is True
+    assert store.load().force_fast_requests is True
+    assert store.load().provider_gateway_enabled is True
+    assert gateway.gateway_info(path)
+    route = gateway.resolve_route(
+        path,
+        {"session_id": "10000000-0000-4000-8000-000000000001"},
+        generation=True,
+    )
+    assert route["service_tier_override"] == "fast"
+
+
 def test_default_switch_only_updates_gateway_route_without_reloading_hud(setup):
     from codex_usage_hud.core.parser import ParsedSession
     from codex_usage_hud.renderer_payload_builder import payload_from_snapshot

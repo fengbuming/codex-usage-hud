@@ -12,167 +12,6 @@ TEXT = r"""
     const ownedLabels = new Map();
     const syntheticSelect = Symbol("codexUsageHudModelPickerSelect");
     let installed = false;
-    let fastButton = null;
-    let fastTrigger = null;
-    let fastParent = null;
-    let fastPending = null;
-    let fastError = "";
-    let fastSessionId = "";
-    const confirmedFastRequests = new Map();
-
-    // Resolve native state on each event. Missing native capabilities do not
-    // prevent an explicit Fast request through the HUD gateway.
-    function nativeFastContext() {
-      let fallback = null;
-      for (const trigger of document.querySelectorAll(
-        '[data-codex-intelligence-trigger], button[aria-haspopup], button[data-state]'
-      )) {
-        if (!visible(trigger) || trigger === fastButton) continue;
-        const fiber = findFiber(trigger, (item) => {
-          const props = item?.memoizedProps;
-          return Array.isArray(props?.serviceTierOptions)
-            && Object.hasOwn(props, "selectedServiceTier");
-        }, 120);
-        if (!fiber) {
-          if (trigger.hasAttribute("data-codex-intelligence-trigger")) fallback = { trigger };
-          continue;
-        }
-        const props = fiber.memoizedProps;
-        const options = props.serviceTierOptions;
-        const fast = options.find((option) => option && typeof option.value === "string" && (
-          option.iconKind === "fast" || ["fast", "priority"].includes(option.value)
-        ));
-        const standard = options.find((option) => option && Object.hasOwn(option, "value")
-          && (option.value === null || option.value === "default"));
-        return { trigger, props, fast, standard };
-      }
-      return fallback;
-    }
-
-    function removeNativeFastToggle() {
-      fastButton?.removeEventListener("click", toggleNativeFast);
-      fastButton?.remove();
-      fastButton = null;
-      fastTrigger = null;
-      fastParent = null;
-      fastPending = null;
-      fastError = "";
-      ctx.observers?.clear?.("native_fast");
-    }
-
-    function nativeFastAvailable(context) {
-      return !!(context?.fast && context?.standard && !context.fast.disabled
-        && typeof context.props.onSelectServiceTier === "function"
-        && !context.standard.disabled && !context.props.disabled
-        && !context.props.serviceTierOptionsLoading && !context.trigger.disabled
-        && context.trigger.getAttribute("aria-disabled") !== "true");
-    }
-
-    function fastRequestSessionId() {
-      const selection = selectionContext();
-      // null identifies the new-chat composer; never substitute a stale
-      // payload's previous conversation for that explicit native selection.
-      if (selection) return String(selection.conversationId || "");
-      return String(ctx.state?.payload?.()?.sessionId || "");
-    }
-
-    function fastRequestPreference(sessionId) {
-      const preferences = ctx.state?.payload?.()?.settings?.fast_request_preferences || {};
-      if (preferences[sessionId] === confirmedFastRequests.get(sessionId)) confirmedFastRequests.delete(sessionId);
-      return confirmedFastRequests.get(sessionId) ?? preferences[sessionId];
-    }
-
-    async function toggleNativeFast(event) {
-      event.preventDefault();
-      event.stopPropagation();
-      if (fastPending || ctx.state?.payload?.()?.settings?.show_native_fast_toggle !== true) return;
-      const context = nativeFastContext();
-      const sessionId = fastRequestSessionId();
-      const trigger = context?.trigger || selectionContext()?.trigger;
-      // A click queued before navigation must never select a tier in a new chat.
-      if (trigger !== fastTrigger || sessionId !== fastSessionId) return;
-      const operation = {};
-      fastPending = operation;
-      fastError = "";
-      const preference = fastRequestPreference(sessionId);
-      const selected = context?.props?.selectedServiceTier;
-      const enabled = preference ? preference === "fast" : !!context?.fast && selected === context.fast.value;
-      const useNative = nativeFastAvailable(context) && !preference;
-      const gatewayActive = ctx.state?.payload?.()?.settings?.provider_gateway?.active === true;
-      patchNativeFastToggle();
-      try {
-        if (useNative && !gatewayActive) {
-          const target = enabled ? context.standard.value : context.fast.value;
-          if (await context.props.onSelectServiceTier(target) === false) throw new Error("Codex 未接受 Fast 设置，请开启 HUD 请求代理后重试");
-        } else {
-          const result = await settingsShellDomain.codexGatewayCommand({
-            action: "fastRequestSet", sessionId, enabled: !enabled,
-          });
-          if (result.sessionId !== sessionId || result.enabled !== !enabled) throw new Error("Fast 设置未得到确认，请重试");
-          confirmedFastRequests.set(sessionId, result.serviceTier);
-          if (fastPending === operation && result.gateway !== true) {
-            fastError = "偏好已保存；开启 HUD 请求代理后附加速度参数";
-          }
-        }
-      } catch (error) {
-        if (fastPending === operation) fastError = String(error?.message || "切换失败，请重试");
-      } finally {
-        if (fastPending === operation) fastPending = null;
-        if (installed) schedulePatch();
-      }
-    }
-
-    function patchNativeFastToggle() {
-      if (ctx.state?.payload?.()?.settings?.show_native_fast_toggle !== true) {
-        removeNativeFastToggle();
-        return;
-      }
-      const context = nativeFastContext();
-      const trigger = context?.trigger || selectionContext()?.trigger;
-      const parent = trigger?.parentElement;
-      if (!parent) { removeNativeFastToggle(); return; }
-      const sessionId = fastRequestSessionId();
-      if (fastTrigger !== trigger || fastParent !== parent || fastSessionId !== sessionId || !fastButton?.isConnected) {
-        removeNativeFastToggle();
-        fastTrigger = trigger;
-        fastParent = parent;
-        fastSessionId = sessionId;
-        fastButton = document.createElement("button");
-        fastButton.type = "button";
-        fastButton.setAttribute("data-codex-usage-hud-fast-toggle", "true");
-        fastButton.setAttribute("role", "switch");
-        fastButton.addEventListener("click", toggleNativeFast);
-        parent.appendChild(fastButton);
-        if (typeof MutationObserver === "function") {
-          const observer = new MutationObserver((records) => {
-            if (records.some((record) => record.target !== fastButton
-              && !fastButton?.contains(record.target))) schedulePatch();
-          });
-          observer.observe(parent, { childList: true, subtree: true, characterData: true,
-            attributes: true, attributeFilter: ["data-fast-mode-enabled", "disabled", "aria-disabled"] });
-          ctx.observers?.set?.("native_fast", observer);
-        }
-      }
-      const preference = fastRequestPreference(sessionId);
-      const requestMode = !!preference || !nativeFastAvailable(context)
-        || ctx.state?.payload?.()?.settings?.provider_gateway?.active === true;
-      const selected = context?.props?.selectedServiceTier;
-      const enabled = preference ? preference === "fast" : !!context?.fast && selected === context.fast.value;
-      const ultrafast = selected === "ultrafast"
-        || context?.props?.serviceTierOptions.some((option) => option.value === selected && option.iconKind === "ultrafast");
-      const text = !preference && ultrafast ? "Fast · Ultrafast" : "ϟ Fast";
-      if (fastButton.textContent !== text) fastButton.textContent = text;
-      const checked = String(enabled);
-      if (fastButton.getAttribute("aria-checked") !== checked) fastButton.setAttribute("aria-checked", checked);
-      const disabled = !!fastPending;
-      if (fastButton.disabled !== disabled) fastButton.disabled = disabled;
-      fastButton.setAttribute("aria-label", enabled ? "关闭 Fast" : ultrafast && !preference ? "切换为 Fast" : "启用 Fast");
-      fastButton.title = fastError || (requestMode
-        ? `${sessionId ? "当前聊天" : "新聊天默认"}：${enabled ? "请求 Fast" : "标准速度"}。由 HUD 请求代理附加速度参数，上游决定实际档位和计费。`
-        : ultrafast ? "当前为 Ultrafast；点击切换为 Fast，用量由 Codex 原生规则决定"
-        : enabled ? "关闭 Fast，切回标准速度" : "启用原生 Fast，速度更快，用量更高");
-    }
-
     function imageDraftModel(model) {
       const match = /^hud-image\/([0-9a-f]{32})\/(.+)$/.exec(String(model || ""));
       return match ? { token: match[1], model: match[2] } : null;
@@ -496,7 +335,6 @@ TEXT = r"""
     }
 
     function patchCodexModelPicker() {
-      patchNativeFastToggle();
       const selection = selectionContext();
       refreshProviderModels(selection);
       patchModelLabel(selection);
@@ -537,8 +375,7 @@ TEXT = r"""
 
     function schedulePatch(event = null) {
       if (!installed) return;
-      if (event?.type && !fastButton && !ctx.state?.payload?.()?.settings?.show_native_fast_toggle
-        && !models.length && !ownedLabels.size && observedTriggerParent
+      if (event?.type && !models.length && !ownedLabels.size && observedTriggerParent
         && !observedTriggerParent.contains?.(event.target)) return;
       ctx.frames.cancel("model_picker");
       for (const timer of (window[modelPickerPatchTimersName] || [])) {
@@ -569,7 +406,6 @@ TEXT = r"""
 
     function dispose() {
       installed = false;
-      removeNativeFastToggle();
       ctx.frames.cancel("model_picker");
       for (const timer of (window[modelPickerPatchTimersName] || [])) {
         ctx.lifecycle.clearTimeout(timer);

@@ -10,28 +10,6 @@ TEXT = r"""
         style.id = styleId;
         style.dataset.version = version;
         style.textContent = `
-          [data-codex-usage-hud-fast-toggle] {
-            display: inline-flex;
-            align-items: center;
-            flex-shrink: 0;
-            min-height: 26px;
-            padding: 2px 7px;
-            border: 0;
-            border-radius: 7px;
-            background: transparent;
-            color: var(--color-text-tertiary, inherit);
-            font: inherit;
-            font-size: 12px;
-            cursor: pointer;
-          }
-          [data-codex-usage-hud-fast-toggle]:hover,
-          [data-codex-usage-hud-fast-toggle]:focus-visible {
-            background: var(--color-background-primary-ghost-hover, #80808020);
-          }
-          [data-codex-usage-hud-fast-toggle][aria-checked="true"] {
-            color: var(--color-chart-blue, #5294ff);
-          }
-          [data-codex-usage-hud-fast-toggle]:disabled { opacity: .5; cursor: default; }
           #${rootId} {
             --codex-usage-hud-surface: #10161d;
             --codex-usage-hud-panel-surface: #141b24;
@@ -2672,7 +2650,7 @@ TEXT = r"""
             padding: 5px 7px;
             outline: none;
           }
-          #${rootId} .codex-usage-hud-native-fast-setting {
+          #${rootId} .codex-usage-hud-fast-setting {
             display: inline-flex;
             align-items: center;
             gap: 6px;
@@ -2681,7 +2659,7 @@ TEXT = r"""
             white-space: nowrap;
             cursor: pointer;
           }
-          #${rootId} .codex-usage-hud-native-fast-setting input[type="checkbox"] {
+          #${rootId} .codex-usage-hud-fast-setting input[type="checkbox"] {
             width: 14px;
             height: 14px;
             min-height: 0;

@@ -151,6 +151,21 @@ def set_fast_request(thread_id: str, enabled: bool, *, config_path: Path | None 
             "gateway": bool(gateway_info(path))}
 
 
+def set_fast_requests_forced(enabled: bool, *, config_path: Path | None = None) -> dict:
+    """Set the gateway-wide Fast tier override used for every conversation."""
+    from .codex_provider_config import default_codex_config_path
+
+    path = config_path or default_codex_config_path()
+    if not isinstance(enabled, bool):
+        raise ValueError("Fast 强制设置无效。")
+    with _state_db(path) as db:
+        db.execute(
+            "INSERT OR REPLACE INTO settings VALUES ('force_fast_requests', ?)",
+            ("1" if enabled else "0",),
+        )
+    return {"enabled": enabled, "gateway": bool(gateway_info(path))}
+
+
 def apply_request_service_tier(body: bytes | None, tier: object) -> bytes | None:
     """Only explicit user choices override the outgoing Responses request."""
     if tier not in {"fast", "default"} or not body:
@@ -321,6 +336,9 @@ def resolve_route(path: Path, headers: Mapping, *, generation: bool) -> dict:
         route = _provider_route(path, provider, definitions)
         if generation and thread_id and not row:
             db.execute("INSERT INTO sessions VALUES (?, ?)", (thread_id, provider))
+        force_fast = db.execute(
+            "SELECT value FROM settings WHERE key = 'force_fast_requests'"
+        ).fetchone()
         tier_row = db.execute("SELECT tier FROM request_service_tiers WHERE id = ?", (thread_id,)).fetchone() if thread_id else None
         if tier_row is None and not row and thread_id:
             if parent:
@@ -336,7 +354,10 @@ def resolve_route(path: Path, headers: Mapping, *, generation: bool) -> dict:
     # Legacy per-chat image flags remain readable for old clients, but routing
     # now follows each request's model, not persisted conversation state.
     return {**route, "provider": provider, "thread_id": thread_id,
-            "service_tier_override": tier_row[0] if tier_row else None,
+            "service_tier_override": (
+                "fast" if force_fast and force_fast[0] == "1"
+                else tier_row[0] if tier_row else None
+            ),
             "image_generation": {},
             "foreign_history": bool(copy and copy[0] != provider)}
 

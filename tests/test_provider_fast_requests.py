@@ -73,6 +73,19 @@ def test_new_chat_default_is_bound_once_and_never_changes_existing_chats(home):
     assert route(home, C)["service_tier_override"] == "default"
 
 
+def test_forced_fast_overrides_every_chat_until_disabled(home):
+    route(home, A)
+    gateway.set_fast_request(A, False)
+    gateway.set_fast_requests_forced(True)
+    assert route(home, A)["service_tier_override"] == "fast"
+    assert route(home, B)["service_tier_override"] == "fast"
+    assert route(home, C)["service_tier_override"] == "fast"
+
+    gateway.set_fast_requests_forced(False)
+    assert route(home, A)["service_tier_override"] == "default"
+    assert route(home, B)["service_tier_override"] is None
+
+
 def test_historical_chat_does_not_inherit_new_chat_default(home):
     with sqlite3.connect(home.parent / "state_5.sqlite") as db:
         db.execute("CREATE TABLE threads(id TEXT PRIMARY KEY, model_provider TEXT)")

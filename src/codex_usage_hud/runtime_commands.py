@@ -1463,13 +1463,15 @@ def handle_general_command(
             from .provider_compatibility import manual_instructions
 
             return {**_status("手动兼容启动步骤已准备。"), "providerCompatibility": manual_instructions()}
-        if action in {"providerBindSession", "providerPrepareExit", "providerGatewayToggle", "imageGenerationSet", "imageGenerationContext", "imageGenerationDraft", "fastRequestSet"}:
+        if action in {"providerBindSession", "providerPrepareExit", "providerGatewayToggle", "imageGenerationSet", "imageGenerationContext", "imageGenerationDraft", "fastRequestSet", "fastRequestForceSet"}:
             if ports.gateway_command is None:
                 return _status("HUD 统一代理当前不可用。", kind="error")
             result = ports.gateway_command(command)
             message = "会话供应商已确认。" if action == "imageGenerationContext" else "供应商路由已保存。"
             if action == "fastRequestSet":
                 message = "Fast 请求偏好已保存。" if result.get("gateway") else "Fast 偏好已保存，开启 HUD 请求代理后生效。"
+            if action == "fastRequestForceSet":
+                message = "Fast 强制设置已更新。" if result.get("gateway") else "Fast 强制设置已更新，HUD 请求代理未接管。"
             return {**_status(message), "providerGateway": dict(result)}
         if action == "providerCloneSwitch":
             if ports.clone_provider_with_bearer_key is None:
@@ -1917,11 +1919,76 @@ def handle_general_command(
                 if ports.save_codex_providers is None:
                     raise RuntimeError("Codex provider 配置写入当前不可用。")
                 codex_provider_result = ports.save_codex_providers(codex_updates)
-            ports.save_config(config)
+            gateway_result: Mapping[str, object] | None = None
+            if action == "save" and config.force_fast_requests and not config.provider_gateway_enabled:
+                if ports.gateway_command is None:
+                    raise RuntimeError("无法启用 Fast：HUD 请求代理当前不可用。")
+                gateway_result = ports.gateway_command(
+                    {"action": "providerGatewayToggle", "enabled": True}
+                )
+                if gateway_result.get("gateway") is not True:
+                    raise RuntimeError("无法启用 Fast：HUD 请求代理未能接管 Codex 请求。")
+                config = replace(config, provider_gateway_enabled=True)
+            sync_fast_force = action == "save" and (
+                config.force_fast_requests != previous_config.force_fast_requests
+                or config.force_fast_requests
+            )
+            if sync_fast_force:
+                if ports.gateway_command is None:
+                    raise RuntimeError("Fast 强制设置当前不可用。")
+                fast_force_result = ports.gateway_command({
+                    "action": "fastRequestForceSet",
+                    "enabled": config.force_fast_requests,
+                })
+                if config.force_fast_requests and fast_force_result.get("gateway") is not True:
+                    try:
+                        gateway_result = ports.gateway_command(
+                            {"action": "providerGatewayToggle", "enabled": True}
+                        )
+                        if gateway_result.get("gateway") is not True:
+                            raise RuntimeError("HUD 请求代理未能接管 Codex 请求。")
+                        config = replace(config, provider_gateway_enabled=True)
+                    except Exception:
+                        try:
+                            ports.gateway_command({
+                                "action": "fastRequestForceSet",
+                                "enabled": previous_config.force_fast_requests,
+                            })
+                        except Exception:
+                            _LOGGER.exception("fast_request_force_rollback_failed")
+                        raise RuntimeError("无法启用 Fast：HUD 请求代理未能接管 Codex 请求。")
+            try:
+                ports.save_config(config)
+            except Exception:
+                if sync_fast_force and ports.gateway_command is not None:
+                    try:
+                        ports.gateway_command({
+                            "action": "fastRequestForceSet",
+                            "enabled": previous_config.force_fast_requests,
+                        })
+                    except Exception:
+                        _LOGGER.exception("fast_request_force_rollback_failed")
+                raise
             if action == "applyDisplayMode":
                 return _status(
                     "Renderer 方案已保存；当前会话已处于内嵌显示，无需重启。"
                 )
+            if config.force_fast_requests != previous_config.force_fast_requests:
+                if config.force_fast_requests:
+                    message = (
+                        "Fast 已强制开启；Codex 重新加载配置后，HUD 请求代理会为所有会话的 Responses 请求附加 Fast 档位。"
+                        if gateway_result and gateway_result.get("requiresConfigReload")
+                        else "已强制启用 Fast：HUD 请求代理会为所有会话的 Responses 请求附加 Fast 档位。"
+                    )
+                else:
+                    message = "已关闭 Fast 强制设置，恢复各会话原有服务档位。"
+                status = runtime_settings.settings_status(
+                    message,
+                    restart_visible=bool(gateway_result and gateway_result.get("requiresConfigReload")),
+                    restart_codex=bool(gateway_result and gateway_result.get("requiresConfigReload")),
+                )
+                status["forceFastRequests"] = {"enabled": config.force_fast_requests}
+                return status
             if str(command.get("section") or "") == "restReminder":
                 started_at_ms = (
                     settings_payload.get("rest_reminder_timer_started_at_ms")
@@ -2510,6 +2577,10 @@ def _handle_renderer_settings_command(
             from .provider_gateway import set_fast_request
 
             return set_fast_request(str(command.get("sessionId") or ""), command.get("enabled"))
+        if command.get("action") == "fastRequestForceSet":
+            from .provider_gateway import set_fast_requests_forced
+
+            return set_fast_requests_forced(command.get("enabled"))
         if command.get("action") == "imageGenerationDraft":
             from .provider_gateway import set_image_draft
 
