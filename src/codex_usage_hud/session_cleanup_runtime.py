@@ -977,14 +977,21 @@ class SessionCleanupWorker:
                         and int(transfer_operation.get("migratedCount") or 0) > 0
                     )
                 else:
-                    snapshot = self.manager.execute(
-                        cleanup_string_list(
-                            command.get("itemIds") or command.get("sessionIds")
-                        ),
-                        str(command.get("inventoryRevision") or ""),
-                        str(command.get("confirmationToken") or ""),
-                        request_id=request_id,
+                    previous_publisher = getattr(
+                        self.manager, "progress_publisher", None
                     )
+                    self.manager.progress_publisher = self._publish
+                    try:
+                        snapshot = self.manager.execute(
+                            cleanup_string_list(
+                                command.get("itemIds") or command.get("sessionIds")
+                            ),
+                            str(command.get("inventoryRevision") or ""),
+                            str(command.get("confirmationToken") or ""),
+                            request_id=request_id,
+                        )
+                    finally:
+                        self.manager.progress_publisher = previous_publisher
                     operation = snapshot.get("operation")
                     if (
                         isinstance(operation, Mapping)
@@ -1210,6 +1217,7 @@ def _build_session_cleanup_manager(context: object) -> SessionCleanupManager:
         usage_snapshot_discard=lambda receipt: _discard_session_cleanup_usage(
             context, receipt
         ),
+        usage_snapshot_max_workers=4,
         transfer_max_workers=max(
             1,
             min(8, int(getattr(context, "session_transfer_max_workers", 4) or 4)),

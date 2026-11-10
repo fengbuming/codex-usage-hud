@@ -715,6 +715,44 @@ class JsonlSessionParserTests(unittest.TestCase):
         self.assertEqual(records[0]["_line"], 1)
         self.assertIsNotNone(records[0]["_dt"])
 
+    def test_load_records_lenient_reads_compressed_rollout(self) -> None:
+        try:
+            from compression import zstd
+        except ImportError:
+            import zstandard
+
+            compress = zstandard.ZstdCompressor().compress
+        else:
+            compress = zstd.compress
+        parser = JsonlSessionParser()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "session.jsonl.zst"
+            payload = (
+                json.dumps(
+                    record(
+                        "2026-05-28T00:00:00Z",
+                        "session_meta",
+                        {"id": "s1"},
+                    )
+                )
+                + "\n"
+                + json.dumps(
+                    token_count(
+                        "2026-05-28T00:00:01Z", 8, 2, 2, 0, 10, 10
+                    )
+                )
+                + "\n"
+            )
+            path.write_bytes(compress(payload.encode("utf-8")))
+
+            records = parser.load_records_lenient(path)
+            events = parser.usage_events(records)
+
+        self.assertEqual(len(records), 2)
+        self.assertEqual(records[1]["_line"], 2)
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0].total_tokens, 10)
+
     def test_parse_records_extracts_confirmed_and_pending_estimates(self) -> None:
         parser = JsonlSessionParser()
         records = [

@@ -18,6 +18,7 @@ from codex_usage_hud.core.session_cleanup import (
     SessionCleanupManager,
 )
 from codex_usage_hud.core.deleted_usage import DeletedUsageLedger
+from codex_usage_hud.core.parser import JsonlSessionParser
 from codex_usage_hud.core.session_search import search_terms
 
 
@@ -2864,6 +2865,138 @@ class SessionCleanupManagerTests(unittest.TestCase):
             events,
             [("prepare", ROOT_ID), ("commit", "usage-receipt")],
         )
+
+    def test_deleted_usage_ledger_preserves_events_from_compressed_rollout(
+        self,
+    ) -> None:
+        try:
+            from compression import zstd
+        except ImportError:
+            import zstandard
+
+            compress = zstandard.ZstdCompressor().compress
+        else:
+            compress = zstd.compress
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            rollout = root / "rollout.jsonl.zst"
+            now = datetime.now(timezone.utc)
+            records = [
+                {
+                    "timestamp": now.isoformat(),
+                    "type": "session_meta",
+                    "payload": {"id": ROOT_ID, "model_provider": "openai-custom"},
+                },
+                {
+                    "timestamp": now.isoformat(),
+                    "type": "event_msg",
+                    "payload": {
+                        "type": "token_count",
+                        "info": {
+                            "last_token_usage": {
+                                "input_tokens": 8,
+                                "cached_input_tokens": 2,
+                                "output_tokens": 2,
+                                "reasoning_output_tokens": 0,
+                                "total_tokens": 10,
+                            },
+                            "total_token_usage": {
+                                "input_tokens": 8,
+                                "cached_input_tokens": 2,
+                                "output_tokens": 2,
+                                "reasoning_output_tokens": 0,
+                                "total_tokens": 10,
+                            },
+                        },
+                    },
+                },
+            ]
+            rollout.write_bytes(
+                compress(
+                    ("\n".join(json.dumps(record) for record in records) + "\n")
+                    .encode("utf-8")
+                )
+            )
+            ledger = DeletedUsageLedger(root / "deleted-session-usage.json")
+            receipt = ledger.prepare(
+                session_id=ROOT_ID,
+                family_session_ids=(ROOT_ID,),
+                title="Compressed session",
+                workdir_name="project",
+                rollout_paths=(rollout,),
+                parser=JsonlSessionParser(),
+                now=now,
+            )
+            ledger.commit(receipt, now=now)
+
+            sessions = ledger.sessions(now=now)
+
+        self.assertEqual(len(sessions), 1)
+        self.assertEqual(len(sessions[0].events), 1)
+        self.assertEqual(sessions[0].events[0].total_tokens, 10)
+
+    def test_delete_prepares_selected_usage_snapshots_concurrently_and_reports_progress(
+        self,
+    ) -> None:
+        fixture = self._fixture()
+        temporary, _root, _state, _index, _rollouts, manager = fixture
+        self.addCleanup(temporary.cleanup)
+        barrier = threading.Barrier(2, timeout=2)
+        prepared: list[str] = []
+
+        def prepare(item) -> str:
+            barrier.wait()
+            prepared.append(item._session_id)
+            return item._session_id
+
+        manager.usage_snapshot_prepare = prepare
+        manager.usage_snapshot_commit = lambda _receipt: None
+        manager.usage_snapshot_max_workers = 2
+        progress: list[dict[str, object]] = []
+        manager.progress_publisher = progress.append
+        scan = manager.scan()
+        selected = [
+            item["id"]
+            for item in scan["sessions"]
+            if item["title"] in {"Root", "Archived"}
+        ]
+        preview = manager.preview(selected, scan["revision"])
+
+        result = manager.execute(
+            selected,
+            scan["revision"],
+            preview["operation"]["confirmationToken"],
+            request_id="parallel-delete",
+        )
+
+        self.assertEqual(result["operation"]["state"], "completed")
+        self.assertEqual(set(prepared), {ROOT_ID, SECOND_ID})
+        operations = [snapshot["operation"] for snapshot in progress]
+        self.assertTrue(any(op.get("phase") == "usageSnapshot" for op in operations))
+        self.assertTrue(any(op.get("phase") == "delete" for op in operations))
+        self.assertTrue(any(op.get("phase") == "verify" for op in operations))
+
+    def test_progress_publisher_failure_does_not_interrupt_delete(self) -> None:
+        fixture = self._fixture()
+        temporary, _root, _state, _index, rollouts, manager = fixture
+        self.addCleanup(temporary.cleanup)
+
+        def fail_publish(_snapshot) -> None:
+            raise RuntimeError("renderer disconnected")
+
+        scan = manager.scan()
+        row = next(item for item in scan["sessions"] if item["title"] == "Archived")
+        preview = manager.preview([row["id"]], scan["revision"])
+        manager.progress_publisher = fail_publish
+
+        result = manager.execute(
+            [row["id"]],
+            scan["revision"],
+            preview["operation"]["confirmationToken"],
+        )
+
+        self.assertEqual(result["operation"]["state"], "completed")
+        self.assertFalse(rollouts[SECOND_ID].exists())
 
     def test_delete_commit_is_idempotent_after_usage_refresh_recovers_snapshot(
         self,

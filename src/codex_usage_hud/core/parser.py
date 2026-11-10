@@ -15,6 +15,7 @@ from typing import Any
 from .calculator import UsageCalculator, estimate_tokens
 from .pre_send_estimator import BaseEstimate
 from .activity_monitor import ReadingActivity
+from .rollout_io import open_rollout_text
 
 DEFAULT_MODEL = "gpt-5.5"
 MAX_REQUEST_HISTORY = 500
@@ -1681,9 +1682,9 @@ class JsonlSessionParser:
         request.output_speed_estimated = request.output_tokens_per_second is not None
 
     def load_records_lenient(self, path: Path) -> list[dict[str, Any]]:
-        """Read JSONL records while tolerating partially written lines."""
+        """Read plain or compressed JSONL while tolerating partial lines."""
         records: list[dict[str, Any]] = []
-        with path.open("r", encoding="utf-8") as handle:
+        with open_rollout_text(path) as handle:
             for line_number, line in enumerate(handle, 1):
                 text = line.strip()
                 if not text:

@@ -10,11 +10,9 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from collections import defaultdict
-from contextlib import contextmanager
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 import hashlib
-import io
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -24,7 +22,9 @@ import sqlite3
 import sys
 from threading import RLock
 import time
-from typing import Callable, TextIO
+from typing import Callable
+
+from .rollout_io import open_rollout_text
 
 
 # Rollouts can be several megabytes (especially after long tool outputs). Keep
@@ -633,54 +633,6 @@ def _path_variants(value: object) -> tuple[str, ...]:
     return tuple(dict.fromkeys(item for item in variants if item))
 
 
-@contextmanager
-def _open_rollout_text(path: Path) -> Iterator[TextIO]:
-    """Open plain or Codex-compressed rollout data as a text stream.
-
-    Codex moves older rollouts to ``.jsonl.zst`` files. Keep decompression
-    streaming so a large history does not require a second full-size buffer in
-    memory. Python 3.14 provides the stdlib implementation; the backport is
-    used on the older Python versions supported by the project.
-    """
-
-    if path.suffix.casefold() != ".zst":
-        with path.open("r", encoding="utf-8", errors="replace") as handle:
-            yield handle
-        return
-
-    try:
-        from compression import zstd as stdlib_zstd
-    except ImportError:
-        stdlib_zstd = None
-
-    if stdlib_zstd is not None:
-        with stdlib_zstd.open(
-            path,
-            "rt",
-            encoding="utf-8",
-            errors="replace",
-        ) as handle:
-            yield handle
-        return
-
-    try:
-        import zstandard
-    except ImportError as exc:
-        raise OSError(
-            "zstandard support is required to read Codex .jsonl.zst rollouts"
-        ) from exc
-
-    with path.open("rb") as compressed:
-        decompressed = zstandard.ZstdDecompressor().stream_reader(compressed)
-        with decompressed:
-            with io.TextIOWrapper(
-                decompressed,
-                encoding="utf-8",
-                errors="replace",
-            ) as handle:
-                yield handle
-
-
 def parse_rollout(paths: Sequence[Path]) -> tuple[str, str, str, tuple[str, ...]]:
     """Read plain or compressed rollout files and extract searchable fields."""
 
@@ -696,7 +648,7 @@ def parse_rollout(paths: Sequence[Path]) -> tuple[str, str, str, tuple[str, ...]
     budget = _PER_SESSION_BUDGET
     for path in paths:
         try:
-            with _open_rollout_text(path) as handle:
+            with open_rollout_text(path) as handle:
                 for raw_line in handle:
                     if total >= MAX_DOCUMENT_CHARS or budget <= 0:
                         break

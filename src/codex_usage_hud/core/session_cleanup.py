@@ -9,6 +9,7 @@ from contextlib import closing
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import json
+import logging
 import os
 from pathlib import Path, PureWindowsPath
 import secrets
@@ -39,6 +40,8 @@ from .session_materializer import (
 DEFAULT_CONFIRMATION_TTL_SECONDS = 300.0
 _ACTIVE_EDGE_STATES = {"active", "in_progress", "pending", "running", "starting"}
 _SESSION_METADATA_SCAN_LIMIT = 512 * 1024
+_USAGE_SNAPSHOT_MAX_WORKERS = 4
+_LOGGER = logging.getLogger(__name__)
 # Fork writers can take a short moment to create both the rollout and the
 # state-db record.  Transfer-only retries are bounded and never run as HUD
 # background polling.
@@ -534,6 +537,7 @@ class SessionCleanupManager:
             float
         ] = _TRANSFER_READY_RETRY_DELAYS_SECONDS,
         transfer_max_workers: int = 1,
+        usage_snapshot_max_workers: int = 1,
         sleep: Callable[[float], None] = time.sleep,
         migrated_source_store: Path | None = None,
         search_index_path: Path | None = None,
@@ -562,6 +566,14 @@ class SessionCleanupManager:
         except (TypeError, ValueError):
             configured_workers = 1
         self.transfer_max_workers = max(1, min(8, configured_workers))
+        try:
+            snapshot_workers = int(usage_snapshot_max_workers)
+        except (TypeError, ValueError):
+            snapshot_workers = 1
+        self.usage_snapshot_max_workers = max(
+            1,
+            min(_USAGE_SNAPSHOT_MAX_WORKERS, snapshot_workers),
+        )
         self._sleep = sleep
         self._revision_counter = 0
         self._revision = ""
@@ -3321,18 +3333,74 @@ class SessionCleanupManager:
         self._capability = capability
         usage_receipts: list[object] = []
         deleted = False
+        publisher = getattr(self, "progress_publisher", None)
+
+        def report_progress(
+            progress: int,
+            phase: str,
+            phase_label: str,
+            phase_index: int,
+            completed: int = 0,
+        ) -> None:
+            snapshot = self.mark_operation(
+                request_id=request_id,
+                action="execute",
+                state="running",
+                progress=progress,
+                phase=phase,
+                phaseLabel=phase_label,
+                phaseIndex=phase_index,
+                phaseCount=4,
+                completedSessions=completed,
+                sessionCount=len(items),
+                include_sessions=False,
+            )
+            if callable(publisher):
+                try:
+                    publisher(snapshot)
+                except Exception:
+                    _LOGGER.debug(
+                        "session_cleanup_progress_publish_failed",
+                        exc_info=True,
+                    )
+
         try:
+            report_progress(2, "revalidate", "Checking session state", 1)
             self._revalidate_batch(items, capability=capability)
-            for item in items:
-                if self.usage_snapshot_prepare is not None:
-                    receipt = self.usage_snapshot_prepare(item)
-                    if receipt:
-                        usage_receipts.append(receipt)
+            if self.usage_snapshot_prepare is not None:
+                report_progress(
+                    5,
+                    "usageSnapshot",
+                    "Preserving recent usage",
+                    2,
+                )
+
+                def report_usage_progress(completed: int) -> None:
+                    interval = max(1, (len(items) + 19) // 20)
+                    if completed != len(items) and completed % interval:
+                        return
+                    report_progress(
+                        5 + round(35 * completed / max(1, len(items))),
+                        "usageSnapshot",
+                        "Preserving recent usage",
+                        2,
+                        completed,
+                    )
+
+                usage_receipts, prepare_error = self._prepare_usage_snapshots(
+                    items,
+                    on_progress=report_usage_progress,
+                )
+                if prepare_error is not None:
+                    raise prepare_error
             self._revalidate_pending_activity(items)
+            report_progress(45, "delete", "Deleting local session data", 3, len(items))
             self._delete_local_batch(items)
             deleted = True
+            report_progress(78, "verify", "Verifying session removal", 4, len(items))
             self._verify_deleted_batch(items)
             if self.usage_snapshot_commit is not None:
+                report_progress(92, "usageCommit", "Finalizing usage history", 4, len(items))
                 for receipt in usage_receipts:
                     self.usage_snapshot_commit(receipt)
         except SessionCleanupError as exc:
@@ -3368,6 +3436,37 @@ class SessionCleanupManager:
             results,
             request_id=request_id,
         )
+
+    def _prepare_usage_snapshots(
+        self,
+        items: Sequence[SessionCleanupItem],
+        *,
+        on_progress: Callable[[int], None] | None = None,
+    ) -> tuple[list[object], Exception | None]:
+        """Read selected rollouts concurrently, waiting for every receipt."""
+        prepare = self.usage_snapshot_prepare
+        if prepare is None or not items:
+            return [], None
+        receipts: list[object] = []
+        failure: Exception | None = None
+        completed = 0
+        with ThreadPoolExecutor(
+            max_workers=min(self.usage_snapshot_max_workers, len(items)),
+            thread_name_prefix="codex-hud-usage-snapshot",
+        ) as executor:
+            futures = [executor.submit(prepare, item) for item in items]
+            for future in as_completed(futures):
+                try:
+                    receipt = future.result()
+                    if receipt:
+                        receipts.append(receipt)
+                except Exception as exc:
+                    if failure is None:
+                        failure = exc
+                completed += 1
+                if on_progress is not None:
+                    on_progress(completed)
+        return receipts, failure
 
     @staticmethod
     def _failed_result(item: SessionCleanupItem, error: str = "") -> dict[str, object]:

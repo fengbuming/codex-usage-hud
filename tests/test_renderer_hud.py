@@ -2040,6 +2040,9 @@ class RendererHudPayloadTests(unittest.TestCase):
         self.assertIn('layer.dataset.sessionCleanupDeleteRequestId = String(requestId || "");', script)
         self.assertIn("openSessionCleanupDeleteLoading(requestId);", script)
         self.assertIn("completedExecute && loadingRequestId && responseRequestId === loadingRequestId", script)
+        self.assertIn('usageSnapshot: total', script)
+        self.assertIn("正在并行保存近期用量记录", script)
+        self.assertIn("completedSessions", script)
         self.assertIn('data-session-cleanup-delete-loading="true"', script)
         self.assertIn(
             '.codex-usage-hud-settings-confirm-actions .codex-usage-hud-settings-action[data-danger="true"]',

@@ -1675,6 +1675,27 @@ TEXT = r"""
         const loadingRequestId = String(
           loadingLayer?.dataset.sessionCleanupDeleteRequestId || "",
         );
+        if (
+          loadingLayer
+          && loadingRequestId
+          && responseRequestId === loadingRequestId
+          && new Set(["running", "accepted"]).has(state)
+        ) {
+          const body = loadingLayer.querySelector(".codex-usage-hud-settings-confirm-body");
+          const total = Math.max(0, Number(operation?.sessionCount || 0));
+          const completed = Math.min(total, Math.max(0, Number(operation?.completedSessions || 0)));
+          const phase = String(operation?.phase || "");
+          const descriptions = {
+            revalidate: "正在复核会话状态和删除范围。",
+            usageSnapshot: total
+              ? `正在并行保存近期用量记录（${completed}/${total}）。`
+              : "正在保存近期用量记录。",
+            delete: "用量记录已保存，正在清理本机会话文件和索引。",
+            verify: "正在核验所选会话及关联任务已从本机移除。",
+            usageCommit: "会话已移除，正在完成用量记录归档。",
+          };
+          if (body && descriptions[phase]) body.textContent = descriptions[phase];
+        }
         const completedExecute = new Set(["completed", "partial", "failed"]).has(state)
           && new Set(["execute", "sessioncleanupexecute"]).has(
             String(operation?.action || "").toLowerCase(),
