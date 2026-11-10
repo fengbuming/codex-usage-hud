@@ -2228,6 +2228,23 @@ _TEXT_PREFIX = r"""
         };
       }
 
+      function providerApiKeyForEditor(target, registryEntry = {}) {
+        const draftApiKey = String(target?.apiKey || "");
+        const registryApiKey = String(registryEntry.apiKey || "");
+        if (target?.isNew && draftApiKey) {
+          if (registryApiKey === draftApiKey && registryEntry.hasApiKey === true) {
+            target.isNew = false;
+          } else {
+            return draftApiKey;
+          }
+        }
+        if (Object.prototype.hasOwnProperty.call(registryEntry, "apiKey")) {
+          return registryApiKey;
+        }
+        if (registryEntry.hasApiKey === false) return "";
+        return String(draftApiKey || target?.currentApiKey || "");
+      }
+
       function ensureCodexProviderDraft(settings, provider) {
         const normalized = String(provider || "").trim().toLowerCase();
         if (!normalized) return null;
@@ -3178,10 +3195,10 @@ _TEXT_PREFIX = r"""
           return;
         }
         const target = isNew ? null : ensureCodexProviderDraft(settings, normalizedProvider);
-        // 每次打开编辑对话框都从 provider registry 刷新 API key 回显值，
-        // 避免使用会话内缓存的旧 draft 值。
+        // 优先从 provider registry 刷新 API key；新增配置尚未回写 payload 时，
+        // 保留本次提交的草稿值，避免异步保存期间重开后密钥显示为空。
         if (target) {
-          target.currentApiKey = String(registryEntry.apiKey || "");
+          target.currentApiKey = providerApiKeyForEditor(target, registryEntry);
           if (typeof registryEntry.hasApiKey === "boolean") {
             target.hasApiKey = registryEntry.hasApiKey;
           }

@@ -1246,7 +1246,7 @@ class RendererHudPayloadTests(unittest.TestCase):
         # 编辑供应商只保存 provider 配置，不提交 model 单价。
         self.assertIn('{ action: "save", codexProviders: collectCodexProviderUpdates() }', script)
         self.assertIn("编辑供应商只保存 provider 配置", script)
-        self.assertIn("从 provider registry 刷新 API key 回显值", script)
+        self.assertIn("新增配置尚未回写 payload 时", script)
         self.assertIn('data-provider-enabled="true"', script)
         self.assertIn('data-provider-notification-only="true"', script)
         self.assertIn('data-provider-quick-launch="true"', script)
@@ -1314,6 +1314,31 @@ class RendererHudPayloadTests(unittest.TestCase):
         self.assertIn("function setProviderConfigDialogError", script)
         self.assertIn('data-provider-config-status="true"', script)
         self.assertIn('layer?.querySelector(\'[data-provider-config-status="true"]\')', script)
+
+    def test_provider_api_key_draft_survives_stale_registry_refresh(self) -> None:
+        script = renderer_hud.RENDERER_HUD_SCRIPT
+        start = script.index("function providerApiKeyForEditor(")
+        end = script.index("\n      function ensureCodexProviderDraft", start)
+        source = script[start:end]
+        self.assertIn("target.currentApiKey = providerApiKeyForEditor(target, registryEntry);", script)
+
+        node = shutil.which("node")
+        if node is None:
+            self.skipTest("Node.js is needed to execute the provider draft helper")
+        probe = source + r'''
+const assert = require("node:assert/strict");
+assert.equal(providerApiKeyForEditor({apiKey: "new-key"}, {}), "new-key");
+assert.equal(providerApiKeyForEditor({apiKey: "new-key"}, {apiKey: "new-key", hasApiKey: true}), "new-key");
+assert.equal(providerApiKeyForEditor({apiKey: "old-key"}, {apiKey: "fresh-key", hasApiKey: true}), "fresh-key");
+assert.equal(providerApiKeyForEditor({apiKey: "draft-key", currentApiKey: "old-key"}, {}), "draft-key");
+assert.equal(providerApiKeyForEditor({apiKey: "old-key"}, {hasApiKey: false}), "");
+const pending = {isNew: true, apiKey: "new-key"};
+assert.equal(providerApiKeyForEditor(pending, {apiKey: "", hasApiKey: false}), "new-key");
+assert.equal(pending.isNew, true);
+assert.equal(providerApiKeyForEditor(pending, {apiKey: "new-key", hasApiKey: true}), "new-key");
+assert.equal(pending.isNew, false);
+'''
+        subprocess.run([node, "-e", probe], capture_output=True, text=True, check=True, timeout=20)
 
     def test_renderer_payload_exposes_default_prices_for_new_providers(self) -> None:
         payload = payload_from_snapshot(ParsedSession(status="waiting")).to_json()
