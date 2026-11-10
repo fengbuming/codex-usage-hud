@@ -514,6 +514,17 @@ def prepare_request_body(path: Path, route: Mapping, body: bytes | None) -> byte
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
 
 
+def validate_gateway_upstream(base_url: str, info: Mapping) -> None:
+    """Reject our listener before an upstream URL can be persisted or used."""
+    upstream = urlsplit(base_url)
+    endpoint = urlsplit(str(info.get("endpoint") or ""))
+    loopback = {"127.0.0.1", "localhost", "::1"}
+    if endpoint.hostname and upstream.port == endpoint.port and (
+        upstream.hostname == endpoint.hostname or {upstream.hostname, endpoint.hostname} <= loopback
+    ):
+        raise ValueError("供应商不能指向 HUD 统一代理自身。请填写供应商的真实上游地址。")
+
+
 def _provider_route(path: Path, provider: str, definitions: Mapping) -> dict:
     from . import codex_provider_config as config
     from .provider_proxy import _validated_proxy_upstream
@@ -583,13 +594,8 @@ def _provider_route(path: Path, provider: str, definitions: Mapping) -> dict:
         query_names.update(name for name, _ in parse_qsl(urlsplit(str(url or "")).query, keep_blank_values=True))
     route["provider_header_names"] = header_names
     route["provider_query_names"] = query_names
-    upstream = _validated_proxy_upstream(route)
-    endpoint = urlsplit(str(info.get("endpoint") or ""))
-    loopback = {"127.0.0.1", "localhost", "::1"}
-    if endpoint.hostname and upstream.port == endpoint.port and (
-        upstream.hostname == endpoint.hostname or {upstream.hostname, endpoint.hostname} <= loopback
-    ):
-        raise ValueError("供应商不能指向 HUD 统一代理自身。")
+    _validated_proxy_upstream(route)
+    validate_gateway_upstream(route["base_url"], info)
     return route
 
 
@@ -616,6 +622,9 @@ def activate_gateway(path: Path, relay, *, on_config_written: Callable[[str], No
     default = _default_provider(path, metadata["default_provider"]) if was_gateway and metadata.get("active", True) else default
     metadata.setdefault("activated_at", int(time.time()))
     definitions = config.read_provider_definitions(path)
+    for provider, definition in definitions.items():
+        if provider != PROVIDER_ID:
+            validate_gateway_upstream(definition.base_url, metadata)
     _provider_route(path, default, definitions)
     # The service stores only the config path; upstream credentials are read
     # for the selected provider at request time, never copied to control state.

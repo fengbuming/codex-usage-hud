@@ -355,6 +355,50 @@ def test_edit_provider_keeps_gateway_and_hot_reads_new_url_and_model(active, mon
     assert route["model"] == "custom-model"
 
 
+@pytest.mark.parametrize("host", ["127.0.0.1", "localhost", "[::1]"])
+@pytest.mark.parametrize("advanced", [False, True])
+def test_save_rejects_gateway_as_upstream_without_changing_config(active, monkeypatch, host, advanced):
+    path, relay, _ = active
+    monkeypatch.setattr(config, "provider_proxy_relay", relay)
+    endpoint = urlsplit(gateway.gateway_info(path)["endpoint"])
+    url = f"http://{host}:{endpoint.port}/different/path"
+    update = {"provider_id": "alpha", "base_url": url}
+    if advanced:
+        update["base_url"] = "https://alpha.example/v1"
+        update["section_text"] = f'[model_providers.alpha]\nbase_url = "{url}"\n'
+    before = path.read_bytes()
+    with pytest.raises(ValueError, match="真实上游"):
+        config.save_provider_configs(update, config_path=path)
+    assert path.read_bytes() == before
+    assert gateway.resolve_route(path, headers(A), generation=True)["base_url"] == "https://alpha.example/v1"
+
+
+def test_reactivation_rejects_corrupt_nondefault_upstream_without_writing(active):
+    path, relay, _ = active
+    endpoint = gateway.gateway_info(path)["endpoint"]
+    original = path.read_text(encoding="utf-8")
+    section = config._section_range(original, "beta")
+    metadata = config.proxy_metadata(section[2])
+    metadata["base_url"] = endpoint
+    from codex_usage_hud.provider_proxy import with_proxy_metadata
+
+    path.write_text(config._replace_section_body(original, "beta", with_proxy_metadata(section[2], metadata, "\n")), encoding="utf-8")
+    before = path.read_bytes()
+    with pytest.raises(ValueError, match="真实上游"):
+        gateway.activate_gateway(path, relay)
+    assert path.read_bytes() == before
+
+
+def test_save_allows_independent_local_upstream(active, monkeypatch):
+    path, relay, _ = active
+    monkeypatch.setattr(config, "provider_proxy_relay", relay)
+    endpoint = urlsplit(gateway.gateway_info(path)["endpoint"])
+    port = 18080 if endpoint.port != 18080 else 18081
+    url = f"http://127.0.0.1:{port}/v1"
+    config.save_provider_configs({"provider_id": "alpha", "base_url": url}, config_path=path)
+    assert gateway.resolve_route(path, headers(A), generation=True)["base_url"] == url
+
+
 @pytest.mark.parametrize("style", ["inline", "multiline", "table", "dotted"])
 def test_gateway_auth_headers_preserve_custom_headers_and_are_removed_on_exit(home, style):
     source = home.read_text(encoding="utf-8")

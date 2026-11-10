@@ -946,6 +946,9 @@ def save_provider_configs(
             validation_update,
             allow_api_key_without_env=is_default_app_provider or uses_experimental_bearer,
         )
+        from .provider_gateway import gateway_metadata, validate_gateway_upstream
+
+        validate_gateway_upstream(base_url, gateway_metadata(original_text, include_inactive=True))
         normalized_id = provider_id.casefold()
         if normalized_id in seen_ids:
             raise ValueError(f"Provider {provider_id} 在同一次保存中重复。")
