@@ -122,3 +122,61 @@ index rebuilding; background bubble history parsing was no longer dominant.
 Large history/current-session payloads and animated helper rendering still
 contribute. Live acceptance confirms substantial improvement, not completion
 of every aspirational performance target.
+
+## Follow-up: live search appends
+
+The first round is committed as `72e5236`. The next round targets the search
+extraction/indexing work found in the live stacks:
+
+- Skip expensive UI-snapshot regexes when their required literal markers are
+  absent, retaining the same cleaning rules when they are present.
+- Reuse bounded extraction state for resident single-file, uncompressed
+  rollouts. Only appended records are decoded/cleaned; compressed and multi-file
+  families retain the full streaming reader. Cache limits are four entries and
+  8 MiB, including retained strings and witness buffers. Oversized states are
+  discarded. Valid final records without newlines still have the full reader's
+  semantics, but their partial boundary is not cached.
+- Before reusing state for a growing file, verify the entire previously
+  consumed prefix with SHA-256. File identity, size, nanosecond timestamps and
+  small witnesses reject obvious replacements/truncation first. Full prefix
+  verification also detects an in-place middle edit followed by growth even
+  when the head/tail witnesses are unchanged. This deliberately keeps some
+  historical byte reads to preserve rewrite detection, while avoiding repeated
+  JSON decoding, cleaning and tokenisation of those bytes.
+- A small durable extraction-cursor table tracks file fingerprints and a
+  content digest against the document's indexed stamp. Token counts, hidden
+  analysis and other appends that do not change searchable text update this
+  small row without reading/writing the large document text or rebuilding its
+  resident postings. Real text changes retain full matching/ranking semantics.
+- Batch fingerprints are observed before extraction, so bytes appended during
+  indexing cannot be incorrectly marked as already indexed. The next event
+  still sees the file as stale.
+
+Comparison against `72e5236` used independent copies of one 4.29 MiB real
+rollout, each with the normal covering stamp index and a warm resident index.
+Four alternating token-count/body-message appends were synchronously indexed:
+
+| Incremental update | Before | After |
+| --- | ---: | ---: |
+| Token-count-only append | 458–467 ms | 11–12 ms |
+| Its process read counter | about 6.55 MiB | about 4.33 MiB |
+| Assistant-body append | 470–479 ms | 123–126 ms |
+| Its process read counter | about 8.79 MiB | about 8.82 MiB |
+
+The retained extraction state in this sample was 5.39 MiB. Six representative
+queries returned identical results. A separate comparison of all extracted
+fields for 16 real rollouts (71.0 MiB) also matched exactly; cold extraction
+decreased from 3,177 ms to 1,408 ms. The original live databases were untouched.
+These are hot-path/offline measurements, not new whole-process CPU claims.
+The final implementation retains full-prefix verification: the earlier
+witness-only prototype's roughly 40 KiB metadata read figure is not the shipped
+behavior. Metadata read volume improves by about one third; body-update read
+volume remains essentially unchanged in exchange for complete rewrite checks.
+
+Focused regressions additionally cover partial UTF-8/CRLF/final records,
+replacement/truncation, cache limits and eviction, document ceilings, cursor
+persistence/pruning, indexing races and optional legacy FTS repair. SQLite
+authorizer tests reject document-blob reads or updates during metadata-only
+sync, proving this path uses the small cursor instead.
+
+This follow-up has not been loaded into the running HUD automatically.

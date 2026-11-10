@@ -24,6 +24,7 @@ import time
 from typing import Callable
 
 from .rollout_io import open_rollout_text
+from .search_tail_cache import SearchTailCache
 
 
 # Rollouts can be several megabytes (especially after long tool outputs). Keep
@@ -34,6 +35,7 @@ MAX_MATCHES = 100_000
 
 _FTS_TABLE = "session_search_fts"
 _DOC_TABLE = "session_search_documents"
+_CURSOR_TABLE = "session_search_extraction_cursors"
 _STAMPS_INDEX = "session_search_doc_stamps"
 
 _USER_MESSAGE_TYPES = {"user_message", "user_message_item"}
@@ -159,8 +161,7 @@ _SECRET_VALUE_PATTERNS = (
 # 3-gram posting. Emitting bigrams for CJK tokens keeps short Chinese queries
 # on the posting-intersection path instead of a full substring scan.
 _CJK_RUN_RE = re.compile(r"[\u4e00-\u9fff]")
-# Resident-memory snapshot: pickle of plain built-ins only (no classes), so
-# loading can never execute code. ``stamps`` carries the SQLite ``indexed_at``
+# Resident-memory snapshot written using plain built-ins. ``stamps`` carries the SQLite ``indexed_at``
 # value observed at write time; on load, documents whose stamp no longer
 # matches SQLite are rebuilt from their rows.
 _SNAPSHOT_VERSION = 6
@@ -409,10 +410,13 @@ def _strip_ui_snapshot(text: str) -> str:
 
     if not text:
         return text
-    cleaned = _UI_A11Y_REF_RE.sub(" ", text)
-    if _UI_PAGE_URL_RE.search(cleaned):
+    # Every match requires these literal markers. Ordinary command output
+    # often contains many '-' characters; the unanchored accessibility regex
+    # needlessly tried hundreds of backtracking positions at each one.
+    cleaned = _UI_A11Y_REF_RE.sub(" ", text) if "[ref=e" in text else text
+    if '"body"' in cleaned and _UI_PAGE_URL_RE.search(cleaned):
         cleaned = _UI_PAGE_BODY_RE.sub(" ", cleaned)
-    return _UI_THREAD_PREVIEW_RE.sub(" ", cleaned)
+    return _UI_THREAD_PREVIEW_RE.sub(" ", cleaned) if '"preview"' in cleaned else cleaned
 
 
 class _TextBucket:
@@ -423,11 +427,12 @@ class _TextBucket:
     cost ~12s for only 32 MB of data.
     """
 
-    __slots__ = ("parts", "_size")
+    __slots__ = ("parts", "_size", "_value")
 
     def __init__(self) -> None:
         self.parts: list[str] = []
         self._size = 0
+        self._value: str | None = None
 
     def add(self, value: object, *, limit: int = MAX_FIELD_CHARS) -> bool:
         if self._size >= limit:
@@ -445,10 +450,13 @@ class _TextBucket:
             return False
         self.parts.append(text)
         self._size += len(text) + 1
+        self._value = None
         return True
 
     def value(self) -> str:
-        return _bounded_text(" ".join(self.parts))
+        if self._value is None:
+            self._value = _bounded_text(" ".join(self.parts))
+        return self._value
 
 
 def _collect_text(
@@ -632,108 +640,133 @@ def _path_variants(value: object) -> tuple[str, ...]:
     return tuple(dict.fromkeys(item for item in variants if item))
 
 
+class _RolloutTextState:
+    """The same bounded extraction rules for full and appended JSONL input."""
+
+    def __init__(self) -> None:
+        self.user = _TextBucket()
+        self.assistant = _TextBucket()
+        self.tools = _TextBucket()
+        self.changed: set[str] = set()
+        self.total = 0
+        self.budget = _PER_SESSION_BUDGET
+
+    @property
+    def exhausted(self) -> bool:
+        return self.total >= MAX_DOCUMENT_CHARS or self.budget <= 0
+
+    @property
+    def retained_bytes(self) -> int:
+        # Include list/set capacity and individual Unicode allocations, not
+        # just character counts (non-ASCII strings can use 2 or 4 bytes/char).
+        return (
+            sys.getsizeof(self.changed)
+            + sum(sys.getsizeof(value) for value in self.changed)
+            + sum(sys.getsizeof(bucket.parts) + sys.getsizeof(bucket._value)
+                  + sum(sys.getsizeof(value) for value in bucket.parts)
+                  for bucket in (self.user, self.assistant, self.tools))
+        )
+
+    def consume(self, raw_line: str) -> None:
+        if self.exhausted:
+            return
+        self.total += len(raw_line)
+        user, assistant, tools, changed = self.user, self.assistant, self.tools, self.changed
+        try:
+            record = json.loads(raw_line)
+        except (TypeError, json.JSONDecodeError):
+            return
+        if not isinstance(record, Mapping):
+            return
+        payload = record.get("payload")
+        if not isinstance(payload, Mapping):
+            return
+        record_type = str(record.get("type") or "").casefold()
+        payload_type = str(payload.get("type") or "").casefold()
+        # Text is collected only when a branch will consume it.
+        # Metadata, context and token-count records are skipped
+        # outright instead of being walked for nothing.
+        if payload_type in _USER_MESSAGE_TYPES or (
+            record_type == "event_msg" and payload_type == "user_message"
+        ):
+            target, source = user, payload
+        elif payload_type in _ASSISTANT_MESSAGE_TYPES or (
+            record_type == "event_msg" and payload_type == "agent_message"
+        ):
+            target, source = assistant, payload
+        elif payload_type == "message":
+            role = str(payload.get("role") or "").casefold()
+            channel = str(payload.get("channel") or "").casefold()
+            target = (
+                user if role in {"user", "human"}
+                else assistant if role == "assistant" and channel not in {"analysis", "reasoning"}
+                else None
+            )
+            source = payload if target is not None else None
+        elif payload_type in _TOOL_CALL_TYPES:
+            target, source = tools, payload
+        elif payload_type in _CHANGE_PAYLOAD_TYPES:
+            target, source = tools, payload
+        elif payload_type in {"reasoning", "analysis"}:
+            target, source = None, None
+        elif payload_type in _ITEM_PAYLOAD_TYPES:
+            item = payload.get("item")
+            target = tools
+            source = item if isinstance(item, Mapping) else None
+            if isinstance(item, Mapping):
+                item_type = str(item.get("type") or "").casefold()
+                phase = str(item.get("phase") or item.get("channel") or "").casefold()
+                if item_type in {"reasoning", "analysis"} or phase in {"analysis", "reasoning"}:
+                    target, source = None, None
+                elif item_type in {"agentmessage", "agent_message", "assistant_message"}:
+                    target = assistant
+                elif item_type in {"usermessage", "user_message", "user_message_item"}:
+                    target = user
+            if isinstance(item, Mapping) and _has_change_evidence(
+                item, str(item.get("type") or ""), raw_line
+            ):
+                changed.update(_extract_paths(item, raw_line))
+        else:
+            target, source = None, None
+
+        if target is not None and source is not None:
+            remaining = max(0, min(_RECORD_TEXT_BUDGET, self.budget))
+            parts: list[str] = []
+            _collect_text(source, parts, [remaining])
+            if parts:
+                text = " ".join(parts)
+                # 仅工具输出需要剥离 UI 快照噪声：用户与助手消息
+                # 本身就是正文，清洗会破坏真实命中。
+                if target is tools:
+                    text = _strip_ui_snapshot(text)
+                target.add(text)
+                self.budget -= min(len(text), self.budget)
+
+        if _has_change_evidence(payload, payload_type, raw_line):
+            changed.update(_extract_paths(payload, raw_line))
+
+    def result(self) -> tuple[str, str, str, tuple[str, ...]]:
+        return (
+            self.user.value(), self.assistant.value(), self.tools.value(),
+            tuple(sorted({variant for path in self.changed for variant in _path_variants(path)})),
+        )
+
+
 def parse_rollout(paths: Sequence[Path]) -> tuple[str, str, str, tuple[str, ...]]:
     """Read plain or compressed rollout files and extract searchable fields."""
-
-    user = _TextBucket()
-    assistant = _TextBucket()
-    tools = _TextBucket()
-    changed: set[str] = set()
-    total = 0
-    # A single shared budget across all three fields, so one session family
-    # cannot retain more than ``_PER_SESSION_BUDGET`` characters. Without it,
-    # three independent 16 MB buckets would inflate the resident index and
-    # slow both the first build and cold restart.
-    budget = _PER_SESSION_BUDGET
+    state = _RolloutTextState()
     for path in paths:
         try:
             with open_rollout_text(path) as handle:
                 for raw_line in handle:
-                    if total >= MAX_DOCUMENT_CHARS or budget <= 0:
+                    if state.exhausted:
                         break
-                    total += len(raw_line)
-                    try:
-                        record = json.loads(raw_line)
-                    except (TypeError, json.JSONDecodeError):
-                        continue
-                    if not isinstance(record, Mapping):
-                        continue
-                    payload = record.get("payload")
-                    if not isinstance(payload, Mapping):
-                        continue
-                    record_type = str(record.get("type") or "").casefold()
-                    payload_type = str(payload.get("type") or "").casefold()
-                    # Text is collected only when a branch will consume it.
-                    # Metadata, context and token-count records are skipped
-                    # outright instead of being walked for nothing.
-                    if payload_type in _USER_MESSAGE_TYPES or (
-                        record_type == "event_msg" and payload_type == "user_message"
-                    ):
-                        target, source = user, payload
-                    elif payload_type in _ASSISTANT_MESSAGE_TYPES or (
-                        record_type == "event_msg" and payload_type == "agent_message"
-                    ):
-                        target, source = assistant, payload
-                    elif payload_type == "message":
-                        role = str(payload.get("role") or "").casefold()
-                        channel = str(payload.get("channel") or "").casefold()
-                        target = (
-                            user if role in {"user", "human"}
-                            else assistant if role == "assistant" and channel not in {"analysis", "reasoning"}
-                            else None
-                        )
-                        source = payload if target is not None else None
-                    elif payload_type in _TOOL_CALL_TYPES:
-                        target, source = tools, payload
-                    elif payload_type in _CHANGE_PAYLOAD_TYPES:
-                        target, source = tools, payload
-                    elif payload_type in {"reasoning", "analysis"}:
-                        target, source = None, None
-                    elif payload_type in _ITEM_PAYLOAD_TYPES:
-                        item = payload.get("item")
-                        target = tools
-                        source = item if isinstance(item, Mapping) else None
-                        if isinstance(item, Mapping):
-                            item_type = str(item.get("type") or "").casefold()
-                            phase = str(item.get("phase") or item.get("channel") or "").casefold()
-                            if item_type in {"reasoning", "analysis"} or phase in {"analysis", "reasoning"}:
-                                target, source = None, None
-                            elif item_type in {"agentmessage", "agent_message", "assistant_message"}:
-                                target = assistant
-                            elif item_type in {"usermessage", "user_message", "user_message_item"}:
-                                target = user
-                        if isinstance(item, Mapping) and _has_change_evidence(
-                            item, str(item.get("type") or ""), raw_line
-                        ):
-                            changed.update(_extract_paths(item, raw_line))
-                    else:
-                        target, source = None, None
-
-                    if target is not None and source is not None:
-                        remaining = max(0, min(_RECORD_TEXT_BUDGET, budget))
-                        parts: list[str] = []
-                        _collect_text(source, parts, [remaining])
-                        if parts:
-                            text = " ".join(parts)
-                            # 仅工具输出需要剥离 UI 快照噪声：用户与助手消息
-                            # 本身就是正文，清洗会破坏真实命中。
-                            if target is tools:
-                                text = _strip_ui_snapshot(text)
-                            target.add(text)
-                            budget -= min(len(text), budget)
-
-                    if _has_change_evidence(payload, payload_type, raw_line):
-                        changed.update(_extract_paths(payload, raw_line))
-                if total >= MAX_DOCUMENT_CHARS:
+                    state.consume(raw_line)
+                if state.total >= MAX_DOCUMENT_CHARS:
                     break
         except (OSError, UnicodeError):
             continue
-    return (
-        user.value(),
-        assistant.value(),
-        tools.value(),
-        tuple(sorted({variant for path in changed for variant in _path_variants(path)})),
-    )
+    return state.result()
 
 
 def rollout_fingerprints(paths: Sequence[Path]) -> tuple[tuple[str, int, int], ...]:
@@ -1139,6 +1172,15 @@ class SessionSearchIndex:
         # so the repair cost is not paid again on every restart.
         self._last_load_reconciled = 0
         self._extraction_checked = False
+        self._tail_cache = SearchTailCache()
+
+    def _parse_changed_rollout(self, paths: Sequence[Path]) -> tuple[str, str, str, tuple[str, ...]]:
+        if len(paths) == 1 and Path(paths[0]).suffix.casefold() == ".jsonl":
+            try:
+                return self._tail_cache.parse(Path(paths[0]), _RolloutTextState)
+            except (OSError, UnicodeError):
+                pass
+        return parse_rollout(paths)
 
     def ensure_scan_index(self) -> bool:
         """Create the covering (session_id, indexed_at) scan index if missing.
@@ -1179,6 +1221,13 @@ class SessionSearchIndex:
             "model_provider TEXT NOT NULL, client_kind TEXT NOT NULL, "
             "searchable TEXT NOT NULL, indexed_at REAL NOT NULL)"
         )
+        # Keep the live extraction cursor in a small row. Token-count-only
+        # appends must not read/rewrite a document's large SQLite text blobs.
+        connection.execute(
+            f"CREATE TABLE IF NOT EXISTS {_CURSOR_TABLE} ("
+            "session_id TEXT PRIMARY KEY, document_stamp REAL NOT NULL, "
+            "fingerprints TEXT NOT NULL, content_digest TEXT NOT NULL, metadata TEXT NOT NULL)"
+        )
         if self._fts_available:
             try:
                 connection.execute(
@@ -1202,6 +1251,7 @@ class SessionSearchIndex:
                         fingerprints = self._decode_fingerprints(encoded)
                         if str(encoded) == self._encode_fingerprints(fingerprints):
                             continue
+                        connection.execute(f"DELETE FROM {_CURSOR_TABLE} WHERE session_id=?", (session_id,))
                         self._upsert_connection(
                             connection, session_id, tuple(Path(value[0]) for value in fingerprints),
                             title=title, workdir=workdir, model_provider=provider, client_kind=client,
@@ -1465,6 +1515,7 @@ class SessionSearchIndex:
                     errors.append(exc)
             self._memory_loaded = False
             self._reset_memory_locked()
+            self._tail_cache.clear()
             self._snapshot_last_write = 0.0
             self._last_load_reconciled = 0
         if errors:
@@ -1729,18 +1780,17 @@ class SessionSearchIndex:
         model_provider: str = "",
         client_kind: str = "",
         parsed: tuple[str, str, str, tuple[str, ...]] | None = None,
+        observed_fingerprints: tuple[tuple[str, int, int], ...] | None = None,
     ) -> tuple[bool, SearchDocument | None]:
         canonical = str(session_id or "").strip()
         if not canonical:
             return False, None
-        fingerprints = rollout_fingerprints(paths)
+        fingerprints = observed_fingerprints if observed_fingerprints is not None else rollout_fingerprints(paths)
         encoded = self._encode_fingerprints(fingerprints)
-        existing = connection.execute(
-            f"SELECT fingerprints, user_text, assistant_text, tool_text, changed_paths, searchable, "
-            "title, workdir, model_provider, client_kind "
-            f"FROM {_DOC_TABLE} WHERE session_id = ?",
-            (canonical,),
-        ).fetchone()
+        metadata = json.dumps(
+            tuple(str(value or "").strip() for value in (title, workdir, model_provider, client_kind)),
+            ensure_ascii=False, separators=(",", ":"),
+        )
         fts_missing = bool(
             self._fts_available
             and connection.execute(
@@ -1749,6 +1799,26 @@ class SessionSearchIndex:
             ).fetchone()
             is None
         )
+        cursor = connection.execute(
+            f"SELECT c.fingerprints, c.content_digest, c.metadata, c.document_stamp FROM {_CURSOR_TABLE} c "
+            f"JOIN {_DOC_TABLE} d ON d.session_id=c.session_id AND d.indexed_at=c.document_stamp "
+            "WHERE c.session_id=?", (canonical,),
+        ).fetchone()
+        if cursor and not fts_missing and cursor[0] == encoded and cursor[2] == metadata:
+            return True, None
+        if cursor and parsed is None and cursor[0] != encoded:
+            parsed = self._parse_changed_rollout(paths)
+        content_digest = self._content_digest(parsed) if parsed is not None else ""
+        if cursor and not fts_missing and cursor[1] == content_digest and cursor[2] == metadata:
+            self._store_extraction_cursor(
+                connection, canonical, encoded, content_digest, metadata, document_stamp=float(cursor[3]),
+            )
+            return True, None
+        existing = connection.execute(
+            f"SELECT fingerprints, user_text, assistant_text, tool_text, changed_paths, searchable, "
+            "title, workdir, model_provider, client_kind "
+            f"FROM {_DOC_TABLE} WHERE session_id = ?", (canonical,),
+        ).fetchone()
         old_searchable = ""
         if existing and str(existing[0]) == encoded:
             (
@@ -1779,10 +1849,24 @@ class SessionSearchIndex:
             if parsed is not None:
                 user_text, assistant_text, tool_text, changed_paths = parsed[:4]
             else:
-                user_text, assistant_text, tool_text, changed_paths = parse_rollout(paths)
+                user_text, assistant_text, tool_text, changed_paths = self._parse_changed_rollout(paths)
             changed_json = json.dumps(
                 list(changed_paths), ensure_ascii=False, separators=(",", ":")
             )
+            if (
+                existing and not fts_missing
+                and tuple(existing[1:5]) == (user_text, assistant_text, tool_text, changed_json)
+                and tuple(existing[6:10]) == tuple(str(value or "").strip() for value in (title, workdir, model_provider, client_kind))
+            ):
+                # Token counts, analysis and stripped UI
+                # output can append without changing any searchable content.
+                # Keep the resident document and its snapshot stamp intact.
+                self._store_extraction_cursor(
+                    connection, canonical, encoded,
+                    content_digest or self._content_digest((user_text, assistant_text, tool_text, changed_paths)),
+                    metadata,
+                )
+                return True, None
         document = SearchDocument(
             session_id=canonical,
             user_text=user_text,
@@ -1795,6 +1879,7 @@ class SessionSearchIndex:
             client_kind=str(client_kind or "").strip(),
         )
         searchable = document.searchable if self._fts_available else ""
+        indexed_at = float(self.clock())
         connection.execute(
             f"INSERT INTO {_DOC_TABLE} (session_id, fingerprints, user_text, assistant_text, "
             "tool_text, changed_paths, title, workdir, model_provider, client_kind, searchable, indexed_at) "
@@ -1816,7 +1901,7 @@ class SessionSearchIndex:
                 document.model_provider,
                 document.client_kind,
                 searchable,
-                float(self.clock()),
+                indexed_at,
             ),
         )
         if self._fts_available and (
@@ -1827,7 +1912,42 @@ class SessionSearchIndex:
                 f"INSERT INTO {_FTS_TABLE}(session_id, content) VALUES (?, ?)",
                 (canonical, searchable),
             )
+        self._store_extraction_cursor(
+            connection, canonical, encoded,
+            content_digest or self._content_digest((user_text, assistant_text, tool_text, changed_paths)),
+            metadata, document_stamp=indexed_at,
+        )
         return True, document
+
+    @staticmethod
+    def _content_digest(parsed: tuple) -> str:
+        digest = hashlib.sha256()
+        for value in (*parsed[:3], json.dumps(parsed[3], ensure_ascii=False, separators=(",", ":"))):
+            encoded = value.encode("utf-8")
+            digest.update(len(encoded).to_bytes(8, "little"))
+            digest.update(encoded)
+        return digest.hexdigest()
+
+    @staticmethod
+    def _store_extraction_cursor(
+        connection: sqlite3.Connection, session_id: str, fingerprints: str,
+        content_digest: str, metadata: str,
+        *, document_stamp: float | None = None,
+    ) -> None:
+        if document_stamp is None:
+            row = connection.execute(
+                f"SELECT indexed_at FROM {_DOC_TABLE} WHERE session_id=?", (session_id,),
+            ).fetchone()
+            if row is None:
+                return
+            document_stamp = float(row[0])
+        connection.execute(
+            f"INSERT INTO {_CURSOR_TABLE} (session_id, document_stamp, fingerprints, content_digest, metadata) "
+            "VALUES (?, ?, ?, ?, ?) "
+            "ON CONFLICT(session_id) DO UPDATE SET document_stamp=excluded.document_stamp, "
+            "fingerprints=excluded.fingerprints, content_digest=excluded.content_digest, metadata=excluded.metadata",
+            (session_id, document_stamp, fingerprints, content_digest, metadata),
+        )
 
     def upsert(
         self,
@@ -1881,7 +2001,8 @@ class SessionSearchIndex:
     ]:
         """Split entries into stale (fingerprint changed/missing) and fresh.
 
-        Stale entries must be re-parsed (tokenised) before upsert; fresh
+        Stale entries must be re-extracted before upsert; tokenisation is
+        skipped if searchable content has not changed. Fresh
         entries already match the snapshot and only need a cheap metadata
         touch. Empty ids and duplicates are folded into ``fresh`` so the
         caller's progress counter still advances for every input entry.
@@ -1898,9 +2019,18 @@ class SessionSearchIndex:
             seen.add(canonical)
             fingerprints = rollout_fingerprints(entry[1])
             row = connection.execute(
-                f"SELECT fingerprints FROM {_DOC_TABLE} WHERE session_id = ?",
+                f"SELECT c.fingerprints FROM {_CURSOR_TABLE} c "
+                f"JOIN {_DOC_TABLE} d ON d.session_id=c.session_id AND d.indexed_at=c.document_stamp "
+                "WHERE c.session_id = ?",
                 (canonical,),
             ).fetchone()
+            if row is None:
+                # Keep the valid-cursor path covered by the tiny stamp index.
+                # COALESCE with d.fingerprints forces SQLite to fetch the big
+                # document row even when the fallback value is never needed.
+                row = connection.execute(
+                    f"SELECT fingerprints FROM {_DOC_TABLE} WHERE session_id=?", (canonical,),
+                ).fetchone()
             if row is None or str(row[0]) != self._encode_fingerprints(fingerprints):
                 stale.append((canonical, [str(item) for item in entry[1]]))
             else:
@@ -1934,6 +2064,7 @@ class SessionSearchIndex:
     ) -> Iterator[tuple[str, str, str, str, tuple[str, ...], tuple]]:
         """Yield parsed stale entries, small sessions first, whales last.
 
+        Resident single-file sessions reuse bounded append state inline.
         Ordinary ("small") sessions are parsed **inline** and yielded first so the
         caller's progress callback fires for every non-heavy session immediately.
         Only "whale"-class sessions (>= ``_PARALLEL_PARSE_LARGE_BYTES``) are sent
@@ -1947,6 +2078,27 @@ class SessionSearchIndex:
         subset, so the main thread keeps advancing while whales parse.
         """
 
+        if not stale_jobs:
+            return
+        # Already-resident single-file sessions are the live append path.
+        # Keep their bounded extraction state in this process even when the
+        # historical file is large. New heavy sessions still use the pool.
+        hot_jobs = []
+        cold_jobs = []
+        for job in stale_jobs:
+            session_id, path_strings = job
+            if session_id in self._documents and len(path_strings) == 1 and Path(path_strings[0]).suffix.casefold() == ".jsonl":
+                hot_jobs.append(job)
+            else:
+                cold_jobs.append(job)
+        for session_id, path_strings in hot_jobs:
+            if callable(cancelled) and cancelled():
+                return
+            parsed = self._parse_changed_rollout([Path(path_strings[0])])
+            # Defer tokenisation until upsert determines that extracted text
+            # really changed. Metadata-only appends need no resident rebuild.
+            yield (session_id, *parsed, ())
+        stale_jobs = cold_jobs
         if not stale_jobs:
             return
         # Split small (parallel pool, first) from whale-class (parallel pool, last).
@@ -1971,12 +2123,10 @@ class SessionSearchIndex:
                 if callable(cancelled) and cancelled():
                     return
                 try:
-                    user_text, assistant_text, tool_text, changed_paths = parse_rollout(
+                    user_text, assistant_text, tool_text, changed_paths = self._parse_changed_rollout(
                         [Path(item) for item in path_strings]
                     )
-                    fields = _parse_fields(
-                        user_text, assistant_text, tool_text, changed_paths
-                    )
+                    fields = ()
                 except Exception:
                     user_text = assistant_text = tool_text = ""
                     changed_paths = ()
@@ -2110,6 +2260,10 @@ class SessionSearchIndex:
 
         try:
             stale_jobs, fresh_entries = self._partition_stale(connection, values)
+            observed = {
+                session_id: rollout_fingerprints([Path(path) for path in path_strings])
+                for session_id, path_strings in stale_jobs
+            }
             entry_by_id = {
                 str(entry[0] or "").strip(): entry
                 for entry in values
@@ -2142,6 +2296,7 @@ class SessionSearchIndex:
                     model_provider=provider,
                     client_kind=client_kind,
                     parsed=(user_text, assistant_text, tool_text, changed),
+                    observed_fingerprints=observed.get(canonical),
                 )
                 processed += 1
                 count += int(result)
@@ -2292,6 +2447,7 @@ class SessionSearchIndex:
             if stale:
                 placeholders = ",".join("?" for _ in stale)
                 connection.execute(f"DELETE FROM {_DOC_TABLE} WHERE session_id IN ({placeholders})", stale)
+                connection.execute(f"DELETE FROM {_CURSOR_TABLE} WHERE session_id IN ({placeholders})", stale)
                 if self._fts_available:
                     connection.execute(f"DELETE FROM {_FTS_TABLE} WHERE session_id IN ({placeholders})", stale)
             connection.commit()
