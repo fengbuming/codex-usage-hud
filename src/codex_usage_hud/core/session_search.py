@@ -9,7 +9,6 @@ is retained only for compatibility with older on-disk indexes.
 from __future__ import annotations
 
 from collections.abc import Iterable, Iterator, Mapping, Sequence
-from collections import defaultdict
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 import hashlib
@@ -164,7 +163,7 @@ _CJK_RUN_RE = re.compile(r"[\u4e00-\u9fff]")
 # loading can never execute code. ``stamps`` carries the SQLite ``indexed_at``
 # value observed at write time; on load, documents whose stamp no longer
 # matches SQLite are rebuilt from their rows.
-_SNAPSHOT_VERSION = 5
+_SNAPSHOT_VERSION = 6
 # Increment when the parser's interpretation changes. Existing rows are
 # re-extracted on the next background index open; this repairs indexes built
 # before compressed ``.jsonl.zst`` rollouts were readable.
@@ -1097,7 +1096,7 @@ def _parse_entries_parallel(
 @dataclass(frozen=True, slots=True)
 class _MemoryDocument:
     session_id: str
-    fields: tuple[tuple[str, tuple[str, ...], frozenset[str], str], ...]
+    fields: tuple[tuple[str, tuple[str, ...], tuple[str, ...], str], ...]
     search_text: str
     token_set: frozenset[str]
     # Kept outside the token stream so file links can be searched by their
@@ -1127,7 +1126,13 @@ class SessionSearchIndex:
         self._lock = RLock()
         self._memory_loaded = False
         self._documents: dict[str, _MemoryDocument] = {}
-        self._postings: dict[str, set[str]] = defaultdict(set)
+        # One bit per resident document. Recycle vacant slots so repeated
+        # add/remove operations cannot grow every posting indefinitely.
+        self._postings: dict[str, int] = {}
+        self._gram_strings: dict[str, str] = {}
+        self._session_slots: dict[str, int] = {}
+        self._slot_sessions: list[str | None] = []
+        self._free_slots: list[int] = []
         self._snapshot_last_write = 0.0
         # Documents the most recent load had to rebuild from SQLite rows
         # (snapshot stale or missing); >0 means the pickle should be rewritten
@@ -1266,10 +1271,25 @@ class SessionSearchIndex:
         self,
         document: SearchDocument,
         precomputed_fields: tuple | None = None,
+        *,
+        strings: dict[str, str] | None = None,
     ) -> None:
         canonical = str(document.session_id or "").strip()
         if not canonical:
             return
+        previous = self._documents.get(canonical)
+        if strings is None:
+            # Reuse strings from the replaced document without retaining a
+            # permanent interning pool of deleted/outdated document contents.
+            strings = {
+                token: token
+                for field in (previous.fields if previous is not None else ())
+                for token in field[1]
+            }
+        elif previous is not None:
+            for field in previous.fields:
+                for token in field[1]:
+                    strings.setdefault(token, token)
         self._remove_memory_document_locked(canonical)
         if precomputed_fields:
             # Four large fields were tokenised in a worker process; only the
@@ -1289,6 +1309,26 @@ class SessionSearchIndex:
             fields = tuple(precomputed_fields) + (metadata_field,)
         else:
             fields = _memory_fields(document)
+        self._store_memory_fields_locked(canonical, fields, tuple(document.changed_paths), strings)
+
+    def _store_memory_fields_locked(
+        self,
+        canonical: str,
+        fields: tuple,
+        changed_paths: tuple[str, ...],
+        strings: dict[str, str],
+    ) -> None:
+        shared_fields = []
+        for name, tokens, grams, field_text in fields:
+            tokens = tuple(strings.setdefault(token, token) for token in tokens)
+            # Field grams are only iterated for removal/persistence. A tuple
+            # needs no hash-table spare capacity; postings own query lookup.
+            grams = tuple(
+                self._gram_strings.setdefault(gram, strings.setdefault(gram, gram))
+                for gram in grams
+            )
+            shared_fields.append((name, tokens, grams, field_text))
+        fields = tuple(shared_fields)
         memory_document = _MemoryDocument(
             canonical,
             fields,
@@ -1298,15 +1338,23 @@ class SessionSearchIndex:
                 for _field_name, tokens, _grams, _field_text in fields
                 for token in tokens
             ),
-            tuple(document.changed_paths),
+            changed_paths,
         )
         self._documents[canonical] = memory_document
+        if self._free_slots:
+            slot = self._free_slots.pop()
+            self._slot_sessions[slot] = canonical
+        else:
+            slot = len(self._slot_sessions)
+            self._slot_sessions.append(canonical)
+        self._session_slots[canonical] = slot
+        bit = 1 << slot
         for _field_name, _tokens, grams, _field_text in memory_document.fields:
             for gram in grams:
                 # Postings are keyed directly by gram (no prefix); the dict
                 # holds only gram postings, so formatting a ``g:`` prefix on
                 # every membership just allocates a throwaway string.
-                self._postings[gram].add(canonical)
+                self._postings[gram] = self._postings.get(gram, 0) | bit
                 # Short terms need no separate index: the resident token set
                 # is cheap to check and avoids a large low-selectivity posting.
 
@@ -1315,13 +1363,28 @@ class SessionSearchIndex:
         if existing is None:
             return
         canonical = existing.session_id
+        slot = self._session_slots.pop(canonical)
+        keep = ~(1 << slot)
         for _field_name, _tokens, grams, _field_text in existing.fields:
             for gram in grams:
                 posting = self._postings.get(gram)
                 if posting is not None:
-                    posting.discard(canonical)
-                    if not posting:
+                    posting &= keep
+                    if posting:
+                        self._postings[gram] = posting
+                    else:
                         self._postings.pop(gram, None)
+                        self._gram_strings.pop(gram, None)
+        self._slot_sessions[slot] = None
+        self._free_slots.append(slot)
+
+    def _reset_memory_locked(self) -> None:
+        self._documents.clear()
+        self._postings.clear()
+        self._gram_strings.clear()
+        self._session_slots.clear()
+        self._slot_sessions.clear()
+        self._free_slots.clear()
 
     def _apply_memory_documents(
         self,
@@ -1330,9 +1393,10 @@ class SessionSearchIndex:
         precomputed: Mapping[str, tuple] | None = None,
     ) -> None:
         with self._lock:
+            strings: dict[str, str] = {}
             for document in documents:
                 fields = precomputed.get(document.session_id) if precomputed else None
-                self._add_memory_document_locked(document, precomputed_fields=fields)
+                self._add_memory_document_locked(document, precomputed_fields=fields, strings=strings)
             self._memory_loaded = True
 
     def _snapshot_path(self) -> Path:
@@ -1400,8 +1464,7 @@ class SessionSearchIndex:
                 except OSError as exc:
                     errors.append(exc)
             self._memory_loaded = False
-            self._documents.clear()
-            self._postings.clear()
+            self._reset_memory_locked()
             self._snapshot_last_write = 0.0
             self._last_load_reconciled = 0
         if errors:
@@ -1427,9 +1490,8 @@ class SessionSearchIndex:
     ) -> bool:
         """Persist the resident index so cold restarts skip tokenisation.
 
-        The payload contains only built-in types (dicts, tuples, frozensets of
-        plain strings), so unpickling it can never execute code. Writes go to
-        a temporary file and are swapped in atomically; a crash between the
+        The payload uses built-in dicts and tuples of plain strings. Writes
+        go to a temporary file and are swapped in atomically; a crash between the
         SQLite commit and this write only costs a re-parse of the affected
         documents on the next load, never correctness.
         """
@@ -1462,8 +1524,10 @@ class SessionSearchIndex:
                     )
                     for session_id, document in self._documents.items()
                 }
-                postings_payload = {
-                    key: set(value) for key, value in self._postings.items()
+                changed_paths_payload = {
+                    session_id: document.changed_paths
+                    for session_id, document in self._documents.items()
+                    if document.changed_paths
                 }
             target = self._snapshot_path()
             temporary = target.with_name(target.name + ".tmp")
@@ -1474,7 +1538,10 @@ class SessionSearchIndex:
                             "version": _SNAPSHOT_VERSION,
                             "stamps": stamps,
                             "documents": documents_payload,
-                            "postings": postings_payload,
+                            # Memberships are derived from document grams on
+                            # load. Do not duplicate them in the snapshot or
+                            # persist process-local bitmap slot assignments.
+                            "changed_paths": changed_paths_payload,
                         },
                         handle,
                         protocol=pickle.HIGHEST_PROTOCOL,
@@ -1517,13 +1584,15 @@ class SessionSearchIndex:
             RuntimeError,
         ):
             return False
-        if not isinstance(payload, dict) or payload.get("version") != _SNAPSHOT_VERSION:
+        if not isinstance(payload, dict) or payload.get("version") not in {5, _SNAPSHOT_VERSION}:
             return False
         documents = payload.get("documents")
         stamps = payload.get("stamps")
-        postings = payload.get("postings")
-        if not isinstance(documents, dict) or not isinstance(stamps, dict) or not isinstance(postings, dict):
+        if not isinstance(documents, dict) or not isinstance(stamps, dict):
             return False
+        changed_paths = payload.get("changed_paths", {})
+        if not isinstance(changed_paths, dict):
+            changed_paths = {}
         fresh: dict[str, float] = {}
         for key, value in stamps.items():
             try:
@@ -1546,41 +1615,34 @@ class SessionSearchIndex:
             except (TypeError, ValueError):
                 current[str(row[0])] = 0.0
 
-        self._documents.clear()
-        self._postings.clear()
+        self._reset_memory_locked()
+        strings: dict[str, str] = {}
         for session_id, entry in documents.items():
             canonical = str(session_id or "").strip()
             if not canonical or not isinstance(entry, tuple):
                 continue
-            fields: list[tuple[str, tuple[str, ...], frozenset[str], str]] = []
-            token_accumulator: list[str] = []
+            fields: list[tuple[str, tuple[str, ...], tuple[str, ...], str]] = []
             for field_entry in entry:
                 if not isinstance(field_entry, tuple) or len(field_entry) != 3:
                     continue
                 name, tokens, grams = field_entry
                 if not isinstance(name, str) or not isinstance(tokens, (tuple, list)):
                     continue
-                token_tuple = tuple(tokens)
+                token_tuple = tuple(strings.setdefault(token, token) for token in tokens)
                 gram_set = (
-                    frozenset(grams)
+                    tuple(grams)
                     if isinstance(grams, (frozenset, set, list, tuple))
-                    else frozenset()
+                    else ()
                 )
                 fields.append((name, token_tuple, gram_set, "\x00".join(token_tuple)))
-                token_accumulator.extend(token_tuple)
             if not fields:
                 continue
-            self._documents[canonical] = _MemoryDocument(
-                canonical,
-                tuple(fields),
-                "\x01".join(field[3] for field in fields),
-                frozenset(token_accumulator),
+            self._store_memory_fields_locked(
+                canonical, tuple(fields), tuple(changed_paths.get(canonical, ())), strings,
             )
-        for key, value in postings.items():
-            if isinstance(value, set):
-                self._postings[str(key)] = value
-            elif isinstance(value, (frozenset, list, tuple)):
-                self._postings[str(key)] = set(value)
+        # Release the old snapshot's duplicated strings/sets before loading
+        # any rows that changed since it was written (v5 migration included).
+        del payload, documents
 
         # Reconcile: drop docs that vanished or changed since the snapshot.
         stale_ids = [sid for sid in current if fresh.get(sid) != current[sid]]
@@ -1610,7 +1672,7 @@ class SessionSearchIndex:
         finally:
             connection.close()
         for row in rows:
-            self._add_memory_document_locked(self._document_from_row(row))
+            self._add_memory_document_locked(self._document_from_row(row), strings=strings)
         return True
 
     def _load_memory(self) -> int:
@@ -1622,25 +1684,22 @@ class SessionSearchIndex:
                 self._memory_loaded = True
                 return len(self._documents)
             connection = self._connect()
-            documents: list[SearchDocument] = []
+            self._reset_memory_locked()
+            strings: dict[str, str] = {}
             try:
                 rows = connection.execute(
                     f"SELECT session_id, fingerprints, user_text, assistant_text, "
                     "tool_text, changed_paths, title, workdir, model_provider, "
                     f"client_kind, searchable, indexed_at FROM {_DOC_TABLE}"
-                ).fetchall()
+                )
                 for row in rows:
-                    documents.append(self._document_from_row(row))
+                    self._add_memory_document_locked(self._document_from_row(row), strings=strings)
             finally:
                 connection.close()
-            self._documents.clear()
-            self._postings.clear()
-            for document in documents:
-                self._add_memory_document_locked(document)
             self._memory_loaded = True
             # A full row rebuild means the snapshot was missing or unusable;
             # report it so the caller can converge the pickle.
-            self._last_load_reconciled = len(documents)
+            self._last_load_reconciled = len(self._documents)
             return len(self._documents)
 
     def load(self) -> dict[str, object]:
@@ -2279,20 +2338,29 @@ class SessionSearchIndex:
                     "indexAvailable": True,
                     "memoryLoaded": True,
                 }
-            candidates = set(allowed)
+            candidates_mask = 0
+            for session_id in allowed:
+                slot = self._session_slots.get(session_id)
+                if slot is not None:
+                    candidates_mask |= 1 << slot
             for term in terms:
                 grams = _token_grams(term)
                 if not grams:
                     continue
-                current: set[str] | None = None
                 for gram in grams:
-                    posting = self._postings.get(gram, set())
-                    current = set(posting) if current is None else current & posting
-                    if not current:
+                    candidates_mask &= self._postings.get(gram, 0)
+                    if not candidates_mask:
                         break
-                candidates &= current or set()
-                if not candidates:
+                if not candidates_mask:
                     break
+
+            candidates = []
+            while candidates_mask:
+                bit = candidates_mask & -candidates_mask
+                session_id = self._slot_sessions[bit.bit_length() - 1]
+                if session_id is not None:
+                    candidates.append(session_id)
+                candidates_mask ^= bit
 
             weights = {"file": 12, "user": 10, "assistant": 8, "tool": 5, "metadata": 3}
             # ``field_text`` stores each field's token stream (tokens joined by

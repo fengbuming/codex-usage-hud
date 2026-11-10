@@ -110,6 +110,7 @@ class RuntimeContext:
     visible_app_error_cache: object | None = None
     current_session_tail_state: object | None = None
     session_snapshot_cache: object | None = None
+    active_work_snapshot_cache: object | None = None
     renderer_mode: bool = True
     defer_cold_renderer_budget: bool = True
     background_usage_runtime: object | None = None
@@ -175,6 +176,7 @@ class RuntimeContext:
             "usage_insights_worker",
             "background_usage_runtime",
             "session_snapshot_cache",
+            "active_work_snapshot_cache",
             "pre_send_estimator",
             "rest_reminder",
             "pricing_sync_scheduler",

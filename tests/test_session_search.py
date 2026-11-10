@@ -10,6 +10,63 @@ from codex_usage_hud.core.session_search import SessionSearchIndex, parse_rollou
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 
 
+def test_resident_bitmap_updates_removals_and_slot_reuse_preserve_matches(tmp_path: Path) -> None:
+    from codex_usage_hud.core.session_search import SearchDocument
+
+    def doc(session_id: str, **fields: str) -> SearchDocument:
+        return SearchDocument(
+            session_id, fields.get("user_text", ""), fields.get("assistant_text", ""),
+            fields.get("tool_text", ""), (),
+        )
+
+    index = SessionSearchIndex(tmp_path / "bitmap.sqlite")
+    index._apply_memory_documents([
+        doc("first", user_text="中文搜索 shared alpha"),
+        doc("second", assistant_text="中文搜索 shared beta"),
+    ])
+    assert {row["sessionId"] for row in index.search("中文搜索")["matches"]} == {"first", "second"}
+    assert [row["sessionId"] for row in index.search("shared", session_ids=["second"])["matches"]] == ["second"]
+    index._apply_memory_documents([doc("first", user_text="replacement gamma")])
+    assert [row["sessionId"] for row in index.search("shared")["matches"]] == ["second"]
+    with index._lock:
+        index._remove_memory_document_locked("second")
+    for number in range(50):
+        session_id = f"temporary-{number}"
+        index._apply_memory_documents([doc(session_id, tool_text="temporary unique")])
+        with index._lock:
+            index._remove_memory_document_locked(session_id)
+    index._apply_memory_documents([doc("third", user_text="final delta")])
+    assert index.search("shared")["matches"] == []
+    assert index.search("temporary")["matches"] == []
+    assert [row["sessionId"] for row in index.search("final")["matches"]] == ["third"]
+    assert len(index._slot_sessions) == 2
+
+
+def test_v5_snapshot_migrates_without_reparsing_unchanged_rollouts(tmp_path: Path) -> None:
+    import pickle
+
+    rollout = tmp_path / "legacy.jsonl"
+    rollout.write_text(json.dumps({"type": "event_msg", "payload": {
+        "type": "user_message", "message": "兼容迁移 shared exact phrase",
+    }}), encoding="utf-8")
+    index = SessionSearchIndex(tmp_path / "legacy-bitmap.sqlite")
+    index.upsert("session", (rollout,))
+    expected = index.search("shared exact")
+    with index._snapshot_path().open("rb") as handle:
+        snapshot = pickle.load(handle)
+    snapshot["version"] = 5
+    snapshot["postings"] = {gram: {"session"} for gram in index._postings}
+    with index._snapshot_path().open("wb") as handle:
+        pickle.dump(snapshot, handle)
+    fresh = SessionSearchIndex(index.path)
+    with patch.object(session_search_module, "parse_rollout", side_effect=AssertionError("unexpected parse")):
+        fresh.load()
+        assert fresh.search("shared exact") == expected
+    assert fresh._write_snapshot()
+    reloaded = SessionSearchIndex(index.path)
+    assert reloaded.search("shared exact") == expected
+
+
 def _compress_zstd(payload: bytes) -> bytes:
     try:
         from compression import zstd

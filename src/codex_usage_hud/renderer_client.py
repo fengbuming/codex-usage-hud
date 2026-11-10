@@ -37,6 +37,7 @@ from .renderer_payload_builder import (
     _runtime_expression_params,
     payload_from_snapshot,
 )
+from .renderer_payload_delta import RendererPayloadDeltaCache
 from .renderer_metrics import RendererMetricsWindow
 from .support_assets import support_qr_payload
 
@@ -884,6 +885,14 @@ class RendererHudClient:
                 self.last_status = "unchanged"
                 self.last_error = ""
                 return True
+            delta_cache = getattr(self, "_payload_delta_cache", None)
+            if delta_cache is None:
+                delta_cache = self._payload_delta_cache = RendererPayloadDeltaCache()
+            prepared_payload, pending_components = delta_cache.prepare(
+                prepared_payload,
+                self._payload_domain_digests,
+                self._payload_domain_digest,
+            )
             active_session_binding_primed = False
             if (
                 self._active_session_binding is not None
@@ -1029,6 +1038,7 @@ class RendererHudClient:
         self._record_update_success()
         self._recovery_refresh_pending = False
         self._payload_domain_digests.update(pending_domain_digests)
+        delta_cache.commit(pending_components)
         if pending_extras_digest is not None:
             self._payload_extras_digest = pending_extras_digest
         return True

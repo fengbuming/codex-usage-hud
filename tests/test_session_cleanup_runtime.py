@@ -16,6 +16,86 @@ from codex_usage_hud.core.session_cleanup import SessionCleanupError, SessionCle
 from codex_usage_hud.session_cleanup_runtime import SessionCleanupWorker
 
 
+def test_file_change_flush_serializes_and_coalesces_events_arriving_during_work(monkeypatch):
+    from codex_usage_hud import session_cleanup_runtime as runtime
+
+    timers = []
+
+    class Timer:
+        def __init__(self, interval, callback):
+            self.callback = callback
+            timers.append(self)
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr(runtime, "Timer", Timer)
+    worker = SessionCleanupWorker.__new__(SessionCleanupWorker)
+    worker._index_schedule_lock = Lock()
+    worker._closed = Event()
+    worker._search_change_timer = None
+    worker._search_change_running = False
+    worker._pending_search_paths = set()
+    worker._pending_search_full = False
+    manager = MagicMock()
+    manager.snapshot.return_value = {"revision": "r1"}
+    worker._real_search_manager = lambda: manager
+    entered, release = Event(), Event()
+    calls = []
+
+    def schedule(snapshot, *, changed_paths, prune_missing):
+        calls.append(set(changed_paths))
+        if len(calls) == 1:
+            entered.set()
+            assert release.wait(2)
+
+    worker._schedule_search_index = schedule
+    worker._on_search_files_changed({"session-search-rollout"}, {Path("initial.jsonl")})
+    first = Thread(target=timers[0].callback)
+    first.start()
+    try:
+        assert entered.wait(1)
+        later = {Path(f"later-{i}.jsonl") for i in range(20)}
+        for path in later:
+            worker._on_search_files_changed({"session-search-rollout"}, {path})
+        assert len(timers) == 1
+    finally:
+        release.set()
+        first.join(2)
+    assert not first.is_alive()
+    assert len(timers) == 2
+    timers[1].callback()
+    assert calls == [{Path("initial.jsonl")}, later]
+    assert worker._search_change_timer is None
+
+
+def test_replacing_an_index_generation_retains_all_unfinished_file_changes():
+    import queue
+
+    worker = SessionCleanupWorker.__new__(SessionCleanupWorker)
+    worker._index_schedule_lock = Lock()
+    worker._index_generation = 0
+    worker._index_clear_in_progress = False
+    worker._index_operations_idle = Event()
+    worker._index_operations_idle.set()
+    worker._index_active_operations = 0
+    worker._index_queue = queue.Queue()
+    worker._context = SimpleNamespace(session_index_warm_job=None)
+    manager = MagicMock()
+    manager.snapshot.return_value = {"revision": "r1"}
+    generations = iter((1, 2))
+    manager.begin_search_index.side_effect = lambda *args: {"search": {"generation": next(generations)}}
+    manager.search_index_entries.side_effect = lambda paths: tuple(
+        (path.stem, (path,), "", "", "", "") for path in paths
+    )
+    worker._real_search_manager = lambda: manager
+    for name in ("first", "second"):
+        worker._schedule_search_index({"revision": "r1"}, changed_paths=[Path(f"{name}.jsonl")])
+    first, second = worker._index_queue.get_nowait(), worker._index_queue.get_nowait()
+    assert first.generation == 1 and second.generation == 2
+    assert {entry[0] for entry in second.entries} == {"first", "second"}
+
+
 def _operation(request_id: str, action: str, state: str, **extra: object) -> dict[str, object]:
     return {
         "revision": "revision-1",

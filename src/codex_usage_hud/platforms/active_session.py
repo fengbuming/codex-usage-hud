@@ -11,7 +11,7 @@ import sys
 import threading
 import time
 import datetime
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import Any
 
@@ -2159,6 +2159,54 @@ class ActiveSessionTracker:
             return path
         self._thread_path_cache[thread_id] = (path, now)
         return path
+
+    def titles_from_thread_ids(
+        self, thread_ids: Iterable[str], *, prefer_session_index: bool = False,
+    ) -> dict[str, str]:
+        """Resolve a ranking's titles with one connection and one index pass.
+
+        No time-based cache: a rename is visible on the next projection, even
+        if it was written directly to the database by another application.
+        """
+        ids = tuple(dict.fromkeys(str(value or "").strip() for value in thread_ids))
+        ids = tuple(value for value in ids if value)
+        titles: dict[str, str] = {}
+        if not ids:
+            return titles
+        if self.state_db.exists():
+            try:
+                con = sqlite3.connect(f"file:{self.state_db}?mode=ro", uri=True)
+                try:
+                    for start in range(0, len(ids), 400):
+                        batch = ids[start:start + 400]
+                        placeholders = ",".join("?" for _ in batch)
+                        for session_id, title in con.execute(
+                            f"select id, title from threads where id in ({placeholders})", batch
+                        ):
+                            if str(title or "").strip():
+                                titles[str(session_id)] = str(title).strip()
+                finally:
+                    con.close()
+            except sqlite3.Error:
+                pass
+        missing = set(ids) if prefer_session_index else set(ids) - titles.keys()
+        if missing:
+            try:
+                with self.session_index_path.open("r", encoding="utf-8") as handle:
+                    for line in handle:
+                        try:
+                            item = json.loads(line)
+                        except (ValueError, TypeError):
+                            continue
+                        if not isinstance(item, dict):
+                            continue
+                        session_id = str(item.get("id") or "")
+                        title = str(item.get("thread_name") or "").strip()
+                        if session_id in missing and title:
+                            titles[session_id] = title
+            except OSError:
+                pass
+        return {session_id: titles.get(session_id, "") for session_id in ids}
 
     def title_from_thread_id(self, thread_id: str) -> str:
         """Resolve a known thread id to its visible title via the state database."""

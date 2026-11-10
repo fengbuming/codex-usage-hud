@@ -142,6 +142,24 @@ def build_usage_insights_payload(
         "month": _background_summary(context, "30d"),
     }
     title_cache: dict[str, str] = {}
+    bulk_titles = getattr(getattr(context, "active_session_tracker", None), "titles_from_thread_ids", None)
+    if callable(bulk_titles):
+        missing_ids = set()
+        for name in ("today", "week", "month"):
+            window = payload.get(name)
+            if not isinstance(window, Mapping):
+                continue
+            for field in ("sessions", "topSessionsByUsage", "topSessionsByCost"):
+                for row in window.get(field) or []:
+                    if isinstance(row, Mapping) and row.get("sessionId") and not row.get("title"):
+                        missing_ids.add(str(row["sessionId"]))
+        try:
+            title_cache = {
+                session_id: " ".join(str(title or "").split()) or f"会话 {session_id[:8]}"
+                for session_id, title in bulk_titles(missing_ids).items()
+            }
+        except Exception:
+            pass
     for window_name in ("today", "week", "month"):
         raw_window = payload.get(window_name)
         window = dict(raw_window) if isinstance(raw_window, Mapping) else {}

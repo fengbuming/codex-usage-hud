@@ -191,10 +191,13 @@ class SessionCleanupWorker:
         self._index_idle.set()
         self._index_schedule_lock = Lock()
         self._index_generation = 0
+        self._pending_index_entries: dict[str, tuple] = {}
+        self._pending_index_prune_missing = False
         self._index_clear_in_progress = False
         self._index_operations_idle = Event()
         self._index_operations_idle.set()
         self._index_active_operations = 0
+        self._search_change_running = False
         self._pending_search_paths: set[Path] = set()
         self._pending_search_full = False
         self._search_change_timer: Timer | None = None
@@ -299,34 +302,47 @@ class SessionCleanupWorker:
             self._pending_search_full = self._pending_search_full or (
                 "session-search-metadata" in reasons or not changed_paths
             )
-            if self._search_change_timer is None:
-                self._search_change_timer = Timer(
-                    0.15,
-                    self._flush_search_file_changes,
-                )
-                self._search_change_timer.daemon = True
-                self._search_change_timer.start()
+            self._arm_search_change_timer_locked()
+
+    def _arm_search_change_timer_locked(self) -> None:
+        if (
+            self._search_change_timer is None
+            and not self._search_change_running
+            and not self._closed.is_set()
+        ):
+            self._search_change_timer = Timer(0.15, self._flush_search_file_changes)
+            self._search_change_timer.daemon = True
+            self._search_change_timer.start()
 
     def _flush_search_file_changes(self) -> None:
         with self._index_schedule_lock:
+            if self._search_change_running:
+                return
+            self._search_change_running = True
             self._search_change_timer = None
             changed_paths = set(self._pending_search_paths)
             full = self._pending_search_full
             self._pending_search_paths.clear()
             self._pending_search_full = False
-        if self._closed.is_set():
-            return
-        manager = self._real_search_manager()
-        if manager is None:
-            return
-        snapshot = manager.snapshot(include_sessions=False)
-        scheduled = self._schedule_search_index(
-            snapshot,
-            changed_paths=() if full else changed_paths,
-            prune_missing=full,
-        )
-        if scheduled is not None:
-            self._publish(scheduled)
+        try:
+            if self._closed.is_set():
+                return
+            manager = self._real_search_manager()
+            if manager is None:
+                return
+            snapshot = manager.snapshot(include_sessions=False)
+            scheduled = self._schedule_search_index(
+                snapshot,
+                changed_paths=() if full else changed_paths,
+                prune_missing=full,
+            )
+            if scheduled is not None:
+                self._publish(scheduled)
+        finally:
+            with self._index_schedule_lock:
+                self._search_change_running = False
+                if self._pending_search_paths or self._pending_search_full:
+                    self._arm_search_change_timer_locked()
 
     def _schedule_search_index(
         self,
@@ -388,7 +404,7 @@ class SessionCleanupWorker:
             # The feature switch applies to both full-scan and file-change
             # paths. Do not let the compatibility worker build a changed-file
             # delta while automatic indexing is disabled.
-            return manager.snapshot()
+            return manager.snapshot(include_sessions=False)
         if (
             not changed_paths
             and isinstance(warm_status, Mapping)
@@ -405,14 +421,14 @@ class SessionCleanupWorker:
                             # A concurrent clear/close can reject the start;
                             # never let the cleanup-only reconciliation below
                             # reopen the database after that rejection.
-                            return manager.snapshot()
+                            return manager.snapshot(include_sessions=False)
                 if prune_missing:
                     remove_missing = getattr(manager._search_index, "remove_missing", None)
                     if callable(remove_missing):
                         remove_missing(
                             entry[0] for entry in manager.search_index_entries()
                         )
-                return manager.snapshot()
+                return manager.snapshot(include_sessions=False)
             except Exception:
                 # Fall back to the compatibility indexer if the optional warm
                 # job is unavailable or fails during startup.  Search remains
@@ -432,15 +448,23 @@ class SessionCleanupWorker:
             if self._index_clear_in_progress:
                 return None
             self._index_generation = generation
+            pending_entries = getattr(self, "_pending_index_entries", {})
+            if prune_missing:
+                pending_entries = {}
+            pending_entries.update((entry[0], entry) for entry in entries)
+            self._pending_index_entries = pending_entries
+            self._pending_index_prune_missing = (
+                prune_missing or getattr(self, "_pending_index_prune_missing", False)
+            )
             self._index_queue.put_nowait(
                 _SearchIndexJob(
                     revision=revision,
                     generation=generation,
-                    entries=entries,
-                    prune_missing=bool(prune_missing),
+                    entries=tuple(pending_entries.values()),
+                    prune_missing=self._pending_index_prune_missing,
                 )
             )
-        return manager.snapshot()
+        return manager.snapshot(include_sessions=False)
 
     def _search_index_job_current(self, job: _SearchIndexJob) -> bool:
         with self._index_schedule_lock:
@@ -467,6 +491,8 @@ class SessionCleanupWorker:
             self._search_change_timer = None
             self._pending_search_paths.clear()
             self._pending_search_full = False
+            getattr(self, "_pending_index_entries", {}).clear()
+            self._pending_index_prune_missing = False
         if timer is not None:
             timer.cancel()
         timeout = max(0.0, float(timeout_seconds))
@@ -525,7 +551,6 @@ class SessionCleanupWorker:
                         generation=job.generation,
                     )
                 )
-
                 def report(processed: int, total: int, indexed: int) -> None:
                     if not self._search_index_job_current(job):
                         return
@@ -563,6 +588,10 @@ class SessionCleanupWorker:
                         generation=job.generation,
                     )
                 )
+                with self._index_schedule_lock:
+                    if self._index_generation == job.generation:
+                        self._pending_index_entries.clear()
+                        self._pending_index_prune_missing = False
             except Exception as exc:
                 if not self._search_index_job_current(job):
                     continue

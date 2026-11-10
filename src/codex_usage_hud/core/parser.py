@@ -1214,6 +1214,8 @@ class JsonlSessionParser:
         path: Path,
         session_id: str | None = None,
         sse_tracker: SseRequestStateMachine | None = None,
+        *,
+        include_session_history: bool = True,
     ) -> ParsedSession:
         """Parse a session file, skipping incomplete trailing JSONL rows."""
         snapshot = ParsedSession(session_path=path)
@@ -1227,7 +1229,14 @@ class JsonlSessionParser:
             snapshot.last_file_mtime = path.stat().st_mtime
         except OSError:
             snapshot.last_file_mtime = None
-        return self.parse_records(records, path, session_id, sse_tracker, snapshot)
+        return self.parse_records(
+            records, path, session_id, sse_tracker, snapshot,
+            include_session_history=include_session_history,
+        )
+
+    def parse_work_file(self, path: Path) -> ParsedSession:
+        """Parse all bubble state without constructing unused historical UI rows."""
+        return self.parse_file(path, include_session_history=False)
 
     def parse_file_incremental(
         self,
@@ -1417,6 +1426,8 @@ class JsonlSessionParser:
         session_id: str | None = None,
         sse_tracker: SseRequestStateMachine | None = None,
         snapshot: ParsedSession | None = None,
+        *,
+        include_session_history: bool = True,
     ) -> ParsedSession:
         """Parse already loaded Codex JSONL records."""
         parsed = snapshot or ParsedSession(session_path=path)
@@ -1480,9 +1491,10 @@ class JsonlSessionParser:
             records,
             task_started_index,
         )
-        parsed.session_request_history = self.reindex_rounds(
-            self.token_rounds_since_task(records, None)
-        )
+        if include_session_history:
+            parsed.session_request_history = self.reindex_rounds(
+                self.token_rounds_since_task(records, None)
+            )
         jsonl_rounds = self.token_rounds_since_task(records, task_started_index)
         parsed.request = self.build_request_tokens(
             parsed,
@@ -1492,11 +1504,12 @@ class JsonlSessionParser:
             sse_tracker,
         )
         self.apply_output_speed(parsed, records)
-        parsed.activity_tasks = self.build_task_history(
-            records,
-            parsed,
-            task_started_index,
-        )
+        if include_session_history:
+            parsed.activity_tasks = self.build_task_history(
+                records,
+                parsed,
+                task_started_index,
+            )
         parsed.status = "parsed"
         return parsed
 

@@ -37,7 +37,8 @@ from .runtime_usage import (
 )
 from .session_snapshots import session_path_key as _session_path_key
 from .refresh_diagnostics import RefreshDiagnosticTrace
-from .usage_contributions import usage_scan_roots
+from .active_work_cache import ActiveWorkSnapshotCache
+from .usage_contributions import usage_scan_roots, usage_jsonl_stat_tokens
 
 if TYPE_CHECKING:
     from .runtime_context import RuntimeContext
@@ -139,10 +140,9 @@ class RendererActiveWorkPump:
                     return
                 request = self._pending
                 self._pending = None
-            if request is None:
-                with self._lock:
+                if request is None:
                     self._worker = None
-                return
+                    return
             snapshot, session_path, priority_paths, selection_seq = request
             self._trace.begin(
                 key=getattr(snapshot, "session_id", None),
@@ -212,16 +212,11 @@ def _recent_session_files(
         if not root.exists():
             continue
         try:
-            iterator = root.rglob("*.jsonl")
-            for path in iterator:
-                try:
-                    stat = path.stat()
-                except OSError:
-                    continue
+            for path, mtime_ns, _size in usage_jsonl_stat_tokens(root):
                 path_key = _session_path_key(path)
                 paths[path_key] = (
                     path,
-                    stat.st_mtime,
+                    mtime_ns / 1_000_000_000,
                     path_key in priority_keys,
                 )
         except OSError:
@@ -969,6 +964,36 @@ def _compact_work_text(value: object, limit: int) -> str:
     return text[: max(0, limit - 3)] + "..."
 
 
+def _snapshot_for_active_work_cache(snapshot: ParsedSession) -> ParsedSession:
+    """Keep exactly the state used by bubbles, without the historical UI data."""
+    return replace(
+        snapshot,
+        activity_tasks=[],
+        session_request_history=[],
+        request_history=[
+            replace(row, activity_summary="", copy_text="", activity_texts=())
+            for row in snapshot.request_history
+        ],
+        activity_steps=[
+            replace(
+                step,
+                detail=_compact_work_text(step.detail, 220),
+                output=_compact_work_text(step.output, 220),
+                command_raw=str(step.command_raw or "")[:2000],
+            )
+            for step in snapshot.activity_steps[-32:]
+        ],
+        last_output=replace(
+            snapshot.last_output,
+            detail=_compact_work_text(snapshot.last_output.detail, ACTIVE_WORK_LAST_OUTPUT_MAX_CHARS),
+        ),
+        slow=replace(
+            snapshot.slow,
+            slowest_user_wait_call=None, slowest_tool_call=None, longest_gap_detail=None,
+        ),
+    )
+
+
 def _refresh_visible_current_work_item(
     context: object,
     items: Sequence[WorkStatusItem],
@@ -1197,6 +1222,12 @@ def active_work_items_for_snapshot(
     # unfinished file must not resurrect a completed or aborted task.
     candidates: dict[str, tuple[Path, ParsedSession]] = {}
     if scan_candidates:
+        snapshot_cache = getattr(context, "active_work_snapshot_cache", None)
+        if snapshot_cache is None:
+            snapshot_cache = ActiveWorkSnapshotCache(
+                ACTIVE_WORK_CANDIDATE_LIMIT, project=_snapshot_for_active_work_cache,
+            )
+            context.active_work_snapshot_cache = snapshot_cache
         for path in _recent_session_files(
             context.sessions_root,
             current_path=session_path,
@@ -1206,7 +1237,7 @@ def active_work_items_for_snapshot(
             if _session_path_key(path) == current_key:
                 continue
             try:
-                parsed = context.parser.parse_file(path)
+                parsed = snapshot_cache.parse(context.parser, path)
             except Exception:
                 continue
             if parsed.session_id == snapshot.session_id and parsed.session_id not in {"", "n/a"}:
@@ -1296,6 +1327,17 @@ def active_work_items_for_snapshot(
         visible_item_cache.pop(str(snapshot.session_id), None)
 
     if scan_candidates:
+        tracker = context.active_session_tracker
+        candidate_titles = None
+        bulk_titles = getattr(tracker, "titles_from_thread_ids", None)
+        if callable(bulk_titles):
+            try:
+                candidate_titles = bulk_titles(
+                    (parsed.session_id for _path, parsed in candidates.values()),
+                    prefer_session_index=True,
+                )
+            except Exception:
+                pass
         for path, parsed in candidates.values():
             if _hide_from_work_overlay(parsed):
                 if parsed.session_id:
@@ -1306,11 +1348,17 @@ def active_work_items_for_snapshot(
                 parsed,
             )
             title = ""
-            if context.active_session_tracker is not None:
-                title = context.active_session_tracker.title_for_session(
-                    path,
-                    parsed.session_id,
-                )
+            if tracker is not None:
+                if isinstance(candidate_titles, dict):
+                    title = str(candidate_titles.get(parsed.session_id) or "")
+                    if not title:
+                        title = tracker.title_from_rollout_path(path)
+                    # The latest renderer observation takes precedence over
+                    # persisted titles while a rename is still being saved.
+                    if _session_path_key(getattr(tracker, "latest_path", None)) == _session_path_key(path):
+                        title = str(getattr(tracker, "latest_title", "") or "").strip() or title
+                else:
+                    title = tracker.title_for_session(path, parsed.session_id)
             item = _work_item_from_snapshot(
                 parsed,
                 current=False,

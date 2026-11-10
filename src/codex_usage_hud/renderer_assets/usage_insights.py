@@ -188,8 +188,20 @@ TEXT = r"""
       }
 
       function applyUsageInsightsPayload(_root, payload) {
-        const data = payload?.usageInsights;
-        if (!data || typeof data !== "object") return;
+        const incoming = payload?.usageInsights;
+        if (!incoming || typeof incoming !== "object") return;
+        const data = { ...incoming };
+        const previous = usageInsightsState.data || {};
+        for (const patch of Array.isArray(data._listPatches) ? data._listPatches : []) {
+          const [window, field] = patch.path || [];
+          if (!["today", "week", "month"].includes(window)
+            || !["sessions", "topSessionsByUsage", "topSessionsByCost"].includes(field)) continue;
+          const rows = Array.isArray(previous[window]?.[field]) ? previous[window][field].slice() : [];
+          rows.length = Math.max(0, Number(patch.length) || 0);
+          for (const [index, row] of patch.items || []) rows[index] = row;
+          data[window] = { ...data[window], [field]: rows };
+        }
+        delete data._listPatches;
         usageInsightsState.data = data;
         const state = String(data.state || "").toLowerCase();
         const responseRequestId = String(data.requestId || "");

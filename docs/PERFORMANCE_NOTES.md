@@ -1,0 +1,124 @@
+# HUD hot-path optimization measurements
+
+Measured on Windows / Python 3.14.3 on 2026-11-10. These are focused offline
+comparisons against the checkout's original implementation, not measurements
+of the running HUD after a restart. No active requests or production databases
+were modified.
+
+## Changes
+
+- Background bubbles reuse bounded parsed state for unchanged rollouts, keyed
+  by file identity, size, nanosecond timestamps, parser identity and pricing
+  version. File replacement, truncation and racing writes invalidate reuse.
+  Time-dependent status is still evaluated on every bubble projection.
+- Bubble parsing skips historical navigation/copy data that is constructed
+  separately when a conversation is selected. The cache retains the same
+  current-task activity rows and text limits as the existing bubble payload.
+- Search memberships use reusable bitmap slots; field grams use compact
+  tuples and shared strings. Search content, verification and ranking rules
+  are unchanged. Version 5 snapshots load directly; version 6 snapshots omit
+  redundant postings and preserve changed-file paths.
+- File-change scheduling runs one reconciliation at a time and coalesces
+  subsequent paths. Superseded generations retain unfinished file changes.
+  Search progress snapshots omit the unchanged session inventory.
+- Bubble/ranking titles are fetched in batches while preserving their prior
+  title precedence. No timer-based title cache delays renames.
+- Renderer updates reuse acknowledged inventories and send sparse patches
+  for changed ranking rows. Failed sends do not advance the baseline; page
+  loss and reinstall require full hydration again. Animations are unchanged.
+
+## Offline results
+
+A consistent SQLite backup and the existing snapshot were copied to a
+temporary directory. Both implementations loaded that same 265-document
+corpus. Thirty Chinese/English, short, substring and multi-term queries
+returned identical results, including ordering and result details.
+
+| Measurement | Original | Optimized |
+| --- | ---: | ---: |
+| Resident search object graph (unique reachable Python objects) | 286.29 MiB | 108.88 MiB |
+| Median query time across 30 queries | 8.03 ms | 6.72 ms |
+| Largest query time in that sample | 19.24 ms | 18.17 ms |
+| Native snapshot load | 0.50 s | 0.78 s |
+| New snapshot size | approximately 22 MiB | 12.21 MiB |
+
+The first conversion from the old snapshot took 1.18 s. Reconstructing compact
+memberships adds a small cold-load cost in exchange for lower steady memory.
+Object-graph sizes are not total process private bytes or working set.
+
+Sixteen recent rollouts (61.03 MiB) were copied before comparison so appends
+could not affect either side. All resulting bubble items matched at the same
+observation time.
+
+| Measurement | Original | Optimized |
+| --- | ---: | ---: |
+| First parse of 16 candidates | 2,068.58 ms | 931.02 ms |
+| Next unchanged candidate pass | 2,068.58 ms representative full parse | 0.732 ms |
+| Unchanged-pass rollout body reads | 61.03 MiB | 0 |
+| Bounded bubble cache object graph | none | 0.49 MiB |
+
+The unchanged pass made zero parser calls. This does not claim that changing
+large rollouts are free: their bubble state still requires parsing, but only
+changed candidates are parsed and unused historical UI work is skipped.
+Filesystem inventory checks and real incoming log/IPC traffic remain.
+
+Focused regression cases cover bitmap replacement/deletion/slot reuse, old
+snapshot migration, file identity and pricing invalidation, serial event
+coalescing, title renames, renderer failure/retry and page reset. A Node.js
+execution of the actual renderer handler verifies list reorder, truncation
+and empty-list reconstruction. A 100-row test with one changed row reduces
+the serialized ranking envelope to less than 5% of its full size.
+
+## Live acceptance
+
+The running HUD was not restarted. Total process memory, CPU and physical
+disk activity must be measured after the user chooses to restart, with the
+same visible bubbles, sessions and workload. Preserve the independent proxy
+and active requests. Compare idle and active windows separately; cold index
+builds and opening large historical sessions are separate workloads.
+
+
+## Live restart verification, 2026-11-10 19:39–19:42 (Asia/Shanghai)
+
+The old main process (8024) exited on the development handoff. The reload
+coordinator stopped on its identity check during shutdown; after independently
+confirming the old process had exited and the PID file was removed, the same
+source-launch mechanism started main PID 33940. Renderer readiness was
+confirmed through its HTTP health receipt and the actual page. Bubble helper
+PID is 29292. Proxy PIDs 13620/20476 and ports 57323/57324 remained unchanged;
+the active gateway continued reporting active requests on the same generation.
+Codex was not restarted.
+
+Immediately before restart, a 15.27 s active-window sample of the main process
+measured 851.6 MiB private bytes, 791.1 MiB working set, 102.5% of one logical
+CPU core and 19.2 MiB/s process I/O reads.
+
+After startup/index warm-up, the first 32.48 s sample measured main private
+bytes 311.4–318.0 MiB, about 35.8% of one core and 14.2 MiB/s reads. A second
+20.20 s sample measured 322.1 MiB private bytes, 340.1 MiB working set, 26.8%
+of one core and 7.33 MiB/s reads. Its bubble helper measured 91.3 MiB private
+bytes, 148.8 MiB working set and 17.9% of one core. Total private memory was
+approximately 413 MiB (total working set approximately 489 MiB).
+
+These are changing live workloads, not a controlled replay. Process I/O read
+counters include cached file, socket and pipe activity; they are not physical
+disk throughput. The main-process private-memory reduction is approximately
+62%; sampled main CPU reduction 65–74%; read-counter reduction 26–62%.
+The originally proposed active CPU/read targets are not yet fully achieved.
+
+Read-only CDP closure inspection confirmed the actual reconstructed state,
+not only the sparse wire payload: 873 inventory rows, totals agreeing with
+that count, and today/week/month each containing 8 session rows and 10 usage
+ranking rows with no missing entries. Ranking state was ready with no error
+and no retained patch markers. Two bubble items continued to update. The
+warm-index status completed 255/255 candidates with an empty error. Page
+runtime errors were empty and observed CDP updates succeeded.
+
+In logged 60-second windows, old/new median payload sizes were 661/500 KiB;
+logged payload totals 16.10/3.55 MiB. Logging is sampled, so these are not full
+transport byte counts. Median recorded refresh times were 757/672 ms. The
+remaining busy stacks were mainly changed-rollout search extraction and
+index rebuilding; background bubble history parsing was no longer dominant.
+Large history/current-session payloads and animated helper rendering still
+contribute. Live acceptance confirms substantial improvement, not completion
+of every aspirational performance target.

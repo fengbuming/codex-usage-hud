@@ -14,6 +14,32 @@ from codex_usage_hud.usage_insights import (
 )
 
 
+def test_ranking_projects_all_titles_in_one_bulk_lookup(tmp_path):
+    from codex_usage_hud.usage_insights import build_usage_insights_payload
+
+    calls = []
+
+    def titles(ids):
+        calls.append(set(ids))
+        return {"first": "Renamed title", "second": ""}
+
+    context = SimpleNamespace(
+        sessions_root=tmp_path,
+        active_session_tracker=SimpleNamespace(titles_from_thread_ids=titles),
+        usage_cache=SimpleNamespace(insights=lambda *args, **kwargs: {
+            "ready": True,
+            "today": {"sessions": [{"sessionId": "first"}, {"sessionId": "second"}]},
+            "week": {"topSessionsByUsage": [{"sessionId": "first"}]},
+        }),
+    )
+    now = datetime.now().astimezone()
+    payload = build_usage_insights_payload(context, day_start=now, week_start=now, included_providers=None)
+    assert calls == [{"first", "second"}]
+    assert payload["today"]["sessions"][0]["title"] == "Renamed title"
+    assert payload["week"]["topSessionsByUsage"][0]["title"] == "Renamed title"
+    assert payload["today"]["sessions"][1]["title"] == "会话 second"
+
+
 def test_usage_insights_seven_day_window_uses_local_calendar_days() -> None:
     config = replace(
         UserConfig.defaults(),

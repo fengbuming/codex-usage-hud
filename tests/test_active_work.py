@@ -11,6 +11,38 @@ import pytest
 from codex_usage_hud.active_work import RendererActiveWorkPump
 
 
+def test_active_work_batches_titles_and_keeps_renderer_rename_precedence(tmp_path, monkeypatch):
+    from codex_usage_hud import active_work
+    from codex_usage_hud.core import ParsedSession
+
+    now = datetime.now().astimezone()
+    paths = [tmp_path / "first.jsonl", tmp_path / "second.jsonl"]
+    snapshots = {}
+    for i, path in enumerate(paths):
+        path.write_text("unchanged", encoding="utf-8")
+        snapshot = ParsedSession(
+            session_id=f"session-{i}", session_path=path,
+            session_started_at=now, task_started_at=now, last_event_time=now,
+        )
+        snapshot.request.status = "running"
+        snapshots[path] = snapshot
+    calls = []
+
+    def titles(ids, *, prefer_session_index):
+        calls.append((set(ids), prefer_session_index))
+        return {"session-0": "Persisted title", "session-1": "Other title"}
+
+    tracker = SimpleNamespace(titles_from_thread_ids=titles, latest_path=paths[0], latest_title="Just renamed")
+    context = SimpleNamespace(
+        sessions_root=tmp_path, parser=SimpleNamespace(parse_file=lambda path: snapshots[path]),
+        active_session_tracker=tracker,
+    )
+    monkeypatch.setattr(active_work, "_recent_session_files", lambda *args, **kwargs: paths)
+    items = active_work.active_work_items_for_snapshot(context, ParsedSession(session_id="unrelated"), None)
+    assert calls == [({"session-0", "session-1"}, True)]
+    assert {item.id: item.title for item in items} == {"session-0": "Just renamed", "session-1": "Other title"}
+
+
 @pytest.mark.parametrize("follow_target", [False, True])
 @pytest.mark.parametrize("old_first", [False, True])
 @pytest.mark.parametrize("terminal", ["complete", "abort", "running"])
