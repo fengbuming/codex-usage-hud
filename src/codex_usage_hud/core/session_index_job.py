@@ -892,12 +892,15 @@ class SessionIndexWarmJob:
                 self._trim_index_to_range(range_key)
         covered_fn = self._capability("indexed_session_ids")
         covered_ids = frozenset(covered_fn()) if callable(covered_fn) else frozenset()
+        previously_covered = covered_ids
+        stale_ids: frozenset[str] = frozenset()
         stale_fn = self._capability("stale_session_ids")
         if callable(stale_fn):
             try:
                 # A changed rollout path (for example .jsonl -> .jsonl.zst)
                 # must be rebuilt even when its session id is already present.
-                covered_ids -= frozenset(stale_fn(candidates))
+                stale_ids = frozenset(stale_fn(candidates))
+                covered_ids -= stale_ids
             except Exception:
                 # Staleness is an optimisation; sync_batches still performs
                 # its own fingerprint check for the entries it receives.
@@ -913,8 +916,18 @@ class SessionIndexWarmJob:
             range_key,
             covered_ids=covered_ids,
         )
+        # Coverage is retained as sessions age out of the selected window.
+        # Repair changed *already indexed* documents too (notably stale
+        # .jsonl paths after compression), without indexing new older sessions.
+        target_ids = {entry[0] for entry in target_bucket}
+        repairs = [
+            entry for entry in candidates
+            if entry[0] in stale_ids & previously_covered and entry[0] not in target_ids
+        ]
+        bucket.extend(repairs)
         target_total = len(target_bucket)
-        covered_target = max(0, target_total - len(bucket))
+        covered_target = max(0, target_total - (len(bucket) - len(repairs)))
+        target_total += len(repairs)
         if not bucket:
             self._finish_range(
                 pass_range,

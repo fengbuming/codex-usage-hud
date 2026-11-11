@@ -23,7 +23,7 @@ from threading import RLock
 import time
 from typing import Callable
 
-from .rollout_io import open_rollout_text
+from .rollout_io import open_rollout_text, resolve_rollout_path
 from .search_tail_cache import SearchTailCache
 
 
@@ -330,7 +330,7 @@ def entries_in_range(
         if use_mtime:
             for path in entry[1] if len(entry) > 1 else ():
                 try:
-                    newest = max(newest, path.stat().st_mtime)
+                    newest = max(newest, resolve_rollout_path(path).stat().st_mtime)
                 except (OSError, ValueError):
                     continue
         if cutoff is not None and newest > 0.0 and newest < cutoff:
@@ -772,6 +772,7 @@ def parse_rollout(paths: Sequence[Path]) -> tuple[str, str, str, tuple[str, ...]
 def rollout_fingerprints(paths: Sequence[Path]) -> tuple[tuple[str, int, int], ...]:
     values: list[tuple[str, int, int]] = []
     for path in paths:
+        path = resolve_rollout_path(path)
         try:
             stat = path.stat()
         except OSError:
@@ -1184,6 +1185,7 @@ class SessionSearchIndex:
         self._tail_cache = SearchTailCache()
 
     def _parse_changed_rollout(self, paths: Sequence[Path]) -> tuple[str, str, str, tuple[str, ...]]:
+        paths = tuple(resolve_rollout_path(path) for path in paths)
         if len(paths) == 1 and Path(paths[0]).suffix.casefold() == ".jsonl":
             try:
                 return self._tail_cache.parse(Path(paths[0]), _RolloutTextState)

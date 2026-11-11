@@ -16,6 +16,18 @@ from codex_usage_hud.core.session_cleanup import SessionCleanupError, SessionCle
 from codex_usage_hud.session_cleanup_runtime import SessionCleanupWorker
 
 
+def test_search_watcher_includes_compressed_rollout_events(tmp_path):
+    worker = SessionCleanupWorker.__new__(SessionCleanupWorker)
+    worker._search_watcher = MagicMock()
+    manager = SimpleNamespace(sessions_root=tmp_path / "sessions", session_index_path=tmp_path / "session_index.jsonl")
+    worker._real_search_manager = lambda: manager
+    worker._start_search_watcher()
+    specs = worker._search_watcher.update.call_args.args[0]
+    trees = [spec for spec in specs if spec.suffixes]
+    assert {spec.path for spec in trees} == {manager.sessions_root, tmp_path / "archived_sessions"}
+    assert all(".jsonl" in spec.suffixes and ".zst" in spec.suffixes for spec in trees)
+
+
 def test_file_change_flush_serializes_and_coalesces_events_arriving_during_work(monkeypatch):
     from codex_usage_hud import session_cleanup_runtime as runtime
 

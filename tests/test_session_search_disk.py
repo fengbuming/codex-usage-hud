@@ -334,3 +334,152 @@ def test_oversized_document_is_searched_without_overrunning_cache(pair, tmp_path
     assert not disk._candidate_cache
     disk.unload_memory()
     assert disk._streams is None
+
+
+@pytest.mark.parametrize("engine", [SessionSearchIndex, OnDemandSessionSearchIndex])
+def test_missing_plain_path_empty_index_is_incrementally_repaired(engine, tmp_path):
+    from test_rollout_io import compress_rollout
+    from codex_usage_hud.core.session_search import rollout_fingerprints
+
+    missing = tmp_path / "rollout-linux.jsonl"
+    database = tmp_path / "repair.sqlite"
+    index = engine(database)
+    # Reproduce the existing bad document, including its valid empty-content
+    # cursor: the state DB names a missing .jsonl, so old code indexed no body.
+    index.upsert("linux", [missing], title="继续处理 LinuxDo 油猴脚本问题")
+    assert not index.search("IDCFlare")["matches"]
+    if hasattr(index, "close"):
+        index.close()
+    compressed = missing.with_name(missing.name + ".zst")
+    compressed.write_bytes(
+        compress_rollout(
+            (
+                json.dumps(
+                    {
+                        "type": "response_item",
+                        "payload": {
+                            "type": "function_call_output",
+                            "output": "// @name Linux.do & IDCFlare 回帖足迹",
+                        },
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n"
+            ).encode("utf-8")
+        )
+    )
+    fresh = engine(database)
+    try:
+        entries = [("linux", [missing], "继续处理 LinuxDo 油猴脚本问题", "", "", "")]
+        assert fresh.stale_session_ids(entries) == frozenset({"linux"})
+        fresh.sync_batches(entries)
+        result = fresh.search("Linux.do & IDCFlare 回帖足迹")
+        assert [hit["sessionId"] for hit in result["matches"]] == ["linux"]
+        assert "tool" in result["matches"][0]["kinds"]
+        assert fresh.stale_session_ids(entries) == frozenset()
+        fingerprint = rollout_fingerprints([missing])[0]
+        assert fingerprint[0] == str(compressed)
+        assert fingerprint[1] == compressed.stat().st_size
+        # A later compressed rewrite invalidates the cursor again.
+        compressed.write_bytes(
+            compress_rollout(
+                (
+                    json.dumps(
+                        {
+                            "type": "event_msg",
+                            "payload": {
+                                "type": "user_message",
+                                "message": "replacement-marker",
+                            },
+                        }
+                    )
+                    + "\n"
+                ).encode()
+            )
+        )
+        assert fresh.stale_session_ids(entries) == frozenset({"linux"})
+        fresh.sync_batches(entries)
+        assert fresh.search("replacement-marker")["matches"]
+        assert not fresh.search("IDCFlare")["matches"]
+    finally:
+        if hasattr(fresh, "close"):
+            fresh.close()
+
+
+def test_completed_month_warm_job_repairs_compression_without_manual_rebuild(tmp_path):
+    import os
+    import time
+    from types import SimpleNamespace
+    from test_rollout_io import compress_rollout
+    from codex_usage_hud.core.session_index_job import SessionIndexWarmJob, WarmJobState
+
+    missing = tmp_path / "rollout-month.jsonl"
+    database = tmp_path / "warm.sqlite"
+    index = OnDemandSessionSearchIndex(database)
+    index.upsert("linux", [missing])
+    old_path = tmp_path / "old-covered.jsonl"
+    new_old_path = tmp_path / "old-uncovered.jsonl"
+    index.upsert("old-covered", [old_path])
+    index.close()
+    compressed = missing.with_name(missing.name + ".zst")
+    compressed.write_bytes(
+        compress_rollout(
+            (
+                json.dumps(
+                    {
+                        "type": "event_msg",
+                        "payload": {
+                            "type": "user_message",
+                            "message": "Linux.do & IDCFlare 回帖足迹",
+                        },
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n"
+            ).encode("utf-8")
+        )
+    )
+    for plain in (old_path, new_old_path):
+        sibling = plain.with_name(plain.name + ".zst")
+        sibling.write_bytes(compressed.read_bytes())
+        stamp = time.time() - 45 * 86400
+        os.utime(sibling, (stamp, stamp))
+    fresh = OnDemandSessionSearchIndex(database)
+    manager = SimpleNamespace(
+        _search_index=fresh,
+        search_index_entries=lambda: [
+            (sid, [path], "", "", "", "")
+            for sid, path in (
+                ("linux", missing),
+                ("old-covered", old_path),
+                ("old-uncovered", new_old_path),
+            )
+        ],
+    )
+    state_path = tmp_path / "warm.json"
+    WarmJobState(
+        selected_range="1m",
+        completed_range="1m",
+        built_count=1,
+        total_count=1,
+        enabled=True,
+    ).dump(state_path)
+    job = SessionIndexWarmJob(manager, state_path=state_path, preload_grace_seconds=0)
+    try:
+        assert job.start("1m")
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            if {hit["sessionId"] for hit in fresh.search("IDCFlare")["matches"]} == {
+                "linux",
+                "old-covered",
+            }:
+                break
+            time.sleep(0.01)
+        else:
+            raise AssertionError(job.status())
+        assert fresh.search("Linux.do & IDCFlare 回帖足迹")["matches"]
+        assert job.status()["selectedRange"] == "1m"
+        assert fresh.indexed_session_ids() == frozenset({"linux", "old-covered"})
+    finally:
+        job.close()
+        fresh.close()

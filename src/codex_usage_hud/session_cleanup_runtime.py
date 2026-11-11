@@ -281,7 +281,7 @@ class SessionCleanupWorker:
         if manager.sessions_root.name == "sessions":
             roots.append(manager.sessions_root.parent / "archived_sessions")
         specs = [
-            FileWatchSpec.tree(root, "session-search-rollout", suffixes=(".jsonl",))
+            FileWatchSpec.tree(root, "session-search-rollout", suffixes=(".jsonl", ".zst"))
             for root in roots
         ]
         specs.append(FileWatchSpec.file(manager.session_index_path, "session-search-metadata"))

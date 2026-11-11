@@ -65,6 +65,36 @@ def _create_state(path: Path, rows: list[tuple[object, ...]]) -> None:
 
 
 class SessionCleanupManagerTests(unittest.TestCase):
+    def test_search_resolves_compressed_family_without_relaxing_delete_mapping(self):
+        from test_rollout_io import compress_rollout
+
+        temporary, _root, _state, _index, rollouts, manager = self._fixture()
+        self.addCleanup(temporary.cleanup)
+        plain = rollouts[CHILD_ID]
+        compressed = plain.with_name(plain.name + ".zst")
+        payload = plain.read_text(encoding="utf-8") + json.dumps({
+            "type": "response_item", "payload": {"type": "function_call_output",
+            "output": "Linux.do & IDCFlare 回帖足迹"},
+        }, ensure_ascii=False) + "\n"
+        plain.unlink()
+        manager.scan()
+        root_item = next(item for item in manager._items.values() if item._session_id == ROOT_ID)
+        self.assertFalse(root_item.selectable)
+        manager._search_index.sync(manager.search_index_entries())
+        compressed.write_bytes(compress_rollout(payload.encode("utf-8")))
+        # No inventory rescan is needed for a file-change delta; both the old
+        # deletion event and the new compressed-file event select this family.
+        for changed in (plain, compressed):
+            entries = manager.search_index_entries([changed])
+            self.assertEqual([entry[0] for entry in entries], [ROOT_ID])
+            self.assertIn(compressed, entries[0][1])
+            self.assertNotIn(plain, entries[0][1])
+        manager._search_index.sync(manager.search_index_entries([compressed]))
+        search = manager.search("Linux.do & IDCFlare 回帖足迹")["search"]
+        self.assertIn(root_item.id, search["matches"])
+        self.assertIn(plain, root_item._rollout_paths)
+        self.assertFalse(root_item.selectable)
+
     def tearDown(self):
         # The production index owns mapped query buffers; release them before
         # unittest invokes the temporary-directory cleanup callbacks.

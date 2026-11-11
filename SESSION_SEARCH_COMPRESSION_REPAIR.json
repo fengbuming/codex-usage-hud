@@ -1,0 +1,11 @@
+{
+  "corpus_documents": 260,
+  "affected_documents": 190,
+  "stale_before": 190,
+  "stale_after": 0,
+  "expected_linuxdo_hits": 4,
+  "linuxdo_hits_before": 0,
+  "linuxdo_hits_after": 4,
+  "elapsed_s": 40.76,
+  "verified_on": "read-only backup; live index untouched"
+}

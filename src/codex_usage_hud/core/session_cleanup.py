@@ -30,6 +30,7 @@ from .session_search import (
     workdir_identity,
 )
 from .session_search_disk import OnDemandSessionSearchIndex
+from .rollout_io import resolve_rollout_path
 from .session_materializer import (
     SessionMaterializationError,
     _first_user_message_text,
@@ -762,14 +763,18 @@ class SessionCleanupManager:
             for item in self._items.values():
                 if item._session_id in self._migrated_source_ids:
                     continue
+                # Search resolves compressed siblings without rewriting the
+                # state-db mapping or relaxing permanent-deletion checks.
+                paths = tuple(resolve_rollout_path(path) for path in item._rollout_paths)
                 if changed and not any(
-                    _search_path_key(path) in changed for path in item._rollout_paths
+                    _search_path_key(path) in changed
+                    for path in (*item._rollout_paths, *paths)
                 ):
                     continue
                 entries.append(
                     (
                         item._session_id,
-                        item._rollout_paths,
+                        paths,
                         item.title,
                         item._cwd,
                         item.model_provider,

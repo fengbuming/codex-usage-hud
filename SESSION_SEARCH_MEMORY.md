@@ -119,3 +119,34 @@ speed improvement. No missing results, search errors or stuck loading occurred.
 Evidence: `SESSION_SEARCH_LIVE_ACCEPTANCE.json`; screenshot:
 `output/playwright/search-memory-live.png`. The temporary verification scripts
 were removed, the search query was cleared, and the settings dialog was closed.
+
+## Compressed-path repair, 2026-11-11
+
+The live acceptance above did not establish corpus completeness. Investigation
+of `Linux.do & IDCFlare 回帖足迹` found four October 27–28 conversations whose
+source files existed as `.jsonl.zst` while Codex's state database still named
+the missing `.jsonl`. The index contained empty extracted bodies with negative
+file fingerprints, so old/new query parity alone could not detect the omission.
+
+The streaming reader, search candidate paths, fingerprints and range timestamps
+now resolve the exact same-directory compression sibling when the recorded
+file is absent. Existing recorded files take precedence. There is no directory
+search or recorder-ID guessing, and permanent-delete mapping checks are not
+relaxed. Compressed file events trigger the existing event-driven updater.
+
+The ordinary startup warm job detects changed fingerprints and rebuilds affected
+documents incrementally, including stale documents already covered but now older
+than the selected range. New older sessions are not added and the selected range
+is preserved. No extraction-version bump or whole-index reset is required.
+
+A read-only backup of the current 260-document index reproduced 190 affected
+documents (157 within 30 days, 33 older but already indexed). Repairing just these
+190 took 40.76 seconds locally; stale count became zero and all four expected
+LinuxDo conversations matched the full keyword, before/after cache release.
+See `SESSION_SEARCH_COMPRESSION_REPAIR.json`. This verified the repaired corpus
+on a copy; the running HUD needs a user-chosen restart to load the fix and perform
+the same incremental repair on its live index. No automatic reload was performed.
+
+Validation: 218 focused rollout/search/manager/runtime/warm-job tests and 19
+unittest subtests passed, plus the existing compressed parser regression. Syntax,
+Ruff, diff whitespace and the renderer contract check passed.
