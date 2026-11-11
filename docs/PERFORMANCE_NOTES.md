@@ -200,3 +200,47 @@ prior day. Process reads include cached file, socket and pipe I/O, not only
 physical disk throughput. Main CPU improved relative to the first round's
 27–36% samples, while helper animation rendering remained a separate hotspot.
 No restart or source modification was performed during that acceptance.
+
+## Follow-up: completed-bubble painting, 2026-11-11
+
+Live stack sampling of helper PID 23012 still found shimmer, completed badge,
+liquid and tide painting. A focused offscreen paint profile identified repeated
+completed-badge foreground work (arc title layout, numbers, stat boxes and theme
+palette generation) on every liquid frame. This is maintenance of the existing
+helper, without introducing new Qt product behavior or changing Renderer mode.
+
+The completed badge now records its static foreground as vector commands.
+Settled frames cache one transparent premultiplied image at the actual device
+pixel density and fractional physical-pixel offset. Item/theme/DPI changes
+invalidate it; transformed morph/fade/launch frames replay vectors, and unusual
+logical-DPI devices retain the original direct painting. The cache keeps just
+one recording and one raster per widget. Theme palettes are computed on theme
+changes. Liquid sample coordinates and frame-local color mixes are reused;
+tide calculations hoist constants out of the sample loop. All existing timers,
+frame rates, wave samples, phases, animation paths and click behavior remain.
+
+A three-repeat offscreen comparison (250 frames/repeat, median CPU time, real
+Windows fonts loaded) against `6eff4d5` measured:
+
+| Device pixel ratio | Original ms/frame | Optimized ms/frame | Raster cache |
+| --- | ---: | ---: | ---: |
+| 1.0 | 2.688 | 1.250 | 118.1 KiB |
+| 1.5 | 6.062 | 2.062 | 265.8 KiB |
+| 2.0 | 7.125 | 3.188 | 472.5 KiB |
+
+This is a 53–66% reduction for the measured completed-badge painting workload,
+not a claim that total helper CPU falls by the same amount. Shimmer and other
+visible widget costs remain. Full before/after settled frames differed by at
+most 1–2/255 per color channel (mean differences 0.004–0.007/255), due to the
+extra source-over composition rounding. Tide frames at heat 0.03, 0.5 and 1.0
+were pixel-identical. No animation frame skipping or reduced sample count was
+used.
+
+64 focused tests passed, including direct-vs-cached pixels at 100%, 125%, 150%
+and 200% pixel ratios, fractional widget positions, light/dark themes, morphs,
+click launches, missing/low/high speeds, logical-DPI fallback, invalidation,
+bounded cache size, hide/show timers and existing overlay rendering regressions.
+One existing legacy UI case was skipped. Compilation and diff checks passed.
+No live HUD reload was performed for this follow-up; a restart is required to
+measure the actual helper process improvement. No macOS live acceptance is
+claimed.

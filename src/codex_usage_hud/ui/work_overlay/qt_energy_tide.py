@@ -126,8 +126,15 @@ class EnergyTideCard(QFrame):
         level = height - 12 - 2 * heat
         for layer in (2, 1, 0):
             path = QPainterPath()
+            layer_level = level + layer * 2.6
+            layer_phase = self._phase + layer * 0.8
             for x in range(0, width + 4, 4):
-                y = self._surface_y(x, height, layer)
+                angle = x * 0.021 + layer_phase
+                y = layer_level + amplitude * (
+                    math.sin(angle)
+                    + math.sin(x * 0.041 - self._phase * 0.73 + layer) * 0.20
+                    + math.sin(2 * angle + 0.4) * 0.15 * heat
+                )
                 if x == 0:
                     path.moveTo(x, y)
                 else:

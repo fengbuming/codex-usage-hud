@@ -16,11 +16,13 @@ from PySide6.QtGui import (
     QColor,
     QFont,
     QFontMetrics,
+    QImage,
     QLinearGradient,
     QPainter,
     QPainterPath,
     QPen,
     QPixmap,
+    QPicture,
     QRadialGradient,
     QTextLayout,
     QTextOption,
@@ -724,7 +726,13 @@ class CompletedBadgeWidget(QWidget):
     ) -> None:
         super().__init__(parent)
         self._item: Mapping[str, object] = dict(item)
+        self._static_item_key = self._content_item_key(item)
         self._theme_tokens = _resolved_overlay_theme(theme_tokens)
+        self._paint_palette = _completed_badge_palette(self._theme_tokens)
+        self._static_content: QPicture | None = None
+        self._static_content_key: tuple | None = None
+        self._static_raster: QImage | None = None
+        self._static_raster_key: tuple | None = None
         self._started_at = time.monotonic()
         self._progress = 0.0 if animate_intro else 1.0
         self._session_speed = positive_output_speed(item.get("sessionOutputTokensPerSecond"))
@@ -767,6 +775,7 @@ class CompletedBadgeWidget(QWidget):
             self._liquid_elapsed = 0.0
         self._session_speed = next_speed
         self._item = dict(item)
+        self._static_item_key = self._content_item_key(item)
         self.setAccessibleName(self._speed_accessible_name())
         self._sync_animation_timer()
         self.update()
@@ -834,7 +843,12 @@ class CompletedBadgeWidget(QWidget):
         self,
         theme_tokens: Mapping[str, object] | None,
     ) -> None:
-        self._theme_tokens = _resolved_overlay_theme(theme_tokens)
+        tokens = _resolved_overlay_theme(theme_tokens)
+        if tokens == self._theme_tokens:
+            return
+        self._theme_tokens = tokens
+        self._paint_palette = _completed_badge_palette(tokens)
+        self._static_content = None
         self.update()
 
     def set_switch_pending(
@@ -907,7 +921,7 @@ class CompletedBadgeWidget(QWidget):
         painter.scale(paint_scale, paint_scale)
 
         eased = 1.0 - pow(1.0 - max(0.0, min(1.0, self._progress)), 3)
-        palette = _completed_badge_palette(self._theme_tokens)
+        palette = self._paint_palette
         final_size = float(WORK_OVERLAY_COMPLETED_BADGE_SIZE)
         pending_elapsed = (
             max(0.0, time.monotonic() - self._switch_pending_started_at)
@@ -960,8 +974,6 @@ class CompletedBadgeWidget(QWidget):
         content_alpha = int(255 * min(1.0, (eased - 0.24) / 0.42))
         painter.save()
         painter.setOpacity(content_alpha / 255.0)
-        center = QPointF(end_rect.center())
-
         paint_completed_liquid(
             painter, end_rect, self._liquid_speed(),
             elapsed=self._liquid_elapsed,
@@ -970,6 +982,89 @@ class CompletedBadgeWidget(QWidget):
             bubble_phase=self._bubble_phase,
         )
 
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        self._paint_content_layer(painter, palette)
+        painter.restore()
+        if self._switch_pending:
+            self._draw_switch_pending_quantum(
+                painter,
+                end_rect,
+                completed=self._switch_pending_completed,
+                completed_at=self._switch_pending_completed_at,
+            )
+
+    def _paint_content_layer(self, painter: QPainter, palette: Mapping[str, str]) -> None:
+        picture = self._static_content_picture(palette)
+        device = painter.device()
+        if (device.logicalDpiX(), device.logicalDpiY()) != (picture.logicalDpiX(), picture.logicalDpiY()):
+            # QPicture automatically rescales its entire coordinate system
+            # across logical DPI values. That would scale the arc geometry
+            # as well as fonts, unlike the original painter. Keep exact native
+            # drawing on unusual logical-DPI devices instead.
+            self._paint_static_content(painter, palette)
+            return
+        # The settled, untransformed badge only changes its liquid. Rasterise
+        # the foreground once at the destination's actual pixel density.
+        # Morph/fade/launch frames keep the original vector draw commands.
+        if not painter.worldTransform().isIdentity() or painter.opacity() != 1.0:
+            painter.drawPicture(QPointF(0.0, 0.0), picture)
+            return
+        transform = painter.deviceTransform()
+        ratio = transform.m11()
+        if ratio <= 0.0 or transform.m12() or transform.m21() or abs(ratio - transform.m22()) > 0.00001:
+            painter.drawPicture(QPointF(0.0, 0.0), picture)
+            return
+        offset_x, offset_y = transform.dx() % 1.0, transform.dy() % 1.0
+        key = (self._static_content_key, self.width(), self.height(), ratio, offset_x, offset_y,
+               device.logicalDpiX(), device.logicalDpiY())
+        if key != self._static_raster_key or self._static_raster is None:
+            image = QImage(
+                math.ceil(self.width() * ratio + offset_x), math.ceil(self.height() * ratio + offset_y),
+                QImage.Format.Format_ARGB32_Premultiplied,
+            )
+            image.setDevicePixelRatio(ratio)
+            image.setDotsPerMeterX(round(device.logicalDpiX() / 0.0254))
+            image.setDotsPerMeterY(round(device.logicalDpiY() / 0.0254))
+            image.fill(Qt.GlobalColor.transparent)
+            recording = QPainter(image)
+            try:
+                recording.translate(offset_x / ratio, offset_y / ratio)
+                recording.drawPicture(QPointF(0.0, 0.0), picture)
+            finally:
+                recording.end()
+            self._static_raster, self._static_raster_key = image, key
+        painter.drawImage(QPointF(-offset_x / ratio, -offset_y / ratio), self._static_raster)
+
+    def _static_content_picture(self, palette: Mapping[str, str]) -> QPicture:
+        # Record vector paint commands, not a raster screenshot: replay keeps
+        # text antialiasing and scaling native at fractional/high DPI, including
+        # the existing morph/fade and click-launch transforms.
+        key = (
+            self._static_item_key,
+            tuple(sorted(palette.items())), self._session_speed,
+            self.logicalDpiX(), self.logicalDpiY(),
+        )
+        if key != self._static_content_key or self._static_content is None:
+            picture = QPicture()
+            painter = QPainter(picture)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            painter.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
+            try:
+                self._paint_static_content(painter, palette)
+            finally:
+                painter.end()
+            self._static_content_key, self._static_content = key, picture
+        return self._static_content
+
+    @staticmethod
+    def _content_item_key(item: Mapping[str, object]) -> tuple:
+        # Compute on state changes, not on every frame. Include all inputs so
+        # new fields used by the painter cannot accidentally retain stale ink.
+        return tuple(sorted((str(key), str(value)) for key, value in item.items()))
+
+    def _paint_static_content(self, painter: QPainter, palette: Mapping[str, str]) -> None:
+        end_rect = QRectF(0.0, 0.0, float(WORK_OVERLAY_COMPLETED_BADGE_SIZE), float(WORK_OVERLAY_COMPLETED_BADGE_SIZE))
+        center = end_rect.center()
         outer_pen = QPen(QColor(palette["ring"]), 2.0)
         painter.setPen(outer_pen)
         painter.setBrush(Qt.BrushStyle.NoBrush)
@@ -1103,14 +1198,6 @@ class CompletedBadgeWidget(QWidget):
                 f"[{profile}]",
             )
 
-        painter.restore()
-        if self._switch_pending:
-            self._draw_switch_pending_quantum(
-                painter,
-                end_rect,
-                completed=self._switch_pending_completed,
-                completed_at=self._switch_pending_completed_at,
-            )
 
     def _draw_speed_number(
         self, painter: QPainter, value: object, rect: QRectF, *, point_size: int,

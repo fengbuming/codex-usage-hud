@@ -7,6 +7,7 @@ The caller animates visible badges; this painter owns no timer.
 from __future__ import annotations
 
 import math
+from functools import lru_cache
 
 from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QColor, QLinearGradient, QPainter, QPainterPath, QPen, QRadialGradient
@@ -69,6 +70,16 @@ def completed_liquid_intro_speed(
     return high + (mean - high) * eased
 
 
+@lru_cache(maxsize=16)
+def _liquid_samples(left: float, width: float, scale: float) -> tuple[tuple[float, float, float], ...]:
+    samples = max(2, math.ceil(width / (2.0 * scale)))
+    return tuple(
+        (x, (x - left) / scale * 0.047, x / scale * 0.09)
+        for index in range(samples + 1)
+        for x in (left + width * index / samples,)
+    )
+
+
 def paint_completed_liquid(
     painter: QPainter,
     rect: QRectF,
@@ -102,15 +113,15 @@ def paint_completed_liquid(
     clip.addEllipse(inner)
     painter.save()
     painter.setClipPath(clip, Qt.ClipOperation.IntersectClip)
+    dark_color = _color_mix(color, QColor("#0D1B25"), 0.55)
+    surface_color = _color_mix(color, QColor("#F7F1DD"), 0.36)
     for layer in (1, 0):
         surface = QPainterPath()
-        samples = max(2, math.ceil(inner.width() / (2.0 * scale)))
-        for index in range(samples + 1):
-            x = inner.left() + inner.width() * index / samples
+        for index, (x, first_angle, second_angle) in enumerate(_liquid_samples(inner.left(), inner.width(), scale)):
             y = (
                 level + layer * 2.0 * scale
-                + math.sin((x - inner.left()) / scale * 0.047 + phase + layer * 1.4) * amplitude
-                + math.sin(x / scale * 0.09 - phase * 0.73 + layer) * amplitude * 0.3
+                + math.sin(first_angle + phase + layer * 1.4) * amplitude
+                + math.sin(second_angle - phase * 0.73 + layer) * amplitude * 0.3
             )
             if index == 0:
                 surface.moveTo(x, y)
@@ -122,14 +133,15 @@ def paint_completed_liquid(
         fill.closeSubpath()
         gradient = QLinearGradient(0.0, level - 5.0 * scale, 0.0, inner.bottom())
         gradient.setColorAt(0.0, _alpha(color, 0.42 if light else (0.20 if layer else 0.39)))
-        gradient.setColorAt(1.0, _alpha(_color_mix(color, QColor("#0D1B25"), 0.55), 0.24 if light else 0.32))
+        gradient.setColorAt(1.0, _alpha(dark_color, 0.24 if light else 0.32))
         painter.fillPath(fill, gradient)
         painter.setPen(QPen(
-            _alpha(_color_mix(color, QColor("#F7F1DD"), 0.36), 0.25 if layer else 0.83),
+            _alpha(surface_color, 0.25 if layer else 0.83),
             (0.7 if layer else 1.0) * scale,
         ))
         painter.drawPath(surface)
 
+    bubble_color = _color_mix(color, QColor("#F5F7EE"), 0.6)
     for index in range(11 + round(heat * 7)):
         progress = (bubble_phase + index * 0.177) % 1.0
         x = center.x() + math.sin(index * 13.7) * 60.0 * scale
@@ -138,7 +150,7 @@ def paint_completed_liquid(
             continue
         painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.setPen(QPen(
-            _alpha(_color_mix(color, QColor("#F5F7EE"), 0.6), math.sin(math.pi * progress) * 0.55),
+            _alpha(bubble_color, math.sin(math.pi * progress) * 0.55),
             0.55 * scale,
         ))
         radius = (0.8 + index % 3 * 0.25) * scale
