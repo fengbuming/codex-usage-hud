@@ -180,3 +180,23 @@ authorizer tests reject document-blob reads or updates during metadata-only
 sync, proving this path uses the small cursor instead.
 
 This follow-up has not been loaded into the running HUD automatically.
+
+## User restart acceptance, 2026-11-11
+
+Main PID 18536 and bubble helper 23012 were running the second round. The live
+cursor table existed with valid document stamps and caught up to a captured
+rollout version within 0.5 s. Inventory held 874 rows matching its totals;
+search/rankings were ready without missing rows or retained patch markers.
+Page runtime errors were empty and bubble revisions/heartbeat kept advancing.
+
+A 38.47 s main sample measured 287.2–288.9 MiB private bytes, 12.83% of one
+logical core and 5.159 MiB/s process reads. A 25.21 s sample measured 294.1 MiB,
+19.09% of one core and 4.145 MiB/s reads. Multiple no-change intervals had
+0–0.98% main CPU and zero reads. The helper used 95.1–95.5 MiB private bytes
+and 18.39–24.36% of one core. Combined private memory was approximately 390 MiB.
+
+Different live workloads prevent a controlled percentage comparison with the
+prior day. Process reads include cached file, socket and pipe I/O, not only
+physical disk throughput. Main CPU improved relative to the first round's
+27–36% samples, while helper animation rendering remained a separate hotspot.
+No restart or source modification was performed during that acceptance.
