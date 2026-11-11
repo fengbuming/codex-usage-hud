@@ -937,17 +937,25 @@ def _find_query_fallback(document: "_MemoryDocument", terms: tuple[str, ...]) ->
     ]
     if body_terms:
         return pick(body_terms)
-    for path in document.changed_paths:
-        name = Path(path).name
+    names = getattr(document, "path_basenames", None)
+    if names is None:
+        names = (Path(path).name for path in document.changed_paths)
+    for name in names:
         if name and any(term in name.casefold() for term in terms):
             return name
     file_text = next(
         (field_text for name, _tokens, _grams, field_text in document.fields if name == "file"),
         "",
     )
-    for token in file_text.split("\x00"):
-        if token and any(term in token.casefold() for term in terms):
+    first_token = getattr(file_text, "first_matching_token", None)
+    if callable(first_token):
+        token = first_token(terms)
+        if token:
             return token
+    else:
+        for token in file_text.split("\x00"):
+            if token and any(term in token.casefold() for term in terms):
+                return token
     tool_terms = [
         term
         for term in terms
@@ -1135,6 +1143,7 @@ class _MemoryDocument:
     # Kept outside the token stream so file links can be searched by their
     # actual rendered basename (including dots and separators).
     changed_paths: tuple[str, ...] = ()
+    path_basenames: tuple[str, ...] | None = None
 
 
 class SessionSearchIndex:
@@ -2536,10 +2545,8 @@ class SessionSearchIndex:
                 # verification than a substring scan over ``search_text``;
                 # only fall back to the scan when some term is not an exact
                 # token of the document.
-                token_set = document.token_set
-                if not all(term in token_set for term in terms):
-                    if not all(term in document.search_text for term in terms):
-                        continue
+                if not self._candidate_may_match(document, terms):
+                    continue
                 matched_kinds: set[str] = set()
                 score = 0.0
                 all_terms_match = True
@@ -2547,16 +2554,12 @@ class SessionSearchIndex:
                     term_matched = False
                     best_term_score = 0.0
                     for field_name, tokens, _grams, field_text in document.fields:
-                        field_matched = term in field_text
-                        if not field_matched:
+                        multiplier = self._field_match_score(tokens, field_text, term)
+                        if not multiplier:
                             continue
                         term_matched = True
                         matched_kinds.add(field_name)
-                        field_score = weights[field_name]
-                        if term in tokens:
-                            field_score *= 2.0
-                        elif any(token.startswith(term) for token in tokens):
-                            field_score *= 1.4
+                        field_score = weights[field_name] * multiplier
                         best_term_score = max(best_term_score, field_score)
                     if not term_matched:
                         all_terms_match = False
@@ -2619,6 +2622,20 @@ class SessionSearchIndex:
                 "indexAvailable": True,
                 "memoryLoaded": True,
             }
+
+    def _candidate_may_match(self, document, terms):
+        return all(term in document.token_set for term in terms) or all(
+            term in document.search_text for term in terms
+        )
+
+    def _field_match_score(self, tokens, field_text, term):
+        if term not in field_text:
+            return 0.0
+        if term in tokens:
+            return 2.0
+        if any(token.startswith(term) for token in tokens):
+            return 1.4
+        return 1.0
 
     def preview_matches(self, session_ids: Sequence[str], query: str) -> dict[str, dict[str, str]]:
         """Read bounded original excerpts on navigation, never on the search hot path.

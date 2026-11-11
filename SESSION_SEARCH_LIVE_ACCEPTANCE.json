@@ -1,0 +1,217 @@
+{
+  "verified_at": "2026-11-11 Asia/Shanghai",
+  "pid": 11580,
+  "persisted_index_documents": 272,
+  "inventory_sessions": 878,
+  "queries": [
+    {
+      "query": "renderer",
+      "matches": 49,
+      "ui_round_trip_ms": 1557.64,
+      "index_state": "ready",
+      "errors": [],
+      "search_mappings": [
+        {
+          "file": "session-search.sqlite.query-shm",
+          "bytes": 32768
+        },
+        {
+          "file": "session-search.sqlite.streams",
+          "bytes": 16408576
+        }
+      ]
+    },
+    {
+      "query": "扫描",
+      "matches": 177,
+      "ui_round_trip_ms": 311.61,
+      "index_state": "ready",
+      "errors": [],
+      "search_mappings": [
+        {
+          "file": "session-search.sqlite.query-shm",
+          "bytes": 32768
+        },
+        {
+          "file": "session-search.sqlite.streams",
+          "bytes": 16408576
+        }
+      ]
+    },
+    {
+      "query": "session_search.py",
+      "matches": 23,
+      "ui_round_trip_ms": 233.93,
+      "index_state": "ready",
+      "errors": [],
+      "search_mappings": [
+        {
+          "file": "session-search.sqlite.query-shm",
+          "bytes": 32768
+        },
+        {
+          "file": "session-search.sqlite.streams",
+          "bytes": 16408576
+        }
+      ]
+    },
+    {
+      "query": "no_such_needle_f14d20d9",
+      "matches": 1,
+      "ui_round_trip_ms": 585.56,
+      "index_state": "ready",
+      "errors": [],
+      "search_mappings": [
+        {
+          "file": "session-search.sqlite.query-shm",
+          "bytes": 32768
+        },
+        {
+          "file": "session-search.sqlite.streams",
+          "bytes": 16408576
+        }
+      ]
+    },
+    {
+      "query": "renderer",
+      "matches": 49,
+      "ui_round_trip_ms": 1259.27,
+      "index_state": "ready",
+      "errors": [],
+      "search_mappings": [
+        {
+          "file": "session-search.sqlite.query-shm",
+          "bytes": 32768
+        },
+        {
+          "file": "session-search.sqlite.streams",
+          "bytes": 17117184
+        }
+      ]
+    },
+    {
+      "query": "扫描",
+      "matches": 177,
+      "ui_round_trip_ms": 877.94,
+      "index_state": "ready",
+      "errors": [],
+      "search_mappings": [
+        {
+          "file": "session-search.sqlite.query-shm",
+          "bytes": 32768
+        },
+        {
+          "file": "session-search.sqlite.streams",
+          "bytes": 17117184
+        }
+      ]
+    },
+    {
+      "query": "session_search.py",
+      "matches": 23,
+      "ui_round_trip_ms": 285.92,
+      "index_state": "ready",
+      "errors": [],
+      "search_mappings": [
+        {
+          "file": "session-search.sqlite.query-shm",
+          "bytes": 32768
+        },
+        {
+          "file": "session-search.sqlite.streams",
+          "bytes": 17117184
+        }
+      ]
+    },
+    {
+      "query": "<generated absent term>",
+      "matches": 0,
+      "ui_round_trip_ms": 1199.94,
+      "index_state": "ready",
+      "errors": [],
+      "search_mappings": [
+        {
+          "file": "session-search.sqlite.query-shm",
+          "bytes": 32768
+        }
+      ]
+    },
+    {
+      "query": "",
+      "matches": 878,
+      "ui_round_trip_ms": 267.23,
+      "index_state": "ready",
+      "errors": [],
+      "search_mappings": [
+        {
+          "file": "session-search.sqlite.query-shm",
+          "bytes": 32768
+        }
+      ]
+    }
+  ],
+  "baseline_memory": {
+    "pid": 11580,
+    "private": 175091712,
+    "working": 205733888,
+    "search_mappings": [],
+    "at": 1794375986.133803
+  },
+  "first_idle_memory": {
+    "pid": 11580,
+    "private": 192180224,
+    "working": 223055872,
+    "search_mappings": [],
+    "at": 1794376089.9246387
+  },
+  "final_expiry_samples": [
+    {
+      "pid": 11580,
+      "private": 198176768,
+      "working": 227270656,
+      "search_mappings": [
+        {
+          "file": "session-search.sqlite.query-shm",
+          "bytes": 32768
+        }
+      ],
+      "at": 1794376264.4200606
+    },
+    {
+      "pid": 11580,
+      "private": 200417280,
+      "working": 230109184,
+      "search_mappings": [],
+      "at": 1794376284.436467
+    },
+    {
+      "pid": 11580,
+      "private": 200417280,
+      "working": 230109184,
+      "search_mappings": [],
+      "at": 1794376304.4533658
+    },
+    {
+      "pid": 11580,
+      "private": 197226496,
+      "working": 226914304,
+      "search_mappings": [],
+      "at": 1794376329.4697237
+    }
+  ],
+  "final_errors": [],
+  "final_ui": {
+    "open": false,
+    "tab": "storage"
+  },
+  "final_query": "",
+  "notes": [
+    "Executed the visible renderer search input/Enter path through the existing CDP debugging interface; no runtime reload or source edits.",
+    "Native read-only VirtualQueryEx/GetMappedFileNameW confirmed stream and SQLite SHM mappings present during search and absent after inactivity.",
+    "Process memory totals include unrelated HUD caches and activity; they do not isolate Python candidate-cache bytes.",
+    "UI round-trip includes command queue, payload transport, page rendering and external observation; it is not core index latency and has no pre-change live UI baseline.",
+    "Initial fixed missing-term probe matched this very verification conversation; a freshly generated term correctly returned zero.",
+    "Random query cleared and settings dialog closed after verification; current tab is storage.",
+    "No ERROR-level HUD logs for this PID since restart."
+  ]
+}

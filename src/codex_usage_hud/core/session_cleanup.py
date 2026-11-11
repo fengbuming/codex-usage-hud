@@ -22,7 +22,6 @@ import uuid
 from ..codex_cli_launcher import discover_workdirs
 from .parser import classify_session_client
 from .session_search import (
-    SessionSearchIndex,
     _find_query_fallback,
     normalise_workdir,
     search_terms,
@@ -30,6 +29,7 @@ from .session_search import (
     session_identity_query,
     workdir_identity,
 )
+from .session_search_disk import OnDemandSessionSearchIndex
 from .session_materializer import (
     SessionMaterializationError,
     _first_user_message_text,
@@ -581,7 +581,7 @@ class SessionCleanupManager:
         self._capability = SessionDeleteCapability(False, "Not scanned yet.")
         self._items: dict[str, SessionCleanupItem] = {}
         self._search_state_lock = RLock()
-        self._search_index = SessionSearchIndex(
+        self._search_index = OnDemandSessionSearchIndex(
             search_index_path
             if search_index_path is not None
             else self.sessions_root.parent / "session-search.sqlite"
@@ -1019,6 +1019,9 @@ class SessionCleanupManager:
 
         text = str(query or "").strip()
         selected_workdir = str(workdir_id or "").strip()
+        begin_query = getattr(self._search_index, "begin_query", None)
+        if text and not session_identity_query(text) and callable(begin_query):
+            begin_query()
         with self._search_state_lock:
             try:
                 matches, match_kinds, result = self._search_matches_locked(

@@ -1,0 +1,111 @@
+{
+  "resident": {
+    "indexed": 269,
+    "prepare_ms": 982.7,
+    "restart_ms_traced": 5320.89,
+    "restart_ms": 2616.86,
+    "ready_bytes": 131746727,
+    "active_bytes": 131750101,
+    "mapped_file_bytes": 0,
+    "released_bytes": 131750133,
+    "cold_query_ms": [
+      15.814,
+      11.74,
+      16.011,
+      7.822,
+      14.718,
+      16.898,
+      4.557,
+      27.647,
+      32.297,
+      4.755,
+      23.496,
+      32.225,
+      5.495,
+      15.848,
+      20.103,
+      4.682,
+      20.279,
+      19.782,
+      22.054,
+      12.714,
+      19.015,
+      5.043,
+      13.403,
+      0.122
+    ],
+    "warm_p50_ms": 14.984,
+    "warm_p95_ms": 29.383,
+    "warm_max_ms": 36.63,
+    "process_memory": {
+      "baseline": {
+        "private_bytes": 32886784,
+        "working_set_bytes": 44949504
+      },
+      "active": {
+        "private_bytes": 181821440,
+        "working_set_bytes": 186175488
+      },
+      "released": {
+        "private_bytes": 181821440,
+        "working_set_bytes": 186175488
+      }
+    }
+  },
+  "disk": {
+    "indexed": 269,
+    "prepare_ms": 1469.93,
+    "restart_ms_traced": 55.46,
+    "restart_ms": 75.82,
+    "ready_bytes": 118860,
+    "active_bytes": 11868971,
+    "mapped_file_bytes": 11052282,
+    "released_bytes": 122938,
+    "cold_query_ms": [
+      16.882,
+      13.445,
+      19.653,
+      17.298,
+      14.892,
+      15.05,
+      11.017,
+      12.648,
+      13.416,
+      5.418,
+      10.194,
+      14.841,
+      17.573,
+      16.592,
+      15.915,
+      12.912,
+      16.752,
+      12.916,
+      13.925,
+      15.72,
+      13.796,
+      8.58,
+      13.367,
+      2.367
+    ],
+    "warm_p50_ms": 5.095,
+    "warm_p95_ms": 8.036,
+    "warm_max_ms": 12.322,
+    "process_memory": {
+      "baseline": {
+        "private_bytes": 34988032,
+        "working_set_bytes": 43556864
+      },
+      "active": {
+        "private_bytes": 43372544,
+        "working_set_bytes": 66244608
+      },
+      "released": {
+        "private_bytes": 33267712,
+        "working_set_bytes": 44298240
+      }
+    }
+  },
+  "identical_results": true,
+  "query_count": 24,
+  "measurement": "Python retained allocations; cold queries release application caches, not OS disk caches"
+}

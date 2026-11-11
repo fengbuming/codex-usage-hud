@@ -651,7 +651,12 @@ class SessionCleanupWorker:
             self._worker.join(timeout=max(0.0, float(timeout_seconds)))
         if self._index_worker is not current_thread() and self._index_worker.is_alive():
             self._index_worker.join(timeout=max(0.0, float(timeout_seconds)))
-        return not self._worker.is_alive() and not self._index_worker.is_alive()
+        stopped = not self._worker.is_alive() and not self._index_worker.is_alive()
+        if stopped:
+            close_index = getattr(getattr(self.manager, "_search_index", None), "close", None)
+            if callable(close_index):
+                close_index()
+        return stopped
 
     def _run(self) -> None:
         while True:

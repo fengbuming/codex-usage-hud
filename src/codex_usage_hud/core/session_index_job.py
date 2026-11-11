@@ -545,7 +545,10 @@ class SessionIndexWarmJob:
         """Detach the UI subscription, keep building in the background."""
         with self._lock:
             self._attached = False
-            return True
+        release = self._capability("release_when_idle")
+        if callable(release):
+            release()
+        return True
 
     def attach(self) -> bool:
         """Subscribe the UI; does not create any new task."""

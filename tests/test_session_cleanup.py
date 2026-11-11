@@ -65,6 +65,13 @@ def _create_state(path: Path, rows: list[tuple[object, ...]]) -> None:
 
 
 class SessionCleanupManagerTests(unittest.TestCase):
+    def tearDown(self):
+        # The production index owns mapped query buffers; release them before
+        # unittest invokes the temporary-directory cleanup callbacks.
+        for index in getattr(self, "_search_resources", ()):
+            index.close()
+        super().tearDown()
+
     def test_forced_provider_delete_keeps_active_cli_and_deletes_other_sessions(self):
         temporary, _root, state, index, rollouts, manager = self._fixture()
         self.addCleanup(temporary.cleanup)
@@ -353,6 +360,7 @@ class SessionCleanupManagerTests(unittest.TestCase):
             session_index_path=index_path,
             token_factory=iter(f"token-{index}" for index in range(100)).__next__,
         )
+        self._search_resources = [*getattr(self, "_search_resources", ()), manager._search_index]
         return temporary, root, state_db, index_path, rollouts, manager
 
     @staticmethod
@@ -497,6 +505,7 @@ class SessionCleanupManagerTests(unittest.TestCase):
         )
 
         payload = manager.scan(request_id="title-source")
+        self.addCleanup(manager._search_index.close)
         self.assertEqual(len(payload["sessions"]), 1)
         row = payload["sessions"][0]
         self.assertEqual(row["title"], visible_name)
