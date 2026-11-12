@@ -26,6 +26,8 @@ from .session_search import (
     _memory_field,
     _SNAPSHOT_VERSION,
 )
+from ..memory_policy import SEARCH_CANDIDATE_BYTES, SEARCH_EXTRACTION_BYTES
+from .search_tail_cache import SearchTailCache
 
 
 _QUERY_VERSION = _SNAPSHOT_VERSION * 100 + 5
@@ -184,7 +186,7 @@ class _ReloadIndex(RuntimeError):
 
 
 class OnDemandSessionSearchIndex(SessionSearchIndex):
-    """Same extractor/ranker, disk bitmaps and at most 16 MiB of candidates.
+    """Same extractor/ranker, disk bitmaps and a bounded candidate partition.
 
     `memory_loaded` means the small catalog is ready, independently of buffer
     residency. Releasing buffers never changes coverage or makes search wait
@@ -192,9 +194,10 @@ class OnDemandSessionSearchIndex(SessionSearchIndex):
     """
 
     def __init__(
-        self, *args, cache_bytes=16 * 1024 * 1024, idle_seconds=60.0, **kwargs
+        self, *args, cache_bytes=SEARCH_CANDIDATE_BYTES, idle_seconds=60.0, **kwargs
     ):
         super().__init__(*args, **kwargs)
+        self._tail_cache = SearchTailCache(max_bytes=SEARCH_EXTRACTION_BYTES)
         self._documents = _Documents(self)
         self._postings = _Postings(self)
         self._query_db = None

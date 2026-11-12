@@ -8,6 +8,12 @@ import sys
 
 def main(argv: Sequence[str] | None = None) -> int:
     arguments = list(sys.argv[1:] if argv is None else argv)
+    # Frozen proxy helpers use this entry too. Keep their detached service
+    # independent of the renderer imports, as the source-module entry already is.
+    if "--provider-proxy-helper" in arguments and "--provider-compatible-codex" not in arguments:
+        from .provider_proxy_service import main as run_proxy
+
+        return run_proxy(arguments)
     helper_flags = {"--work-overlay-helper", "--loading-feedback-helper"}
     prior_actions = {
         "--cli-console-probe",

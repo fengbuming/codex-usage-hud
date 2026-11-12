@@ -14,6 +14,8 @@ from .core import JsonlSessionParser, JsonlTailState, ParsedSession, SseRequestS
 from .core.runtime_events import RuntimeEventBus
 from .platforms import is_new_session_source, is_pending_session_source
 from .usage_contributions import usage_parser_version
+from .disk_sequence import DecodedHistoryCache, spill_snapshot_history
+from .memory_policy import SELECTED_HISTORY_BYTES
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -128,12 +130,14 @@ class SessionSnapshotCache:
         sse_tracker: SseRequestStateMachine | None = None,
         max_entries: int = 4,
         preview_bytes: int = 256 * 1024,
+        history_cache_bytes: int = SELECTED_HISTORY_BYTES,
     ) -> None:
         self._parser = parser
         self._event_bus = event_bus
         self._sse_tracker = sse_tracker
         self._max_entries = max(1, int(max_entries))
         self._preview_bytes = max(1, int(preview_bytes))
+        self._history_cache = DecodedHistoryCache(history_cache_bytes)
         self._entries: dict[Path, _CacheEntry] = {}
         self._pending: deque[Path] = deque()
         self._pending_session_ids: dict[Path, str] = {}
@@ -232,7 +236,9 @@ class SessionSnapshotCache:
                         state,
                         session_id=session_id or None,
                         sse_tracker=self._sse_tracker,
+                        _record_cache=self._history_cache,
                     )
+                    spill_snapshot_history(snapshot, self._history_cache)
                     stat = path.stat()
                 except OSError as exc:
                     _LOGGER.info(
@@ -259,8 +265,8 @@ class SessionSnapshotCache:
                             self._entries[path] = _CacheEntry(
                                 state=state,
                                 snapshot=snapshot,
-                                file_size=int(stat.st_size),
-                                mtime=stat.st_mtime,
+                                file_size=int(state.file_size if state.file_size is not None else stat.st_size),
+                                mtime=state.last_file_mtime if state.last_file_mtime is not None else stat.st_mtime,
                                 accessed_at=time.monotonic(),
                                 parser_version=parser_version,
                             )
@@ -301,6 +307,11 @@ class SessionSnapshotCache:
         self._wake.set()
         if self._worker.is_alive():
             self._worker.join(timeout=0.2)
+        with self._lock:
+            self._entries.clear()
+            self._pending.clear()
+            self._pending_session_ids.clear()
+            self._history_cache.clear()
 
 
 __all__ = [

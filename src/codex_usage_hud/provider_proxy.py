@@ -26,7 +26,8 @@ from socketserver import TCPServer
 from threading import RLock, Thread
 from urllib.parse import SplitResult, parse_qsl, urlencode, urlsplit
 
-from .provider_gateway_auth import GATEWAY_AUTH_HEADER, GATEWAY_PATH_ID, gateway_authorized
+from .provider_gateway_auth import GATEWAY_AUTH_HEADER, GATEWAY_PATH_ID, gateway_authorized  # noqa: F401 - compatibility export
+from .request_body import BodyFiles, RequestBody, body_field, decode_body, receive_body, replace_body_fields
 from .provider_proxy_diagnostics import (
     HUD_REQUEST_HEADER, SseDiagnostics, annotate_http_error, diagnostic_text, error_body_chunks,
     sample_error_body, upstream_request_id,
@@ -100,16 +101,15 @@ def _rewrite_model(body: bytes | None, target_model: object, allowed_models: obj
     if not body or not model:
         return body
     try:
-        payload = json.loads(body)
+        requested_model = body_field(body, "model")
     except (TypeError, ValueError):
         return body
-    if not isinstance(payload, dict) or not isinstance(payload.get("model"), str):
+    if not isinstance(requested_model, str):
         return body
     allowed = {str(item).strip() for item in allowed_models} if isinstance(allowed_models, list) else set()
-    if payload["model"] in allowed or payload["model"] == model:
+    if requested_model in allowed or requested_model == model:
         return body
-    payload["model"] = model
-    return json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    return replace_body_fields(body, {"model": model})
 
 
 def _source_evidence_from_request(
@@ -392,6 +392,7 @@ class ProviderProxyRelay:
                 response = None
                 upstream_id = ""
                 upstream_response_received = False
+                body_files = BodyFiles()
                 try:
                     if route.get("enabled"):
                         cls = http.client.HTTPSConnection if upstream.scheme == "https" else http.client.HTTPConnection
@@ -428,32 +429,9 @@ class ProviderProxyRelay:
                     headers["Host"] = upstream.netloc
                     if upgrade:
                         headers.update({"Connection": "Upgrade", "Upgrade": "websocket"})
-                    body = None
-                    def read_exact(size):
-                        data = bytearray()
-                        while len(data) < size:
-                            chunk = self.rfile.read(size - len(data))
-                            if not chunk:
-                                raise ValueError("Truncated request body")
-                            data.extend(chunk)
-                        return bytes(data)
-
-                    if "chunked" in self.headers.get("Transfer-Encoding", "").lower():
-                        chunks = []
-                        while True:
-                            size = int(self.rfile.readline().split(b";", 1)[0], 16)
-                            if size == 0:
-                                while self.rfile.readline().strip():
-                                    pass
-                                break
-                            chunks.append(read_exact(size))
-                            if read_exact(2) != b"\r\n":
-                                raise ValueError("Invalid chunk framing")
-                        body = b"".join(chunks)
-                    elif self.headers.get("Content-Length"):
-                        body = read_exact(int(self.headers["Content-Length"]))
+                    body = receive_body(self.rfile, self.headers, body_files)
                     if gateway and self.headers.get("Content-Encoding"):
-                        body = _decode_gateway_body(body, self.headers["Content-Encoding"])
+                        body = decode_body(body, self.headers["Content-Encoding"])
                         headers = {k: v for k, v in headers.items() if k.lower() != "content-encoding"}
                     if gateway and body is not None and not any(key.lower() == "content-type" for key in headers):
                         headers["Content-Type"] = "application/json"
@@ -486,6 +464,10 @@ class ProviderProxyRelay:
                                 from .provider_gateway import apply_request_service_tier
 
                                 body = apply_request_service_tier(body, route.get("service_tier_override"))
+                    if isinstance(body, RequestBody):
+                        headers = {k: v for k, v in headers.items() if k.lower() != "content-length"}
+                        headers["Content-Length"] = str(body.size)
+                        body.rewind()
                     connection.request(self.command, target or "/", body=body, headers=headers)
                     response = connection.getresponse()
                     upstream_id = upstream_request_id(response.headers)
@@ -557,6 +539,7 @@ class ProviderProxyRelay:
                     else:
                         _LOGGER.warning("provider_upstream_stream_failure %s error=%s", diagnostic_text(route, self.hud_request_id, upstream_id), type(exc).__name__)
                 finally:
+                    body_files.close()
                     self.close_connection = True
                     if connection is not None:
                         connection.close()
@@ -639,12 +622,15 @@ class DetachedProviderProxyRelay(ProviderProxyRelay):
 
     def route(self, metadata: dict, config_path: Path) -> str:
         from .provider_proxy_service import ProviderProxyServiceClient
+        from .runtime_paths import runtime_file_path
 
         with self.lock:
             if self._service is None:
                 self._service = ProviderProxyServiceClient(
                     self.port, state_path=self.state_path,
                     on_evidence=self._deliver_source_evidence,
+                    peer=(self.port + 1, self.state_path.with_name("gateway-" + self.state_path.name)
+                          if self.state_path else runtime_file_path("provider-gateway-service.json")),
                 )
             endpoint = self._service.route(metadata, config_path)
             self.config_paths.add(config_path)
@@ -685,6 +671,7 @@ class DetachedProviderProxyRelay(ProviderProxyRelay):
                     state_path=(self.state_path.with_name("gateway-" + self.state_path.name)
                                 if self.state_path else runtime_file_path("provider-gateway-service.json")),
                     on_evidence=self._deliver_source_evidence,
+                    peer=(self.port, self.state_path or runtime_file_path("provider-proxy-service.json")),
                 )
             return self._gateway_service.route(metadata, config_path)
 

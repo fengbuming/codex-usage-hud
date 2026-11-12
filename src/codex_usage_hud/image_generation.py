@@ -37,10 +37,11 @@ def image_request_mode(route: dict, body: bytes | None) -> dict:
     if not body:
         return {}
     try:
-        payload = json.loads(body)
+        from .request_body import body_field
+
+        model = body_field(body, "model")
     except (ValueError, UnicodeError):
         return {}
-    model = payload.get("model") if isinstance(payload, dict) else None
     if not is_image_model(model):
         return {}
     if model not in route.get("models", []):
@@ -75,7 +76,8 @@ def image_request(payload: dict) -> dict:
     return request
 
 
-def _generate(route: dict, request: dict) -> dict:
+def _generate(route: dict, request: dict) -> object:
+    from .request_body import BLOCK, BodyFiles
     base = urlsplit(route["base_url"])
     params = route.get("query_params") or {}
     query = urlencode([*(pair for pair in parse_qsl(base.query, keep_blank_values=True) if pair[0] not in params), *params.items()])
@@ -84,15 +86,22 @@ def _generate(route: dict, request: dict) -> dict:
     # Respect this provider's explicit route; ignore machine-wide proxy variables.
     opener = build_opener(ProxyHandler({"http": proxy, "https": proxy} if route.get("enabled") else {}))
     headers = {**route.get("headers", {}), "Content-Type": "application/json", "Accept": "application/json"}
+    files = BodyFiles()
     try:
         with opener.open(Request(url, data=json.dumps(request).encode("utf-8"), headers=headers), timeout=180) as response:
-            data = response.read(MAX_IMAGE_BYTES * 2 + 1)
-            if len(data) > MAX_IMAGE_BYTES * 2:
-                raise ValueError("生图返回超过大小限制。")
-            return json.loads(data)
+            body = files.new()
+            while data := response.read(BLOCK):
+                body.write(data)
+                if body.size > MAX_IMAGE_BYTES * 2:
+                    raise ValueError("生图返回超过大小限制。")
+            return body.rewind()
     except HTTPError as exc:
+        files.close()
         # Do not expose vendor response bodies, signed URLs or credentials.
         raise ValueError(f"生图接口返回 HTTP {exc.code}，请检查供应商额度和模型支持。未自动重试。") from None
+    except BaseException:
+        files.close()
+        raise
 
 
 def save_image(result: dict, config_path: Path, thread_id: str) -> Path:
@@ -101,6 +110,10 @@ def save_image(result: dict, config_path: Path, thread_id: str) -> Path:
     if not canonical_thread_id(thread_id):
         raise ValueError("生图会话 ID 无效。")
     thread_id = canonical_thread_id(thread_id)
+    from .request_body import RequestBody
+
+    if isinstance(result, RequestBody):
+        return _save_spooled_image(result, config_path, thread_id)
     items = result.get("data")
     encoded = items[0].get("b64_json") if isinstance(items, list) and items and isinstance(items[0], dict) else None
     if not isinstance(encoded, str) or len(encoded) > MAX_IMAGE_BYTES * 2:
@@ -129,9 +142,56 @@ def save_image(result: dict, config_path: Path, thread_id: str) -> Path:
     return path.resolve()
 
 
+def _save_spooled_image(body, config_path, thread_id):
+    raw = body.owner.new()
+    pending = b''
+    finished = False
+    try:
+        for part in body.image_base64_chunks():
+            if finished and part:
+                raise binascii.Error('Excess Base64 data')
+            pending += part
+            length = len(pending) // 4 * 4
+            if length:
+                encoded, pending = pending[:length], pending[length:]
+                finished = b'=' in encoded
+                raw.write(base64.b64decode(encoded, validate=True))
+                if raw.size > MAX_IMAGE_BYTES:
+                    raise ValueError('生成的图片超过 40 MiB。')
+        if pending:
+            raise binascii.Error('Incorrect padding')
+    except (binascii.Error, UnicodeError):
+        raise ValueError('供应商返回的图片 Base64 无效。') from None
+    raw.rewind()
+    head = raw.read(12)
+    if head.startswith(b'\x89PNG\r\n\x1a\n'):
+        extension = 'png'
+    elif head.startswith(b'\xff\xd8\xff'):
+        extension = 'jpg'
+    elif head.startswith(b'RIFF') and head[8:12] == b'WEBP':
+        extension = 'webp'
+    else:
+        raise ValueError('供应商返回的内容不是支持的图片格式。')
+    directory = config_path.parent / 'generated_images' / 'hud' / thread_id
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / (uuid.uuid4().hex + '.' + extension)
+    try:
+        with path.open('xb') as output:
+            os.chmod(path, 0o600)
+            raw.rewind()
+            while chunk := raw.read(65536):
+                output.write(chunk)
+    except BaseException:
+        path.unlink(missing_ok=True)
+        raise
+    return path.resolve()
+
+
 def serve_image_generation(handler, config_path: Path, route: dict, body: bytes | None) -> None:
     """Return native Responses events with a durable local-image Markdown result."""
-    payload = json.loads(body or b"{}")
+    from .request_body import RequestBody, load_body
+
+    payload = body.image_payload() if isinstance(body, RequestBody) else load_body(body or b"{}")
     if not isinstance(payload, dict):
         raise ValueError("生图请求格式无效。")
     request = image_request(payload)
@@ -161,9 +221,13 @@ def serve_image_generation(handler, config_path: Path, route: dict, body: bytes 
         event("response.in_progress", response=response)
     try:
         result = _generate(route, request)
-        if not isinstance(result, dict):
+        if not isinstance(result, (dict, RequestBody)):
             raise ValueError("生图接口返回格式无效。")
-        path = save_image(result, config_path, route["thread_id"])
+        try:
+            path = save_image(result, config_path, route["thread_id"])
+        finally:
+            if isinstance(result, RequestBody):
+                result.owner.close()
         text = f"![生成的图片]({path.as_posix()})"
         part = {"type": "output_text", "text": text, "annotations": [], "logprobs": []}
         item = {"id": "msg_" + uuid.uuid4().hex, "type": "message", "role": "assistant",

@@ -77,6 +77,7 @@ class UsageSummaryCache:
         self._parser = parser
         self._min_rescan_seconds = max(0.0, float(min_rescan_seconds))
         self._max_tail_state_bytes = max(0, int(max_tail_state_bytes))
+        self._tail_state_sizes = {}
         self._deleted_usage_ledger = deleted_usage_ledger
         self._summary_store = summary_store
         self._deleted_usage_transactions = DeletedUsageTransactions(
@@ -198,15 +199,22 @@ class UsageSummaryCache:
     def _trim_tail_states(self) -> None:
         """Bound retained raw JSONL records while keeping recent files incremental."""
         retained_bytes = 0
+        from .disk_sequence import retained_size
         entries = sorted(
             self._entries.items(),
             key=lambda item: (float(item[1].mtime or 0.0), str(item[0])),
             reverse=True,
         )
+        retained_paths = set()
         for _path, entry in entries:
             if entry.tail_state is None:
                 continue
-            file_size = max(0, int(entry.file_size or 0))
+            state = entry.tail_state
+            signature = (id(state), state.offset, len(state.records))
+            measured = self._tail_state_sizes.get(_path)
+            if measured is None or measured[0] != signature:
+                measured = (signature, retained_size(state))
+            file_size = measured[1]
             if (
                 file_size > self._max_tail_state_bytes
                 or retained_bytes + file_size > self._max_tail_state_bytes
@@ -214,6 +222,9 @@ class UsageSummaryCache:
                 entry.tail_state = None
                 continue
             retained_bytes += file_size
+            retained_paths.add(_path)
+            self._tail_state_sizes[_path] = measured
+        self._tail_state_sizes = {path: self._tail_state_sizes[path] for path in retained_paths}
 
     def prepare_deleted_session_usage(self, item: object) -> str:
         return self._deleted_usage_transactions.prepare(item)

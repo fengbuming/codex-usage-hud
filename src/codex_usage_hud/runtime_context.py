@@ -195,8 +195,11 @@ class RuntimeContext:
 
 
 def _build_usage_summary_cache(parser: JsonlSessionParser) -> UsageSummaryCache:
+    from .memory_policy import USAGE_TAIL_BYTES
+
     return UsageSummaryCache(
         parser,
+        max_tail_state_bytes=USAGE_TAIL_BYTES,
         deleted_usage_ledger=DeletedUsageLedger(
             hud_runtime_dir() / DELETED_SESSION_USAGE_FILENAME
         ),
@@ -236,7 +239,8 @@ def _initialize_runtime_context_resources(context: RuntimeContext) -> None:
         def _pricing_publish(result: object) -> None:
             payload = dict(result) if isinstance(result, dict) else {}
             try:
-                current = context.settings_store.load(); sync = dict(current.pricing_sync)
+                current = context.settings_store.load()
+                sync = dict(current.pricing_sync)
                 metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
                 checked_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
                 used_fallback = bool(metadata.get("bundled"))
@@ -248,7 +252,8 @@ def _initialize_runtime_context_resources(context: RuntimeContext) -> None:
                     if not used_fallback:
                         sync["last_success_at"] = sync["last_checked_at"]
                     sync.update({"scope_provider": context.app_provider, "source_hash": str(metadata.get("source_hash") or ""), "pending_changes": list(payload.get("changes") or []), "pending_prices": list(payload.get("prices") or []), "unread_change_count": change_count})
-                context.settings_store.save(replace(current, pricing_sync=sync)); context.user_config = replace(current, pricing_sync=sync)
+                context.settings_store.save(replace(current, pricing_sync=sync))
+                context.user_config = replace(current, pricing_sync=sync)
             except Exception:
                 _LOGGER.exception("pricing_sync_status_persist_failed")
             context.runtime_events.publish("pricing_sync", source="pricing_sync_scheduler", context=payload)

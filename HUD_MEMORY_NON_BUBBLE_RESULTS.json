@@ -1,0 +1,103 @@
+{
+  "date": "2026-11-12",
+  "timezone": "Asia/Shanghai",
+  "scope": "Non-bubble memory work only; desktop bubble migration is explicitly deferred",
+  "method": "Isolated child processes on fixed copies of three real JSONL files, same logical clock; no running HUD or proxy reload",
+  "selected_session": {
+    "before": {
+      "files": 3,
+      "source_bytes": 12257360,
+      "cold_parse_ms": 381.93,
+      "process_after_hydration": {
+        "private_bytes": 67121152,
+        "working_set_bytes": 77701120,
+        "peak_working_set_bytes": 81760256
+      },
+      "decoded_cache_bytes": null,
+      "snapshot_digest": "0f29ad6c412fcdb837984e98482d53c1d5a1124d7477be9b93cec60aee439639",
+      "bubble_snapshot_digest": "fb881516f1c1cf3dae86733bd5c51f870fada980c1c8b50f610d86f1a35593ed"
+    },
+    "after": {
+      "files": 3,
+      "source_bytes": 12257360,
+      "cold_parse_ms": 1003.45,
+      "process_after_hydration": {
+        "private_bytes": 36130816,
+        "working_set_bytes": 46211072,
+        "peak_working_set_bytes": 56909824
+      },
+      "decoded_cache_bytes": 2065520,
+      "snapshot_digest": "0f29ad6c412fcdb837984e98482d53c1d5a1124d7477be9b93cec60aee439639",
+      "bubble_snapshot_digest": "fb881516f1c1cf3dae86733bd5c51f870fada980c1c8b50f610d86f1a35593ed"
+    },
+    "full_snapshot_parity": true,
+    "bubble_snapshot_parity": true
+  },
+  "renderer_import": {
+    "before": {
+      "process": {
+        "private_bytes": 43810816,
+        "working_set_bytes": 54673408,
+        "peak_working_set_bytes": 61284352
+      },
+      "large_module_string_bytes": 11366053,
+      "default_script_materialized": false,
+      "script_digest": "af702c50e58131eeca515733561750c174ae98626a17982fcaa1ad4b09c12815"
+    },
+    "after": {
+      "process": {
+        "private_bytes": 30408704,
+        "working_set_bytes": 40411136,
+        "peak_working_set_bytes": 41009152
+      },
+      "large_module_string_bytes": 76433,
+      "default_script_materialized": false,
+      "script_digest": "cc9e878ed9737d3e3205e223b31d06f2ff3dbe7e4bc92407ed2a2cf238d4cd41"
+    }
+  },
+  "protected_sources_identical": [
+    "active_work.py",
+    "active_work_cache.py",
+    "desktop_overlay.py",
+    "desktop_overlay_setup.py",
+    "overlay_projection.py",
+    "overlay_runtime.py",
+    "renderer_assets/speed_titles.py",
+    "ui/work_overlay_qt.py",
+    "ui/work_overlay/constants.py",
+    "ui/work_overlay/dismissal_store.py",
+    "ui/work_overlay/geometry.py",
+    "ui/work_overlay/model.py",
+    "ui/work_overlay/qt_completed_liquid.py",
+    "ui/work_overlay/qt_energy_tide.py",
+    "ui/work_overlay/qt_hotspots.py",
+    "ui/work_overlay/qt_rendering.py",
+    "ui/work_overlay/qt_runtime.py",
+    "ui/work_overlay/qt_speed_icon.py",
+    "ui/work_overlay/qt_transitions.py",
+    "ui/work_overlay/qt_visuals.py",
+    "ui/work_overlay/qt_window.py",
+    "ui/work_overlay/theme.py",
+    "ui/work_overlay/__init__.py"
+  ],
+  "validation": [
+    "49 owner, entrypoint, architecture, selected-history and shared-proxy tests passed",
+    "64 request-body, image and selected gateway tests passed; 4 further encoding cases passed",
+    "41 existing provider proxy tests passed",
+    "64 renderer resource, contract, hidden-modal, build-command and disk-search tests passed",
+    "25 cache, usage and projection tests passed",
+    "11 selected parser/history cases passed; counts overlap and must not be added",
+    "29 changed Python sources compiled; Ruff passed; renderer derived contract/resource check passed",
+    "Additional shared-listener authentication, bodyless-WebSocket resource and history write-failure tests passed"
+  ],
+  "limitations": [
+    "Independent process improvements cannot be added to infer a live HUD total",
+    "The fixed-corpus cold complete parse changed from approximately 0.38 s to 1.01 s for all three files; selected-session preview remains the existing bounded background-hydration path",
+    "File mappings and OS file cache are distinct from Python allocations and private commit",
+    "Proxy consolidation retains Python protocol handlers; the prior 8 MiB native-service figure is not an achieved target",
+    "Existing version-3 proxy processes are retained; consolidation applies when starting compatible listeners safely",
+    "No live restart, packaging, remote matrix or macOS desktop acceptance; no 100 MB total claim",
+    "Two legacy image test doubles lacked EOF and caused abnormal test memory growth; both test processes were terminated and both mocks corrected; existing HUD/proxy processes were preserved"
+  ],
+  "baseline_commit": "c8889913e318a3ee7efb7ee1b254b704be4e1379"
+}

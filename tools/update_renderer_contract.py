@@ -47,9 +47,10 @@ def collect_renderer_contract() -> dict[str, object]:
     """Return all derived Renderer values maintained by the contract files."""
     _ensure_source_path()
     from codex_usage_hud.renderer_assets import manifest
-    from codex_usage_hud.renderer_catalog import RENDERER_HUD_SCRIPT
+    from codex_usage_hud.renderer_catalog import renderer_hud_script_with_model_catalog
 
     template = manifest.RENDERER_HUD_SCRIPT_TEMPLATE
+    RENDERER_HUD_SCRIPT = renderer_hud_script_with_model_catalog([], template=template)
     return {
         "template": _digest(template),
         "currentBundle": _digest(RENDERER_HUD_SCRIPT),
@@ -96,6 +97,10 @@ def contract_mismatches(
     from codex_usage_hud.renderer_assets import manifest
 
     mismatches: list[str] = []
+    from codex_usage_hud.renderer_bundle import BUNDLE_PATH
+
+    if not BUNDLE_PATH.is_file() or BUNDLE_PATH.read_bytes() != manifest.RENDERER_HUD_SCRIPT_TEMPLATE.encode("utf-8"):
+        mismatches.append("renderer.bundle.js differs from the asset source; run --update")
     template = actual["template"]
     current = actual["currentBundle"]
     lifecycle = actual["lifecycleCounts"]
@@ -242,6 +247,11 @@ def update_contract_files(
     contract_text = _render_updated_contract(contract_path, actual)
     _write_text_preserving_newlines(manifest_path, manifest_text)
     _write_text_preserving_newlines(contract_path, contract_text)
+    if manifest_path == MANIFEST_PATH:
+        from codex_usage_hud.renderer_assets import manifest
+        from codex_usage_hud.renderer_bundle import BUNDLE_PATH
+
+        _write_text_preserving_newlines(BUNDLE_PATH, manifest.RENDERER_HUD_SCRIPT_TEMPLATE)
 
 
 def _format_actual(actual: dict[str, object]) -> str:

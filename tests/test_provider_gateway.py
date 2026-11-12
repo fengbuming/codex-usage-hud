@@ -240,6 +240,35 @@ def test_copy_scrubs_only_source_reasoning_seals_and_rejects_opaque_context(acti
         gateway.prepare_request_body(path, route, body)
 
 
+def test_spooled_copy_preserves_seal_rules_and_transaction_rollback(active):
+    from codex_usage_hud.request_body import BodyFiles
+
+    path, _, _ = active
+    gateway.resolve_route(path, headers(A), generation=True)
+    gateway.select_provider("beta", config_path=path, thread_id=B, copied_from=A)
+    route = gateway.resolve_route(path, headers(B), generation=True)
+    text = {"type": "message", "role": "user", "content": "完整内容" * 10000}
+    source = {"type": "reasoning", "summary": [], "encrypted_content": "source-sealed"}
+    files = BodyFiles()
+    def body(items):
+        value = files.new()
+        value.write(json.dumps({"input": items}).encode())
+        return value.rewind()
+    try:
+        assert gateway.prepare_request_body(path, route, body([source, text])).load()['input'] == [text]
+        own = {**source, 'encrypted_content': 'target-sealed'}
+        assert gateway.prepare_request_body(path, route, body([source, own, text])).load()['input'] == [own, text]
+        gateway.select_provider('beta', config_path=path, thread_id=C, copied_from=A)
+        fresh = gateway.resolve_route(path, headers(C), generation=True)
+        with pytest.raises(ValueError, match='加密压缩'):
+            gateway.prepare_request_body(path, fresh, body([source, {'type': 'compaction', 'encrypted_content': 'opaque'}]))
+        with gateway._state_db(path) as db:
+            assert db.execute('SELECT prepared FROM copies WHERE id = ?', (C,)).fetchone()[0] == 0
+            assert not db.execute('SELECT 1 FROM foreign_seals WHERE id = ?', (C,)).fetchone()
+    finally:
+        files.close()
+
+
 def test_gateway_streams_replaces_credentials_and_preserves_status(home):
     calls, started, release = [], Event(), Event()
 

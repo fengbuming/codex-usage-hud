@@ -205,7 +205,9 @@ def classify_background_feature(prompt: str) -> BackgroundFeature:
 def classify_background_request_body(body: object) -> BackgroundFeature:
     """Recognize known task signatures in memory without retaining request text."""
     try:
-        payload = json.loads(body or b"")
+        from ..request_body import RequestBody
+
+        payload = body.background_payload() if isinstance(body, RequestBody) else json.loads(body or b"")
     except (json.JSONDecodeError, TypeError, ValueError):
         return BackgroundFeature(UNKNOWN_FEATURE_KEY, UNKNOWN_FEATURE_LABEL, "")
 

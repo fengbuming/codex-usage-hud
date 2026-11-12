@@ -9,6 +9,7 @@ import importlib.abc
 import importlib.util
 from pathlib import Path
 import sys
+import tempfile
 from threading import RLock
 import uuid
 
@@ -28,11 +29,26 @@ class _SnapshotImporter(importlib.abc.MetaPathFinder, importlib.abc.Loader):
     def __init__(self, root: Path):
         self.root = root
         self.prefix = "_codex_hud_proxy_" + uuid.uuid4().hex
-        self.sources = {str(p.relative_to(root)).replace("\\", "/"): p.read_bytes()
-                        for p in root.rglob("*.py") if "__pycache__" not in p.parts}
+        self._directory = tempfile.TemporaryDirectory(prefix="codex-hud-proxy-source-")
+        self.sources = {}
         digest = hashlib.sha256()
-        for name, source in sorted(self.sources.items()):
-            digest.update(name.encode() + b"\0" + source + b"\0")
+        try:
+            for path in sorted(root.rglob("*.py")):
+                if "__pycache__" in path.parts:
+                    continue
+                name = path.relative_to(root).as_posix()
+                destination = Path(self._directory.name) / name
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                digest.update(name.encode() + b"\0")
+                with path.open("rb") as source, destination.open("xb") as target:
+                    while block := source.read(65536):
+                        target.write(block)
+                        digest.update(block)
+                digest.update(b"\0")
+                self.sources[name] = destination
+        except BaseException:
+            self._directory.cleanup()
+            raise
         self.digest = digest.hexdigest()
 
     def _file(self, fullname):
@@ -60,7 +76,7 @@ class _SnapshotImporter(importlib.abc.MetaPathFinder, importlib.abc.Loader):
         module.__file__ = str(self.root / name)
         if package:
             module.__path__ = [str((self.root / name).parent)]
-        exec(compile(self.sources[name], module.__file__, "exec"), module.__dict__)
+        exec(compile(self.sources[name].read_bytes(), module.__file__, "exec"), module.__dict__)
 
     def close(self):
         if self in sys.meta_path:
@@ -68,6 +84,7 @@ class _SnapshotImporter(importlib.abc.MetaPathFinder, importlib.abc.Loader):
         for name in tuple(sys.modules):
             if name == self.prefix or name.startswith(self.prefix + "."):
                 sys.modules.pop(name, None)
+        self._directory.cleanup()
 
 
 @dataclass
@@ -134,6 +151,7 @@ class ProxyReloadManager:
             snapshot = _SnapshotImporter(self.source_root)
             with self.lock:
                 if self.current.snapshot and self.current.snapshot.digest == snapshot.digest:
+                    snapshot.close()
                     return {**self.health(), "changed": False}
             sys.meta_path.insert(0, snapshot)
             try:

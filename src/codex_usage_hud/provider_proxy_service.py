@@ -22,7 +22,7 @@ from .provider_proxy import LoopbackHTTPServer
 
 CONTROL_PATH = "/__codex_hud_proxy__/"
 CONTROL_HEADER = "X-Codex-Hud-Proxy-Control"
-PROTOCOL_VERSION = 3
+PROTOCOL_VERSION = 4
 
 # A HUD launched from the Windows desktop can itself be placed in a
 # kill-on-close Job Object.  The provider relay is deliberately a separate
@@ -47,7 +47,7 @@ def _save_state(path: Path, state: dict) -> None:
 def _read_state(path: Path, port: int) -> dict:
     try:
         state = json.loads(path.read_text(encoding="utf-8"))
-        if state.get("version") in {1, 2, PROTOCOL_VERSION} and state.get("port") == port and state.get("control_token"):
+        if state.get("version") in {1, 2, 3, PROTOCOL_VERSION} and state.get("port") == port and state.get("control_token"):
             return state
     except (OSError, ValueError, AttributeError):
         pass
@@ -106,10 +106,11 @@ def launch_helper(state_path: Path, port: int, *, wait_for_port: float = 0) -> s
 
 
 class ProviderProxyServiceClient:
-    def __init__(self, port: int, *, state_path: Path | None = None, on_evidence=None) -> None:
+    def __init__(self, port: int, *, state_path: Path | None = None, on_evidence=None, peer=None) -> None:
         self.port = port
         self.state_path = state_path or runtime_file_path("provider-proxy-service.json")
         self.on_evidence = on_evidence
+        self.peer = peer
         self.state: dict = {}
         self.process = None
         self._callback_server = None
@@ -151,6 +152,19 @@ class ProviderProxyServiceClient:
                 raise RuntimeError(f"端口 {self.port} 仍由旧版 HUD 代理或其它程序占用；请先完成代理进程迁移。")
             if not self.state:
                 self.state = _load_or_create_state(self.state_path, self.port)
+            if self.peer is not None:
+                peer_port, peer_path = self.peer
+                peer = ProviderProxyServiceClient(peer_port, state_path=peer_path)
+                peer.state = _read_state(peer_path, peer_port)
+                if peer.state:
+                    try:
+                        if peer._call("health").get("version", 0) == PROTOCOL_VERSION:
+                            peer._call("listen", {"port": self.port, "state_path": str(self.state_path.resolve())})
+                            if self._call("health").get("version") == PROTOCOL_VERSION:
+                                self._subscribe()
+                                return
+                    except (OSError, ValueError, RuntimeError, http.client.HTTPException):
+                        pass
             self.process = launch_helper(self.state_path, self.port)
             deadline = time.monotonic() + 8
             while time.monotonic() < deadline:
@@ -249,7 +263,29 @@ class ProviderProxyServiceClient:
         self._callback_server = self._callback_thread = self._callback_stop = None
 
 
-def run_helper(state_path: Path, port: int, *, wait_for_port: float = 0) -> int:
+class _HelperGroup:
+    """One detached interpreter, independently authenticated stable listeners."""
+
+    def __init__(self, directory):
+        self.directory = directory.resolve()
+        self.relays = {}
+        self.lock = RLock()
+
+    def listen(self, state_path, port, *, wait_for_port=0):
+        state_path = Path(state_path).resolve()
+        if state_path.parent != self.directory or not 1 <= port <= 65535:
+            raise ValueError("Invalid shared provider listener")
+        with self.lock:
+            if port in self.relays:
+                if self.relays[port][0] != state_path:
+                    raise ValueError("Provider listener belongs to another state file")
+                return self.relays[port][1]
+            relay = _start_helper(state_path, port, wait_for_port=wait_for_port, group=self)
+            self.relays[port] = (state_path, relay)
+            return relay
+
+
+def _start_helper(state_path: Path, port: int, *, wait_for_port: float = 0, group=None):
     from .codex_provider_config import default_codex_config_path, read_provider_definitions
     from .provider_proxy import ProviderProxyRelay, proxy_metadata
     from .provider_proxy_reload import ProxyReloadManager
@@ -279,6 +315,9 @@ def run_helper(state_path: Path, port: int, *, wait_for_port: float = 0) -> int:
                             result = {"version": PROTOCOL_VERSION, "pid": os.getpid(), **relay.reload_manager.health()}
                         elif action == "reload":
                             result = {"version": PROTOCOL_VERSION, "pid": os.getpid(), **relay.reload_manager.reload()}
+                        elif action == "listen" and group is not None:
+                            group.listen(Path(payload["state_path"]), int(payload["port"]))
+                            result = {"version": PROTOCOL_VERSION, "pid": os.getpid()}
                         elif action == "route":
                             metadata = payload["metadata"]
                             endpoint = relay.reload_manager.route(metadata, Path(payload["config_path"]))
@@ -366,9 +405,23 @@ def run_helper(state_path: Path, port: int, *, wait_for_port: float = 0) -> int:
         except OSError as exc:
             if time.monotonic() >= deadline:
                 print(f"Provider relay bind failed: {type(exc).__name__}: {exc}", file=sys.stderr)
-                return 1
+                raise RuntimeError("Provider relay bind failed") from exc
             time.sleep(.05)
+    return relay
+
+
+def run_helper(state_path: Path, port: int, *, wait_for_port: float = 0) -> int:
+    group = _HelperGroup(state_path.parent)
+    try:
+        relay = group.listen(state_path, port, wait_for_port=wait_for_port)
+    except (OSError, RuntimeError, ValueError):
+        return 1
     relay.thread.join()
+    # A listener can be stopped by an embedder without owning the other one.
+    with group.lock:
+        remaining = [item[1] for item in group.relays.values() if item[1] is not relay]
+    for listener in remaining:
+        listener.thread.join()
     return 0
 
 

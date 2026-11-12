@@ -1,0 +1,383 @@
+{
+  "accepted_at": "2026-11-12T12:07:28.351125+08:00",
+  "scope": "Non-bubble memory optimization iteration; total 100 MB target not achieved",
+  "main_pid": 26148,
+  "bubble_pid": 35300,
+  "proxy": {
+    "legacy": {
+      "version": 4,
+      "pid": 24888,
+      "reloadSupported": true,
+      "generation": "initial",
+      "bootstrapDigest": "687c7103544160fcfc6d10cd53ca21f68ea268d94c543db1bb0d612bdcaeb82b",
+      "sourceDigest": "",
+      "activeRequests": 0,
+      "retiredGenerations": 0
+    },
+    "gateway": {
+      "version": 4,
+      "pid": 24888,
+      "reloadSupported": true,
+      "generation": "initial",
+      "bootstrapDigest": "687c7103544160fcfc6d10cd53ca21f68ea268d94c543db1bb0d612bdcaeb82b",
+      "sourceDigest": "",
+      "activeRequests": 0,
+      "retiredGenerations": 0
+    },
+    "shared_pid": 24888,
+    "pending_diagnostic_cleared_by_restart": true
+  },
+  "runtime": {
+    "pid": 26148,
+    "at": 1794456319.0722897,
+    "renderer_manifest_loaded": false,
+    "catalog_template_pinned": false,
+    "snapshot_cache": {
+      "entries": 2,
+      "decoded_bytes": 2096602,
+      "budget": 2097152,
+      "record_types": [
+        "DiskRecordSequence",
+        "DiskRecordSequence"
+      ],
+      "history_types": [
+        "DiskSequence",
+        "DiskSequence"
+      ],
+      "records": [
+        897,
+        1849
+      ],
+      "task_counts": [
+        3,
+        14
+      ],
+      "raw_last_line_bytes": 0
+    },
+    "usage": {
+      "entries": 83,
+      "tails": 1,
+      "budget": 4194304
+    },
+    "search": {
+      "present": true,
+      "class": "OnDemandSessionSearchIndex",
+      "candidate_bytes": 0,
+      "mapped": false,
+      "query_connection": false
+    },
+    "runtime_error_count": 0,
+    "probe_mode": "Read-only field inspection on the main runtime; no GC or allocator/workingset trim"
+  },
+  "history_ui": {
+    "session": "01a1c8c1-34c4-7ec3-bcb3-06181f348a35",
+    "tasks": 14,
+    "requests": 1,
+    "copyLengths": [
+      12832,
+      42568,
+      41591
+    ],
+    "errors": []
+  },
+  "settings_dom": {
+    "opened": {
+      "visible": true,
+      "children": 1
+    },
+    "closed": {
+      "visible": false,
+      "children": 0
+    },
+    "reopened": {
+      "visible": true,
+      "children": 1
+    }
+  },
+  "search": [
+    {
+      "query": "session_search.py",
+      "matches": 71,
+      "state": "completed",
+      "error": ""
+    },
+    {
+      "query": "扫描",
+      "matches": 264,
+      "state": "completed",
+      "error": ""
+    }
+  ],
+  "absent_query_result": {
+    "matches": 0,
+    "error": ""
+  },
+  "inventory_after_clear": 888,
+  "memory_samples": [
+    {
+      "Time": "2026-11-12T12:05:19.5776480+08:00",
+      "Processes": [
+        {
+          "Id": 26148,
+          "PrivateBytes": 97288192,
+          "WorkingSetBytes": 118456320,
+          "CPU": 191.375,
+          "Handles": 347
+        },
+        {
+          "Id": 34204,
+          "PrivateBytes": 27279360,
+          "WorkingSetBytes": 42360832,
+          "CPU": 2.578125,
+          "Handles": 162
+        },
+        {
+          "Id": 35300,
+          "PrivateBytes": 73199616,
+          "WorkingSetBytes": 92557312,
+          "CPU": 115.625,
+          "Handles": 667
+        }
+      ]
+    },
+    {
+      "Time": "2026-11-12T12:05:23.6735829+08:00",
+      "Processes": [
+        {
+          "Id": 26148,
+          "PrivateBytes": 100438016,
+          "WorkingSetBytes": 121704448,
+          "CPU": 194.921875,
+          "Handles": 347
+        },
+        {
+          "Id": 34204,
+          "PrivateBytes": 27279360,
+          "WorkingSetBytes": 42360832,
+          "CPU": 2.578125,
+          "Handles": 162
+        },
+        {
+          "Id": 35300,
+          "PrivateBytes": 73191424,
+          "WorkingSetBytes": 92278784,
+          "CPU": 116.546875,
+          "Handles": 667
+        }
+      ]
+    },
+    {
+      "Time": "2026-11-12T12:05:27.6978312+08:00",
+      "Processes": [
+        {
+          "Id": 26148,
+          "PrivateBytes": 94703616,
+          "WorkingSetBytes": 115789824,
+          "CPU": 197.796875,
+          "Handles": 340
+        },
+        {
+          "Id": 34204,
+          "PrivateBytes": 27279360,
+          "WorkingSetBytes": 42360832,
+          "CPU": 2.578125,
+          "Handles": 162
+        },
+        {
+          "Id": 35300,
+          "PrivateBytes": 73199616,
+          "WorkingSetBytes": 92434432,
+          "CPU": 117.265625,
+          "Handles": 667
+        }
+      ]
+    },
+    {
+      "Time": "2026-11-12T12:05:31.7425769+08:00",
+      "Processes": [
+        {
+          "Id": 26148,
+          "PrivateBytes": 104091648,
+          "WorkingSetBytes": 125485056,
+          "CPU": 200.390625,
+          "Handles": 345
+        },
+        {
+          "Id": 34204,
+          "PrivateBytes": 28758016,
+          "WorkingSetBytes": 43696128,
+          "CPU": 2.84375,
+          "Handles": 171
+        },
+        {
+          "Id": 35300,
+          "PrivateBytes": 73199616,
+          "WorkingSetBytes": 92434432,
+          "CPU": 117.6875,
+          "Handles": 667
+        }
+      ]
+    },
+    {
+      "Time": "2026-11-12T12:05:35.7911554+08:00",
+      "Processes": [
+        {
+          "Id": 26148,
+          "PrivateBytes": 95326208,
+          "WorkingSetBytes": 116559872,
+          "CPU": 200.84375,
+          "Handles": 346
+        },
+        {
+          "Id": 34204,
+          "PrivateBytes": 28758016,
+          "WorkingSetBytes": 43696128,
+          "CPU": 2.875,
+          "Handles": 171
+        },
+        {
+          "Id": 35300,
+          "PrivateBytes": 73199616,
+          "WorkingSetBytes": 92434432,
+          "CPU": 118.25,
+          "Handles": 667
+        }
+      ]
+    },
+    {
+      "Time": "2026-11-12T12:05:39.8426582+08:00",
+      "Processes": [
+        {
+          "Id": 26148,
+          "PrivateBytes": 87814144,
+          "WorkingSetBytes": 107737088,
+          "CPU": 201.4375,
+          "Handles": 340
+        },
+        {
+          "Id": 34204,
+          "PrivateBytes": 28758016,
+          "WorkingSetBytes": 43696128,
+          "CPU": 2.90625,
+          "Handles": 171
+        },
+        {
+          "Id": 35300,
+          "PrivateBytes": 73199616,
+          "WorkingSetBytes": 92438528,
+          "CPU": 119.015625,
+          "Handles": 667
+        }
+      ]
+    },
+    {
+      "Time": "2026-11-12T12:05:43.8688048+08:00",
+      "Processes": [
+        {
+          "Id": 26148,
+          "PrivateBytes": 87814144,
+          "WorkingSetBytes": 107737088,
+          "CPU": 201.4375,
+          "Handles": 340
+        },
+        {
+          "Id": 34204,
+          "PrivateBytes": 28758016,
+          "WorkingSetBytes": 43696128,
+          "CPU": 2.90625,
+          "Handles": 171
+        },
+        {
+          "Id": 35300,
+          "PrivateBytes": 73199616,
+          "WorkingSetBytes": 92438528,
+          "CPU": 119.4375,
+          "Handles": 667
+        }
+      ]
+    }
+  ],
+  "ui": {
+    "session": "01a1cd5e-61d1-7cb1-9300-fea71517196d",
+    "errors": [],
+    "connection": {
+      "state": "ok",
+      "reason": "update-ok",
+      "detail": "CDP 连接正常",
+      "channelAvailable": true,
+      "consecutiveFailures": 0,
+      "healAttempts": 0,
+      "lastHealReason": "",
+      "transportState": "ok",
+      "followState": "confirmed",
+      "followReason": "confirmed",
+      "followStuckElapsedMs": 384
+    },
+    "hydrated": true
+  },
+  "proxy_transition": {
+    "before": [
+      {
+        "port": 57323,
+        "version": 3,
+        "pid": 18840,
+        "reloadSupported": true,
+        "generation": "initial",
+        "bootstrapDigest": "3f668be91419fbdc50af3960211059641e23baf2bbf581ed9dd3cbb4c682041d",
+        "sourceDigest": "",
+        "activeRequests": 0,
+        "retiredGenerations": 0
+      },
+      {
+        "port": 57324,
+        "version": 3,
+        "pid": 3824,
+        "reloadSupported": true,
+        "generation": "initial",
+        "bootstrapDigest": "3f668be91419fbdc50af3960211059641e23baf2bbf581ed9dd3cbb4c682041d",
+        "sourceDigest": "",
+        "activeRequests": 1,
+        "retiredGenerations": 0
+      }
+    ],
+    "after": [
+      {
+        "port": 57323,
+        "version": 4,
+        "pid": 34204,
+        "reloadSupported": true,
+        "generation": "initial",
+        "bootstrapDigest": "687c7103544160fcfc6d10cd53ca21f68ea268d94c543db1bb0d612bdcaeb82b",
+        "sourceDigest": "",
+        "activeRequests": 0,
+        "retiredGenerations": 0
+      },
+      {
+        "port": 57324,
+        "version": 4,
+        "pid": 34204,
+        "reloadSupported": true,
+        "generation": "initial",
+        "bootstrapDigest": "687c7103544160fcfc6d10cd53ca21f68ea268d94c543db1bb0d612bdcaeb82b",
+        "sourceDigest": "",
+        "activeRequests": 0,
+        "retiredGenerations": 0
+      }
+    ],
+    "interruption_authorized": true,
+    "shared_pid": 34204
+  },
+  "focused_final_tests": 46,
+  "limitations": [
+    "Live total excludes incremental HUD allocations inside Codex renderer",
+    "Private commit is distinct from private resident working set; workload differs from the earlier observation",
+    "No desktop bubble migration, packaging or macOS acceptance",
+    "The proxy process was deliberately restarted under explicit user authorization to interrupt active requests",
+    "A queued read-only proxy probe did not execute while its main thread was blocked; that diagnostic was cleared by a second authorized restart and was not used as evidence"
+  ],
+  "protected_bubble_files_unchanged": 23,
+  "total_private_MiB_range": [
+    180.98,
+    196.5
+  ]
+}

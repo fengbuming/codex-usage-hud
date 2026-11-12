@@ -251,12 +251,71 @@ def renderer_worker():
     }
 
 
+class _SelectedClock(datetime):
+    @classmethod
+    def now(cls, tz=None):
+        value = cls(2026, 11, 12, 2, 0, 0, tzinfo=timezone.utc)
+        return value.astimezone(tz) if tz else value.replace(tzinfo=None)
+
+
+def selected_worker(corpus):
+    """Measure the selected-session storage, without starting any HUD owner."""
+    from collections.abc import Sequence
+    from codex_usage_hud.core import JsonlSessionParser
+    from codex_usage_hud.core import parser as parser_module
+
+    parser_module.datetime = _SelectedClock
+    try:
+        from codex_usage_hud.disk_sequence import DecodedHistoryCache, spill_snapshot_history
+    except ImportError:
+        history = None
+    else:
+        history = DecodedHistoryCache()
+    parser = JsonlSessionParser()
+    snapshots, states = [], []
+    files = sorted(corpus.glob('*.jsonl'))
+    start = time.perf_counter()
+    for path in files:
+        kwargs = {'_record_cache': history} if history is not None else {}
+        snapshot, state = parser.parse_file_incremental(path, **kwargs)
+        if history is not None:
+            spill_snapshot_history(snapshot, history)
+        snapshots.append(snapshot)
+        states.append(state)
+    cold_ms = (time.perf_counter() - start) * 1000
+    gc.collect()
+    process = memory()
+
+    def plain(value):
+        if dataclasses.is_dataclass(value):
+            return {field.name: plain(getattr(value, field.name)) for field in dataclasses.fields(value)}
+        if isinstance(value, dict):
+            return {key: plain(item) for key, item in value.items()}
+        if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+            return [plain(item) for item in value]
+        if isinstance(value, Path):
+            return value.name
+        if isinstance(value, datetime):
+            return value.isoformat()
+        return value
+
+    digest = hashlib.sha256(json.dumps(plain(snapshots), sort_keys=True, default=str).encode()).hexdigest()
+    # The protected bubble entry uses its original parser/storage path.
+    bubble_digest = hashlib.sha256(json.dumps(
+        [plain(parser.parse_work_file(path)) for path in files], sort_keys=True, default=str
+    ).encode()).hexdigest()
+    return {'files': len(files), 'source_bytes': sum(path.stat().st_size for path in files),
+            'cold_parse_ms': round(cold_ms, 2), 'process_after_hydration': process,
+            'decoded_cache_bytes': history.retained_bytes if history is not None else None,
+            'snapshot_digest': digest, 'bubble_snapshot_digest': bubble_digest}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--baseline-src", type=Path)
     parser.add_argument("--corpus", type=Path)
     parser.add_argument("--output", type=Path)
-    parser.add_argument("--worker", choices=("helper", "caches", "renderer"))
+    parser.add_argument("--worker", choices=("helper", "caches", "renderer", "selected"))
     parser.add_argument("--source", type=Path)
     parser.add_argument("--label", default="worker")
     args = parser.parse_args()
@@ -265,6 +324,7 @@ def main():
         result = {
             "helper": helper_worker,
             "caches": lambda: caches_worker(args.corpus),
+            "selected": lambda: selected_worker(args.corpus),
             "renderer": renderer_worker,
         }[args.worker]()
         print(json.dumps(result))

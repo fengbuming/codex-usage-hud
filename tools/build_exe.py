@@ -35,6 +35,10 @@ DEFAULT_COLLECT_PACKAGES = ("codex_usage_hud",)
 DEFAULT_HIDDEN_IMPORTS = ("encodings.idna",)
 DEFAULT_DATA_FILES = (
     (
+        PROJECT_ROOT / "src" / "codex_usage_hud" / "assets" / "renderer.bundle.js",
+        "codex_usage_hud/assets",
+    ),
+    (
         PROJECT_ROOT / "src" / "codex_usage_hud" / "assets" / "sponsor_alipay.jpg",
         "codex_usage_hud/assets",
     ),

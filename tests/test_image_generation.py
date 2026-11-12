@@ -166,11 +166,15 @@ def test_failures_are_terminal_and_never_retried(tmp_path, streaming):
 
 def test_generator_respects_provider_auth_base_path_query_and_explicit_proxy():
     opener = MagicMock()
-    opener.open.return_value.__enter__.return_value.read.return_value = b'{"data":[]}'
+    opener.open.return_value.__enter__.return_value = BytesIO(b'{"data":[]}')
     value = {"base_url": "https://alpha.example/api/v2?api-version=old", "enabled": True, "port": 7897,
              "headers": {"Authorization": "Bearer selected-key"}, "query_params": {"api-version": "new"}}
     with patch.object(images, "build_opener", return_value=opener), patch.object(images, "ProxyHandler") as proxy:
-        images._generate(value, {"prompt": "whale"})
+        result = images._generate(value, {"prompt": "whale"})
+        try:
+            assert result.load() == {"data": []}
+        finally:
+            result.owner.close()
     request = opener.open.call_args.args[0]
     assert request.full_url == "https://alpha.example/api/v2/images/generations?api-version=new"
     assert request.get_header("Authorization") == "Bearer selected-key"
@@ -184,7 +188,7 @@ def test_generator_respects_provider_auth_base_path_query_and_explicit_proxy():
 @pytest.mark.parametrize("model", ["gpt-image-1", "gpt-image-2", "GPT-IMAGE-2"])
 def test_gpt_images_use_native_base64_contract_without_legacy_parameter(model):
     opener = MagicMock()
-    opener.open.return_value.__enter__.return_value.read.return_value = b'{"data":[]}'
+    opener.open.return_value.__enter__.return_value = BytesIO(b'{"data":[]}')
 
     def strict_api(request, **_kwargs):
         payload = json.loads(request.data)
@@ -194,8 +198,12 @@ def test_gpt_images_use_native_base64_contract_without_legacy_parameter(model):
 
     opener.open.side_effect = strict_api
     with patch.object(images, "build_opener", return_value=opener):
-        assert images._generate({"base_url": "https://api.openai.com/v1"},
-                                images.image_request({"model": model, "input": "whale"})) == {"data": []}
+        result = images._generate({"base_url": "https://api.openai.com/v1"},
+                                  images.image_request({"model": model, "input": "whale"}))
+        try:
+            assert result.load() == {"data": []}
+        finally:
+            result.owner.close()
     assert opener.open.call_count == 1
 
 
@@ -307,10 +315,12 @@ def test_relay_binds_new_draft_before_model_rewrite_and_calls_images_adapter(hom
     handler.path = "/codex_hud/v1/responses"
     handler.rfile = BytesIO(json.dumps({"input": "whale", "model": armed["nativeModel"]}).encode())
     handler.headers = {"session_id": A, GATEWAY_AUTH_HEADER: gateway.gateway_info(home)["token"], "Content-Length": str(len(handler.rfile.getvalue()))}
-    with patch.object(images, "serve_image_generation") as serve, patch("http.client.HTTPSConnection") as connection:
+    models = []
+    with patch.object(images, "serve_image_generation", side_effect=lambda *args: models.append(args[3].field('model'))) as serve, patch("http.client.HTTPSConnection") as connection:
         handler._forward()
     assert serve.call_args.args[2]["thread_id"] == A
-    assert json.loads(serve.call_args.args[3])["model"] == "gpt-image-2"
+    assert models == ["gpt-image-2"]
+    assert serve.call_args.args[3].file.closed
     connection.return_value.request.assert_not_called()
 
 
@@ -334,7 +344,9 @@ def _relay_handler(home, payload, thread_id=A, path="/responses"):
 
 def test_switching_models_routes_each_request_and_ignores_old_chat_flag(home):
     gateway.set_image_generation(A, True, "gpt-image-2", config_path=home)
-    with patch.object(images, "serve_image_generation") as serve, patch("http.client.HTTPSConnection") as connection:
+    served, forwarded = [], []
+    with patch.object(images, "serve_image_generation", side_effect=lambda *args: served.append(args[3].field('model'))) as serve, patch("http.client.HTTPSConnection") as connection:
+        connection.return_value.request.side_effect = lambda *args, **kwargs: forwarded.append(kwargs['body'].field('model'))
         response = connection.return_value.getresponse.return_value
         response.status = 200
         response.headers = {}
@@ -344,9 +356,10 @@ def test_switching_models_routes_each_request_and_ignores_old_chat_flag(home):
             handler = _relay_handler(home, {"model": model, "input": "whale"})
             handler._forward()
             handler._send_relay_failure.assert_not_called()
-        assert [json.loads(call.args[3])["model"] for call in serve.call_args_list] == ["gpt-image-2", "gpt-image-2.5"]
+        assert served == ["gpt-image-2", "gpt-image-2.5"]
+        assert serve.call_count == 2
         assert connection.return_value.request.call_count == 1
-        assert json.loads(connection.return_value.request.call_args.kwargs["body"])["model"] == "gpt-6.1-sol"
+        assert forwarded == ["gpt-6.1-sol"]
 
 
 @pytest.mark.parametrize("model,path", [("gpt-image-not-configured", "/responses"), ("gpt-image-2", "/responses/compact")])

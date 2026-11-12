@@ -8,7 +8,7 @@ import os
 from pathlib import Path
 import re
 
-from .ui.renderer_script import _RENDERER_HUD_SCRIPT_TEMPLATE
+from .renderer_bundle import read_renderer_template
 
 
 MODEL_CATALOG_JSON_ENV = "CODEX_USAGE_HUD_MODEL_CATALOG_JSON"
@@ -147,15 +147,18 @@ def model_catalog_payload() -> list[dict[str, object]]:
 
 def renderer_hud_script_with_model_catalog(
     catalog: list[dict[str, object]] | None = None,
+    *,
+    template: str | None = None,
 ) -> str:
     payload = model_catalog_payload() if catalog is None else catalog
+    source = read_renderer_template() if template is None else template
     fingerprint = hashlib.sha256(
-        _RENDERER_HUD_SCRIPT_TEMPLATE.replace(
+        source.replace(
             _BUNDLE_FINGERPRINT_PLACEHOLDER,
             "",
         ).encode("utf-8")
     ).hexdigest()[:16]
-    template = _RENDERER_HUD_SCRIPT_TEMPLATE.replace(
+    template = source.replace(
         _BUNDLE_FINGERPRINT_PLACEHOLDER,
         fingerprint,
     )

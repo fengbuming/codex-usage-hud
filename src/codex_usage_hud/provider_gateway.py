@@ -170,13 +170,11 @@ def apply_request_service_tier(body: bytes | None, tier: object) -> bytes | None
     """Only explicit user choices override the outgoing Responses request."""
     if tier not in {"fast", "default"} or not body:
         return body
-    payload = json.loads(body)
-    if not isinstance(payload, dict):
-        raise ValueError("Fast 请求需要 JSON 对象。")
-    if payload.get("service_tier") == tier:
+    from .request_body import body_field, replace_body_fields
+
+    if body_field(body, "service_tier") == tier:
         return body
-    payload["service_tier"] = tier
-    return json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    return replace_body_fields(body, {"service_tier": tier})
 
 
 def session_provider(thread_id: str, native_provider: str = "", *, config_path: Path | None = None) -> str:
@@ -424,8 +422,9 @@ def set_image_draft(enabled: bool, model: str = "", token: str = "", *, config_p
 def bind_image_draft(path: Path, route: dict, body: bytes | None) -> bytes | None:
     if not body:
         return body
-    payload = json.loads(body)
-    alias = image_draft_model(payload.get("model")) if isinstance(payload, dict) else None
+    from .request_body import body_field, replace_body_fields
+
+    alias = image_draft_model(body_field(body, "model"))
     if not alias:
         return body
     from .image_generation import is_image_model
@@ -443,8 +442,7 @@ def bind_image_draft(path: Path, route: dict, body: bytes | None) -> bytes | Non
         db.execute("UPDATE image_drafts SET thread_id = ? WHERE token = ?", (thread_id, token))
         db.execute("INSERT OR REPLACE INTO image_sessions VALUES (?, ?, ?)", (thread_id, row[0], model))
     route["image_generation"] = {"provider": row[0], "model": model}
-    payload["model"] = model
-    return json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    return replace_body_fields(body, {"model": model})
 
 
 def set_image_generation(thread_id: str, enabled: bool, model: str = "", *, config_path: Path | None = None) -> dict:
@@ -477,6 +475,10 @@ def prepare_request_body(path: Path, route: Mapping, body: bytes | None) -> byte
     """
     if not route.get("foreign_history") or not body:
         return body
+    from .request_body import RequestBody
+
+    if isinstance(body, RequestBody):
+        return _prepare_spooled_body(path, route, body)
     payload = json.loads(body)
     if not isinstance(payload, dict) or not isinstance(payload.get("input"), list):
         return body
@@ -512,6 +514,39 @@ def prepare_request_body(path: Path, route: Mapping, body: bytes | None) -> byte
         return body
     payload["input"] = result
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+
+
+def _prepare_spooled_body(path, route, body):
+    thread_id = str(route["thread_id"])
+    with _state_db(path) as db:
+        prepared = db.execute("SELECT prepared FROM copies WHERE id = ?", (thread_id,)).fetchone()
+        first = prepared and not prepared[0]
+        if first and body.field("previous_response_id"):
+            raise ValueError("副本仍引用原供应商的响应，请重新打开副本后再发送完整上下文。")
+        known = {row[0] for row in db.execute("SELECT digest FROM foreign_seals WHERE id = ?", (thread_id,))}
+
+        def transform(item):
+            if item is None:
+                return None
+            seal = item.get("encrypted_content")
+            digest = hashlib.sha256(seal.encode()).hexdigest() if isinstance(seal, str) and seal else ""
+            foreign = bool(digest and (first or digest in known))
+            kind = item.get("type")
+            if foreign and kind in {"compaction", "compaction_summary"}:
+                raise ValueError("该副本包含原供应商的加密压缩上下文，目标供应商无法解密。请先在原会话生成文字交接摘要，再用目标供应商新建会话。")
+            if first and kind == "item_reference":
+                raise ValueError("该副本仍引用原供应商的历史对象，请重新打开副本后再发送完整上下文。")
+            if not foreign:
+                return None
+            db.execute("INSERT OR IGNORE INTO foreign_seals VALUES (?, ?)", (thread_id, digest))
+            if kind == "reasoning" and not item.get("summary"):
+                return False
+            return item.without("encrypted_content")
+
+        result = body.map_input(transform)
+        if result is not body:
+            db.execute("UPDATE copies SET prepared = 1 WHERE id = ?", (thread_id,))
+    return result
 
 
 def validate_gateway_upstream(base_url: str, info: Mapping) -> None:

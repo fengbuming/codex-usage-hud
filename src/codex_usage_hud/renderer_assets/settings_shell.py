@@ -7426,6 +7426,9 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
         }
         modal.hidden = true;
         writeSettingsUiState(false, settingsActiveTab);
+        // Rebuilt on the next open. Release large hidden tables/forms now,
+        // after their draft and scroll state have been captured above.
+        modal.querySelector(".codex-usage-hud-settings-body")?.replaceChildren();
         ensureRestReminderCountdownTicker();
         stopSessionCleanupElapsedTicker();
         stopSessionCleanupSearchTimer();

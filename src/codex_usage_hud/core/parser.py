@@ -1246,6 +1246,7 @@ class JsonlSessionParser:
         *,
         session_id: str | None = None,
         sse_tracker: SseRequestStateMachine | None = None,
+        _record_cache=None,
     ) -> tuple[ParsedSession, JsonlTailState]:
         """Parse a session file by reading only bytes appended since ``state``."""
         if state is not None and state.usage_only:
@@ -1258,7 +1259,11 @@ class JsonlSessionParser:
             return snapshot, JsonlTailState(path=path, snapshot=snapshot)
 
         try:
-            tail = self.load_records_incremental(path, state)
+            tail = (
+                self.load_records_incremental(path, state)
+                if _record_cache is None
+                else self.load_records_incremental(path, state, _record_cache=_record_cache)
+            )
         except OSError as exc:
             snapshot.status = "missing"
             snapshot.error = f"Session file unavailable: {exc}"
@@ -1278,6 +1283,8 @@ class JsonlSessionParser:
         self,
         path: Path,
         state: JsonlTailState | None = None,
+        *,
+        _record_cache=None,
     ) -> JsonlTailState:
         """Read appended JSONL records without building a full session snapshot.
 
@@ -1295,6 +1302,10 @@ class JsonlSessionParser:
                 path=path, file_id=file_id,
                 usage_only=bool(state is not None and state.usage_only),
             )
+            if _record_cache is not None and not tail.usage_only:
+                from ..disk_sequence import DiskRecordSequence
+
+                tail.records = DiskRecordSequence(cache=_record_cache)
         self._read_tail_records(path, tail)
         tail.file_id = file_id
         tail.file_size = stat.st_size
@@ -1462,7 +1473,7 @@ class JsonlSessionParser:
                     text = stripped.decode("utf-8")
                 except UnicodeDecodeError:
                     continue
-                state.last_complete_line = "" if state.usage_only else text
+                state.last_complete_line = "" if state.usage_only or not isinstance(state.records, list) else text
                 try:
                     record = json.loads(text)
                 except json.JSONDecodeError:
@@ -1471,7 +1482,14 @@ class JsonlSessionParser:
                     continue
                 record["_line"] = state.line_count
                 record["_dt"] = parse_timestamp(record.get("timestamp"))
-                state.records.append(self._usage_record(record) if state.usage_only else record)
+                try:
+                    state.records.append(self._usage_record(record) if state.usage_only else record)
+                except OSError:
+                    # A temporary history write can fail (for example disk
+                    # full). Retry this same source row after storage recovers.
+                    state.offset -= len(raw_line)
+                    state.line_count -= 1
+                    raise
 
     def parse_records(
         self,
@@ -1589,7 +1607,8 @@ class JsonlSessionParser:
             for task in parsed.activity_tasks:
                 yield from task.request_history
 
-        if previous is not None:
+        if (previous is not None and isinstance(previous.activity_tasks, list)
+                and isinstance(previous.session_request_history, list)):
             for row in rows(previous):
                 for text in (row.activity_summary, row.copy_text, *row.activity_texts):
                     if len(text) >= 256:
