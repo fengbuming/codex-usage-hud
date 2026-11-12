@@ -412,7 +412,42 @@
     "Live memory varies with request and Codex page activity; samples are not a strict idle A/B comparison",
     "Total private commit remains around 178-201 MiB, above the 100 MB goal",
     "No packaging or macOS live validation",
-    "No desktop bubble or proxy source changes"
+    "No desktop bubble or proxy source changes",
+    "Large Codex-page CDP liveness delays recur from the pre-change baseline; retries recovered during this acceptance and the renderer bundle is unchanged.",
+    "A pre-existing intermittent Codex renderer CDP liveness issue recurred during this long task and auto-recovered; the renderer bundle is unchanged. Normal updates resumed after recovery."
   ],
-  "status": "Latest source reloaded and live acceptance passed; ready to commit. Total 100 MB goal remains unmet."
+  "status": "Source commit 1bde336 already contains the implementation. Live and focused function checks pass; intermittent pre-existing renderer liveness stalls recovered. The 100 MB total-HUD goal remains unmet.",
+  "renderer_liveness_observation": {
+    "during_this_acceptance": "Large Codex page updates occasionally exceeded the existing CDP liveness deadline. Automatic retries subsequently completed; renderer root remained bound and no source-level renderer errors appeared.",
+    "prechange_baseline_same_failure": {
+      "pid": 26148,
+      "times_local": [
+        "2026-11-12 11:56",
+        "2026-11-12 12:06",
+        "2026-11-12 13:56",
+        "2026-11-12 14:31"
+      ],
+      "failure": "approximately 1.5 s persistent CDP timeout"
+    },
+    "changed_renderer_source": false,
+    "status": "Known intermittent renderer/Codex-page responsiveness issue; observed before and after this Python-only change.",
+    "after_acceptance_heavy_page_load": {
+      "observed_local": "2026-11-12 17:00-17:28",
+      "failure": "Occasional persistent-CDP 1.5-1.6 s timeouts on 0.37-2.75 MiB updates; previous baseline PID 26148 showed the same timeout before this change.",
+      "recovery_local": "2026-11-12 17:25:45; normal renderer updates observed at 17:28",
+      "normal_updates_after_recovery": "approximately 0.19-0.23 s CDP round trip on approximately 0.84-0.92 MiB payloads",
+      "renderer_bundle_changed": false
+    }
+  },
+  "source_commit": "1bde336 perf: reuse closed session history during renderer updates",
+  "heavy_live_workload_observation": {
+    "at_local": "2026-11-12 17:28",
+    "process_private_commit_MiB": {
+      "main_pid_30012": 104.0,
+      "bubble_pid_37840": 111.4,
+      "proxy_pid_24888": 32.7,
+      "total": 248.1
+    },
+    "note": "Observed during the long active Codex session. The shorter earlier window sampled 178.47-201.00 MiB; neither is a matched baseline comparison."
+  }
 }
