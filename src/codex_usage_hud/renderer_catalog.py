@@ -77,16 +77,12 @@ def _normalize_reasoning_levels(
     for item in raw_levels:
         if not isinstance(item, dict):
             continue
-        effort = str(
-            item.get("effort") or item.get("reasoningEffort") or ""
-        ).strip()
+        effort = str(item.get("effort") or item.get("reasoningEffort") or "").strip()
         if effort:
             levels.append(
                 {
                     "reasoningEffort": effort,
-                    "description": str(
-                        item.get("description") or effort
-                    ).strip(),
+                    "description": str(item.get("description") or effort).strip(),
                 }
             )
     return levels
@@ -98,20 +94,14 @@ def normalize_catalog_model(model: object) -> dict[str, object] | None:
     visibility = str(model.get("visibility") or "list").strip().lower()
     if visibility not in {"", "list", "visible"}:
         return None
-    slug = str(
-        model.get("slug") or model.get("model") or model.get("id") or ""
-    ).strip()
+    slug = str(model.get("slug") or model.get("model") or model.get("id") or "").strip()
     if not slug:
         return None
     reasoning_efforts = _normalize_reasoning_levels(model)
     default_reasoning = str(
         model.get("default_reasoning_level")
         or model.get("defaultReasoningEffort")
-        or (
-            reasoning_efforts[0]["reasoningEffort"]
-            if reasoning_efforts
-            else "medium"
-        )
+        or (reasoning_efforts[0]["reasoningEffort"] if reasoning_efforts else "medium")
     ).strip()
     return {
         "model": slug,
@@ -175,7 +165,15 @@ def renderer_hud_script_with_model_catalog(
     )
 
 
-RENDERER_HUD_SCRIPT = renderer_hud_script_with_model_catalog([])
+RENDERER_HUD_SCRIPT: str  # Lazily provided by __getattr__, without a pinned copy.
+
+
+def __getattr__(name: str):
+    if name == "RENDERER_HUD_SCRIPT":
+        # Public compatibility value. Production installs a catalog-specific
+        # script, so retaining this second complete no-catalog copy is wasted.
+        return renderer_hud_script_with_model_catalog([])
+    raise AttributeError(name)
 
 
 __all__ = [

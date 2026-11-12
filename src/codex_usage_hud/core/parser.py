@@ -1090,6 +1090,7 @@ class JsonlTailState:
     last_complete_line: str = ""
     records: list[dict[str, Any]] = field(default_factory=list)
     snapshot: ParsedSession = field(default_factory=ParsedSession)
+    usage_only: bool = False
 
 
 class CostEstimator:
@@ -1247,6 +1248,9 @@ class JsonlSessionParser:
         sse_tracker: SseRequestStateMachine | None = None,
     ) -> tuple[ParsedSession, JsonlTailState]:
         """Parse a session file by reading only bytes appended since ``state``."""
+        if state is not None and state.usage_only:
+            # A budget projection cannot hydrate conversation/activity UI.
+            state = None
         snapshot = ParsedSession(session_path=path)
         if not path.exists():
             snapshot.status = "missing"
@@ -1264,7 +1268,8 @@ class JsonlSessionParser:
 
         snapshot.last_file_mtime = tail.last_file_mtime
         parsed = self.parse_records(
-            tail.records, path, session_id, sse_tracker, snapshot
+            tail.records, path, session_id, sse_tracker, snapshot,
+            _previous_snapshot=tail.snapshot,
         )
         tail.snapshot = parsed
         return parsed, tail
@@ -1286,12 +1291,66 @@ class JsonlSessionParser:
         if self._tail_state_matches(path, stat, file_id, state):
             tail = state
         else:
-            tail = JsonlTailState(path=path, file_id=file_id)
+            tail = JsonlTailState(
+                path=path, file_id=file_id,
+                usage_only=bool(state is not None and state.usage_only),
+            )
         self._read_tail_records(path, tail)
         tail.file_id = file_id
         tail.file_size = stat.st_size
         tail.last_file_mtime = stat.st_mtime
         return tail
+
+    def load_usage_records_incremental(
+        self, path: Path, state: JsonlTailState | None = None,
+    ) -> JsonlTailState:
+        """Keep billing/replay metadata, never tool output or prompt bodies.
+
+        Record positions/timestamps remain intact for fork replay boundaries.
+        This state belongs only to UsageSummaryCache; visible session parsing
+        keeps the full records and never mutates or shares this projection.
+        """
+        if state is None or not state.usage_only:
+            state = JsonlTailState(path=path, usage_only=True)
+        return self.load_records_incremental(path, state)
+
+    @staticmethod
+    def _usage_record(record: dict[str, Any]) -> dict[str, Any]:
+        payload = record.get("payload")
+        record_type = record.get("type")
+        if not isinstance(payload, Mapping):
+            payload = {}
+        if record_type == "session_meta":
+            # Preserve billing channel, source/fork identity and title fields.
+            kept = {key: payload[key] for key in (
+                "id", "thread_id", "threadId", "session_id", "sessionId",
+                "model_provider", "base_url", "baseUrl", "api_base", "cwd",
+                "title", "session_title", "name", "source", "forked_from_id",
+                "originator", "parent_thread_id", "parentThreadId",
+                "agent_nickname", "agent_role", "thread_source",
+            ) if key in payload}
+        elif record_type == "turn_context":
+            info = payload.get("info")
+            kept = {"model": payload.get("model"), "info": {
+                "model": info.get("model") if isinstance(info, Mapping) else None,
+            }}
+        elif record_type == "event_msg" and payload.get("type") == "token_count":
+            kept = {key: payload[key] for key in ("type", "info", "model") if key in payload}
+        else:
+            kept = {"type": payload.get("type")}
+            if (record_type == "response_item" and payload.get("type") == "message"
+                    and payload.get("role") == "user"):
+                text = message_text(payload)
+                # Legacy subagent attribution needs only the source identity,
+                # not a second retained copy of the delegation's full context.
+                if "<codex_delegation" in text:
+                    match = re.search(r"<source_thread_id>\s*([^<]+?)\s*</source_thread_id>", text, re.IGNORECASE)
+                    if match:
+                        kept.update(role="user", content=[{
+                            "type": "input_text", "text": "<codex_delegation><source_thread_id>"
+                            + match.group(1) + "</source_thread_id></codex_delegation>",
+                        }])
+        return {key: record[key] for key in ("type", "timestamp", "_line", "_dt") if key in record} | {"payload": kept}
 
     def parse_file_tail_preview(
         self,
@@ -1388,36 +1447,31 @@ class JsonlSessionParser:
     def _read_tail_records(self, path: Path, state: JsonlTailState) -> None:
         with path.open("rb") as handle:
             handle.seek(max(0, int(state.offset)))
-            chunk = handle.read()
-        if not chunk:
-            return
-
-        complete_length = (
-            len(chunk) if chunk.endswith(b"\n") else chunk.rfind(b"\n") + 1
-        )
-        if complete_length <= 0:
-            return
-        complete = chunk[:complete_length]
-        state.offset += complete_length
-        for raw_line in complete.splitlines(keepends=True):
-            state.line_count += 1
-            stripped = raw_line.strip()
-            if not stripped:
-                continue
-            try:
-                text = stripped.decode("utf-8")
-            except UnicodeDecodeError:
-                continue
-            state.last_complete_line = text
-            try:
-                record = json.loads(text)
-            except json.JSONDecodeError:
-                continue
-            if not isinstance(record, dict):
-                continue
-            record["_line"] = state.line_count
-            record["_dt"] = parse_timestamp(record.get("timestamp"))
-            state.records.append(record)
+            # Do not allocate the entire appended history, a complete-prefix
+            # copy, and splitline copies together on cold hydration. Preserve
+            # the byte cursor at the last complete newline for later appends.
+            for raw_line in handle:
+                if not raw_line.endswith(b"\n"):
+                    break
+                state.offset += len(raw_line)
+                state.line_count += 1
+                stripped = raw_line.strip()
+                if not stripped:
+                    continue
+                try:
+                    text = stripped.decode("utf-8")
+                except UnicodeDecodeError:
+                    continue
+                state.last_complete_line = "" if state.usage_only else text
+                try:
+                    record = json.loads(text)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(record, dict):
+                    continue
+                record["_line"] = state.line_count
+                record["_dt"] = parse_timestamp(record.get("timestamp"))
+                state.records.append(self._usage_record(record) if state.usage_only else record)
 
     def parse_records(
         self,
@@ -1428,6 +1482,7 @@ class JsonlSessionParser:
         snapshot: ParsedSession | None = None,
         *,
         include_session_history: bool = True,
+        _previous_snapshot: ParsedSession | None = None,
     ) -> ParsedSession:
         """Parse already loaded Codex JSONL records."""
         parsed = snapshot or ParsedSession(session_path=path)
@@ -1510,8 +1565,47 @@ class JsonlSessionParser:
                 parsed,
                 task_started_index,
             )
+            self._share_request_history_texts(parsed, _previous_snapshot)
         parsed.status = "parsed"
         return parsed
+
+    @staticmethod
+    def _share_request_history_texts(
+        snapshot: ParsedSession, previous: ParsedSession | None = None,
+    ) -> None:
+        """Share equal long strings, never mutable request/history objects.
+
+        Session-wide and task-local histories intentionally have independent
+        round numbering/state, but repeatedly formatting their full clipboard
+        and DOM-locate text created megabytes of identical strings. The pool
+        is local to this parse and cannot retain an evicted session. Seeding
+        from the previous snapshot also reuses unchanged text after appends.
+        """
+        strings: dict[str, str] = {}
+
+        def rows(parsed):
+            yield from parsed.session_request_history
+            yield from parsed.request_history
+            for task in parsed.activity_tasks:
+                yield from task.request_history
+
+        if previous is not None:
+            for row in rows(previous):
+                for text in (row.activity_summary, row.copy_text, *row.activity_texts):
+                    if len(text) >= 256:
+                        strings.setdefault(text, text)
+
+        def share(text):
+            return strings.setdefault(text, text) if len(text) >= 256 else text
+
+        visited: set[int] = set()
+        for row in rows(snapshot):
+            if id(row) in visited:
+                continue
+            visited.add(id(row))
+            row.activity_summary = share(row.activity_summary)
+            row.copy_text = share(row.copy_text)
+            row.activity_texts = tuple(share(text) for text in row.activity_texts)
 
     def apply_output_speed(
         self,

@@ -43,7 +43,7 @@ def _from_imports(path: Path, module: str) -> set[str]:
 
 def test_domains_do_not_import_compatibility_facades() -> None:
     forbidden = {"cli", "runtime_orchestration", "ui.renderer_hud"}
-    exempt = {SRC / "cli.py", SRC / "__main__.py", SRC / "ui/renderer_hud.py"}
+    exempt = {SRC / "cli.py", SRC / "__main__.py", SRC / "helper_entrypoint.py", SRC / "ui/renderer_hud.py"}
     violations: list[str] = []
     for path in SRC.rglob("*.py"):
         if path in exempt:
@@ -499,10 +499,10 @@ def test_public_import_inventory_matches_every_repository_consumer() -> None:
         inventory["rendererFacadeImports"]
     )
     pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
-    assert 'codex-hud = "codex_usage_hud.cli:main"' in pyproject
-    assert _from_imports(SRC / "__main__.py", "cli") == {"main"}
+    assert 'codex-hud = "codex_usage_hud.helper_entrypoint:main"' in pyproject
+    assert _from_imports(SRC / "__main__.py", "helper_entrypoint") == {"main"}
     build_exe = (ROOT / "tools/build_exe.py").read_text(encoding="utf-8")
-    assert 'from codex_usage_hud.cli import main' in build_exe
+    assert 'from codex_usage_hud.helper_entrypoint import main' in build_exe
 
 
 def test_package_resource_inventory_is_complete_for_current_assets() -> None:

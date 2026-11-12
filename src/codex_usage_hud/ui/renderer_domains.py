@@ -97,7 +97,13 @@ def _renderer_hud_script_with_model_catalog(
     return renderer_catalog.renderer_hud_script_with_model_catalog(catalog)
 
 
-RENDERER_HUD_SCRIPT = renderer_catalog.RENDERER_HUD_SCRIPT
+RENDERER_HUD_SCRIPT: str  # Compatibility export; not retained on normal import.
+
+
+def __getattr__(name: str):
+    if name == "RENDERER_HUD_SCRIPT":
+        return renderer_catalog.RENDERER_HUD_SCRIPT
+    raise AttributeError(name)
 
 
 def _payload_domains(payload: dict[str, object]) -> dict[str, dict[str, object]]:

@@ -53,7 +53,7 @@ desktop-overlay = [
 ]
 
 [project.scripts]
-codex-hud = "codex_usage_hud.cli:main"
+codex-hud = "codex_usage_hud.helper_entrypoint:main"
 
 [tool.hatch.version]
 path = "src/codex_usage_hud/__init__.py"

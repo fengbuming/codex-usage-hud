@@ -969,9 +969,11 @@ class UsageSummaryCache:
         parser_version = usage_parser_version(self._parser)
         incremental_record_reader = getattr(
             self._parser,
-            "load_records_incremental",
+            "load_usage_records_incremental",
             None,
         )
+        if not callable(incremental_record_reader):
+            incremental_record_reader = getattr(self._parser, "load_records_incremental", None)
         incremental_reader = getattr(self._parser, "parse_file_incremental", None)
         tail_state = None
         try:

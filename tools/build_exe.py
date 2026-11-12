@@ -137,7 +137,7 @@ def bootstrap_source() -> str:
     """Return the tiny top-level entry script used by PyInstaller."""
     return (
         '"""PyInstaller bootstrap for codex_usage_hud."""\n\n'
-        "from codex_usage_hud.cli import main\n\n\n"
+        "from codex_usage_hud.helper_entrypoint import main\n\n\n"
         'if __name__ == "__main__":\n'
         "    raise SystemExit(main())\n"
     )

@@ -1,6 +1,6 @@
 """Module entry point for ``python -m codex_usage_hud``."""
 
-from .cli import main
+from .helper_entrypoint import main
 
 
 if __name__ == "__main__":

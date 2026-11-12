@@ -26,7 +26,6 @@ from .platforms.cdp_probe import (
 )
 from .platforms.codex_theme import CodexThemeProbe, CodexThemeSnapshot
 from .renderer_catalog import (
-    RENDERER_HUD_SCRIPT,  # noqa: F401 - compatibility export
     model_catalog_payload as _renderer_model_catalog_payload,  # noqa: F401 - compatibility export
     renderer_hud_script_with_model_catalog as _renderer_hud_script_with_model_catalog,
 )
@@ -40,6 +39,14 @@ from .renderer_payload_builder import (
 from .renderer_payload_delta import RendererPayloadDeltaCache
 from .renderer_metrics import RendererMetricsWindow
 from .support_assets import support_qr_payload
+
+
+def __getattr__(name: str):
+    if name == "RENDERER_HUD_SCRIPT":
+        from . import renderer_catalog
+
+        return renderer_catalog.RENDERER_HUD_SCRIPT
+    raise AttributeError(name)
 
 
 DEFAULT_RENDERER_TIMEOUT_SECONDS = 0.45

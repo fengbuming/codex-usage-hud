@@ -1,0 +1,525 @@
+{
+  "memory_samples": [
+    {
+      "at": 1794445043.5737932,
+      "processes": [
+        {
+          "pid": 14104,
+          "private_commit": 130293760,
+          "working_set": 159424512,
+          "private_working_set": 125431808
+        },
+        {
+          "pid": 20052,
+          "private_commit": 67129344,
+          "working_set": 129523712,
+          "private_working_set": 60637184
+        },
+        {
+          "pid": 18840,
+          "private_commit": 21241856,
+          "working_set": 32067584,
+          "private_working_set": 18931712
+        },
+        {
+          "pid": 3824,
+          "private_commit": 39043072,
+          "working_set": 53354496,
+          "private_working_set": 35348480
+        }
+      ],
+      "totals": {
+        "private_commit": 257708032,
+        "working_set": 374370304,
+        "private_working_set": 240349184
+      }
+    },
+    {
+      "at": 1794445129.5793045,
+      "processes": [
+        {
+          "pid": 14104,
+          "private_commit": 150360064,
+          "working_set": 214044672,
+          "private_working_set": 146194432
+        },
+        {
+          "pid": 20052,
+          "private_commit": 70684672,
+          "working_set": 134197248,
+          "private_working_set": 64692224
+        },
+        {
+          "pid": 18840,
+          "private_commit": 21278720,
+          "working_set": 32120832,
+          "private_working_set": 18952192
+        },
+        {
+          "pid": 3824,
+          "private_commit": 35409920,
+          "working_set": 48709632,
+          "private_working_set": 30605312
+        }
+      ],
+      "totals": {
+        "private_commit": 277733376,
+        "working_set": 429072384,
+        "private_working_set": 260444160
+      }
+    },
+    {
+      "at": 1794445205.5207539,
+      "processes": [
+        {
+          "pid": 14104,
+          "private_commit": 131661824,
+          "working_set": 160014336,
+          "private_working_set": 125755392
+        },
+        {
+          "pid": 20052,
+          "private_commit": 71057408,
+          "working_set": 134905856,
+          "private_working_set": 64987136
+        },
+        {
+          "pid": 18840,
+          "private_commit": 21209088,
+          "working_set": 32083968,
+          "private_working_set": 18915328
+        },
+        {
+          "pid": 3824,
+          "private_commit": 34385920,
+          "working_set": 48660480,
+          "private_working_set": 30556160
+        }
+      ],
+      "totals": {
+        "private_commit": 258314240,
+        "working_set": 375664640,
+        "private_working_set": 240214016
+      }
+    },
+    {
+      "at": 1794445247.7717085,
+      "processes": [
+        {
+          "pid": 14104,
+          "private_commit": 150466560,
+          "working_set": 181010432,
+          "private_working_set": 146669568
+        },
+        {
+          "pid": 20052,
+          "private_commit": 71749632,
+          "working_set": 139923456,
+          "private_working_set": 65605632
+        },
+        {
+          "pid": 18840,
+          "private_commit": 21209088,
+          "working_set": 32083968,
+          "private_working_set": 18915328
+        },
+        {
+          "pid": 3824,
+          "private_commit": 35168256,
+          "working_set": 48754688,
+          "private_working_set": 30650368
+        }
+      ],
+      "totals": {
+        "private_commit": 278593536,
+        "working_set": 401772544,
+        "private_working_set": 261840896
+      }
+    }
+  ],
+  "initial_ui": {
+    "open": false,
+    "tab": "settings"
+  },
+  "searches": [
+    {
+      "query": "Linux.do & IDCFlare 回帖足迹",
+      "elapsed_ms": 470.49,
+      "ui": {
+        "open": true,
+        "tab": "storage"
+      },
+      "searchState": "completed",
+      "indexState": "ready",
+      "matches": 5,
+      "index": {
+        "coverage": "range_done(1m)",
+        "coverageBoundary": 1794444861.9446135,
+        "jobState": "idle",
+        "builtCount": 235,
+        "totalCount": 235,
+        "phase": "",
+        "startedAt": 1794444853918.0317,
+        "estimatedRemainingSec": 0,
+        "selectedRange": "1m",
+        "canExtend": true,
+        "error": "",
+        "enabled": true,
+        "diskBytes": 210867199
+      },
+      "errors": [],
+      "activityTasks": 12
+    },
+    {
+      "query": "session_search.py",
+      "elapsed_ms": 5873.41,
+      "ui": {
+        "open": true,
+        "tab": "storage"
+      },
+      "searchState": "completed",
+      "indexState": "ready",
+      "matches": 70,
+      "index": {
+        "coverage": "range_done(1m)",
+        "coverageBoundary": 1794444861.9446135,
+        "jobState": "idle",
+        "builtCount": 235,
+        "totalCount": 235,
+        "phase": "",
+        "startedAt": 1794444853918.0317,
+        "estimatedRemainingSec": 0,
+        "selectedRange": "1m",
+        "canExtend": true,
+        "error": "",
+        "enabled": true,
+        "diskBytes": 210867199
+      },
+      "errors": [],
+      "activityTasks": 12
+    },
+    {
+      "query": "renderer",
+      "elapsed_ms": 2614.97,
+      "ui": {
+        "open": true,
+        "tab": "storage"
+      },
+      "searchState": "completed",
+      "indexState": "ready",
+      "matches": 164,
+      "index": {
+        "coverage": "range_done(1m)",
+        "coverageBoundary": 1794444861.9446135,
+        "jobState": "idle",
+        "builtCount": 235,
+        "totalCount": 235,
+        "phase": "",
+        "startedAt": 1794444853918.0317,
+        "estimatedRemainingSec": 0,
+        "selectedRange": "1m",
+        "canExtend": true,
+        "error": "",
+        "enabled": true,
+        "diskBytes": 210867199
+      },
+      "errors": [],
+      "activityTasks": 12
+    },
+    {
+      "query": "Linux.do & IDCFlare 回帖足迹",
+      "elapsed_ms": 794.43,
+      "ui": {
+        "open": true,
+        "tab": "storage"
+      },
+      "searchState": "completed",
+      "indexState": "ready",
+      "matches": 5,
+      "index": {
+        "coverage": "range_done(1m)",
+        "coverageBoundary": 1794444861.9446135,
+        "jobState": "idle",
+        "builtCount": 235,
+        "totalCount": 235,
+        "phase": "",
+        "startedAt": 1794444853918.0317,
+        "estimatedRemainingSec": 0,
+        "selectedRange": "1m",
+        "canExtend": true,
+        "error": "",
+        "enabled": true,
+        "diskBytes": 210867199
+      },
+      "errors": [],
+      "activityTasks": 12
+    },
+    {
+      "query": "session_search.py",
+      "elapsed_ms": 274.77,
+      "ui": {
+        "open": true,
+        "tab": "storage"
+      },
+      "searchState": "completed",
+      "indexState": "ready",
+      "matches": 70,
+      "index": {
+        "coverage": "range_done(1m)",
+        "coverageBoundary": 1794444861.9446135,
+        "jobState": "idle",
+        "builtCount": 235,
+        "totalCount": 235,
+        "phase": "",
+        "startedAt": 1794444853918.0317,
+        "estimatedRemainingSec": 0,
+        "selectedRange": "1m",
+        "canExtend": true,
+        "error": "",
+        "enabled": true,
+        "diskBytes": 210867199
+      },
+      "errors": [],
+      "activityTasks": 12
+    },
+    {
+      "query": "扫描",
+      "elapsed_ms": 280.99,
+      "ui": {
+        "open": true,
+        "tab": "storage"
+      },
+      "searchState": "completed",
+      "indexState": "ready",
+      "matches": 260,
+      "index": {
+        "coverage": "range_done(1m)",
+        "coverageBoundary": 1794444861.9446135,
+        "jobState": "idle",
+        "builtCount": 235,
+        "totalCount": 235,
+        "phase": "",
+        "startedAt": 1794444853918.0317,
+        "estimatedRemainingSec": 0,
+        "selectedRange": "1m",
+        "canExtend": true,
+        "error": "",
+        "enabled": true,
+        "diskBytes": 210867199
+      },
+      "errors": [],
+      "activityTasks": 12
+    },
+    {
+      "query": "session_search.py",
+      "elapsed_ms": 274.73,
+      "ui": {
+        "open": true,
+        "tab": "storage"
+      },
+      "searchState": "completed",
+      "indexState": "ready",
+      "matches": 70,
+      "index": {
+        "coverage": "range_done(1m)",
+        "coverageBoundary": 1794444861.9446135,
+        "jobState": "idle",
+        "builtCount": 235,
+        "totalCount": 235,
+        "phase": "",
+        "startedAt": 1794444853918.0317,
+        "estimatedRemainingSec": 0,
+        "selectedRange": "1m",
+        "canExtend": true,
+        "error": "",
+        "enabled": true,
+        "diskBytes": 210867199
+      },
+      "errors": [],
+      "activityTasks": 12
+    },
+    {
+      "query": "<generated absent term>",
+      "elapsed_ms": 185.99,
+      "ui": {
+        "open": true,
+        "tab": "storage"
+      },
+      "searchState": "completed",
+      "indexState": "ready",
+      "matches": 0,
+      "index": {
+        "coverage": "range_done(1m)",
+        "coverageBoundary": 1794444861.9446135,
+        "jobState": "idle",
+        "builtCount": 235,
+        "totalCount": 235,
+        "phase": "",
+        "startedAt": 1794444853918.0317,
+        "estimatedRemainingSec": 0,
+        "selectedRange": "1m",
+        "canExtend": true,
+        "error": "",
+        "enabled": true,
+        "diskBytes": 210867199
+      },
+      "errors": [],
+      "activityTasks": 12
+    },
+    {
+      "query": "",
+      "elapsed_ms": 254.7,
+      "ui": {
+        "open": true,
+        "tab": "storage"
+      },
+      "searchState": "completed",
+      "indexState": "ready",
+      "matches": 882,
+      "index": {
+        "coverage": "range_done(1m)",
+        "coverageBoundary": 1794444861.9446135,
+        "jobState": "idle",
+        "builtCount": 235,
+        "totalCount": 235,
+        "phase": "",
+        "startedAt": 1794444853918.0317,
+        "estimatedRemainingSec": 0,
+        "selectedRange": "1m",
+        "canExtend": true,
+        "error": "",
+        "enabled": true,
+        "diskBytes": 210867199
+      },
+      "errors": [],
+      "activityTasks": 12
+    }
+  ],
+  "closed_at": 1794445129.307157,
+  "final_state": {
+    "ui": {
+      "open": false,
+      "tab": "storage"
+    },
+    "query": "",
+    "searchState": "completed",
+    "indexState": "ready",
+    "matches": 882,
+    "details": [],
+    "index": {
+      "coverage": "range_done(1m)",
+      "coverageBoundary": 1794444861.9446135,
+      "jobState": "idle",
+      "builtCount": 235,
+      "totalCount": 235,
+      "phase": "",
+      "startedAt": 1794444853918.0317,
+      "estimatedRemainingSec": 0,
+      "selectedRange": "1m",
+      "canExtend": true,
+      "error": "",
+      "enabled": true,
+      "diskBytes": 210867199
+    },
+    "errors": []
+  },
+  "main_runtime": {
+    "pid": 14104,
+    "at": 1794445247.6034048,
+    "helper_entry_loaded": true,
+    "renderer_manifest_loaded": true,
+    "renderer_root_loaded": true,
+    "pinned_default_scripts": [],
+    "settings_assembly_prefix_retained": false,
+    "usage": {
+      "entries": 77,
+      "tails": 4,
+      "projected_tails": 4,
+      "raw_last_line_bytes": 0
+    },
+    "snapshots": {
+      "cached_sessions": 4,
+      "request_rows": 991,
+      "long_copy_occurrences": 854,
+      "unique_copy_values": 427,
+      "unique_copy_objects": 427,
+      "full_ui_tail_states": true
+    },
+    "search": {
+      "ready": true,
+      "documents": 265,
+      "candidate_bytes": 0,
+      "candidate_count": 0,
+      "mapped": false,
+      "connection": false
+    }
+  },
+  "helper_runtime": {
+    "pid": 20052,
+    "at": 1794445043.6429687,
+    "helper_entry_loaded": true,
+    "renderer_manifest_loaded": false,
+    "renderer_root_loaded": false,
+    "pinned_default_scripts": [],
+    "settings_assembly_prefix_retained": false
+  },
+  "additional_checks": {
+    "linuxdo_documents": [
+      {
+        "id": "01a17c23-eea8-74e0-85e5-057ac6656d91",
+        "extracted_chars": 263534,
+        "has_idcflare": true,
+        "actual_files_valid": true
+      },
+      {
+        "id": "01a17c3e-f87b-7c23-9a25-5362f4d0104e",
+        "extracted_chars": 231808,
+        "has_idcflare": true,
+        "actual_files_valid": true
+      },
+      {
+        "id": "01a180a7-519c-7fc3-9da4-042d08fcd05c",
+        "extracted_chars": 505481,
+        "has_idcflare": true,
+        "actual_files_valid": true
+      },
+      {
+        "id": "01a18104-40ff-7a91-973d-1c09e29ffc59",
+        "extracted_chars": 53989,
+        "has_idcflare": true,
+        "actual_files_valid": true
+      }
+    ],
+    "overlay": {
+      "items": 2,
+      "state_age_s": 4.25,
+      "heartbeat_age_s": 0.84,
+      "revision": 114
+    },
+    "hud_errors": []
+  },
+  "focused_validation": {
+    "passed": 189,
+    "unittest_subtests": 7,
+    "compile": true,
+    "ruff": true,
+    "renderer_contract_update_check": true,
+    "diff_check": true
+  },
+  "measurement_notes": [
+    "Four HUD-owned Python processes only; embedded HUD shares Codex renderer and is not separately attributable.",
+    "Private commit is distinct from private resident working set; summed ordinary working sets include shared DLL pages.",
+    "Runtime probes inspect fields/identity counts; no forced GC, allocator trimming, reload or manual cache eviction.",
+    "Search elapsed_ms includes command queue, DOM handlers, publication and external observation, not isolated index latency.",
+    "The run observed initial UI outliers at 5.87s for filename and 2.61s for renderer; subsequent filename searches were 275ms. No persistent loading or search error.",
+    "Prior 523.2 MiB private / 456.4 MiB private resident observation used a different session workload on 2026-11-11; comparison is observational, not a strict controlled reduction."
+  ],
+  "acceptance": "passed; current memory/import/cache behavior and search availability verified; no end-to-end speedup claim",
+  "measured_date": "2026-11-12 Asia/Shanghai",
+  "process_roles": {
+    "14104": "main",
+    "20052": "desktop bubbles",
+    "18840": "legacy proxy 57323",
+    "3824": "gateway 57324"
+  }
+}

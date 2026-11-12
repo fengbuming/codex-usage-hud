@@ -10092,5 +10092,8 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
 """
 
 TEXT = _TEXT_PREFIX + SETTINGS_SUPPORT_PANELS + _TEXT_SUFFIX
+# These assembly-only strings otherwise remain alongside the complete TEXT
+# for the lifetime of the main process. Public renderer bytes stay identical.
+del _TEXT_PREFIX, _TEXT_SUFFIX
 
 __all__ = ["TEXT"]

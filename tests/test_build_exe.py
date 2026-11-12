@@ -21,7 +21,7 @@ class BootstrapSourceTests(unittest.TestCase):
     def test_bootstrap_entry_uses_package_main(self) -> None:
         source = build_exe.bootstrap_source()
 
-        self.assertIn("from codex_usage_hud.cli import main", source)
+        self.assertIn("from codex_usage_hud.helper_entrypoint import main", source)
         self.assertIn("raise SystemExit(main())", source)
         self.assertNotIn("from .cli import main", source)
 
