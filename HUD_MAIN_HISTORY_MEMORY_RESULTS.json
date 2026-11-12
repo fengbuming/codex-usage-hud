@@ -1,0 +1,418 @@
+{
+  "date": "2026-11-12",
+  "timezone": "Asia/Shanghai",
+  "baseline_commit": "a9e237f",
+  "reloads": [
+    {
+      "mode": "hud-only",
+      "pid": 27644,
+      "proxy_pid": 24888,
+      "renderer_ready": true
+    },
+    {
+      "mode": "hud-only",
+      "pid": 30012,
+      "proxy_pid": 24888,
+      "bubble_pid": 37840,
+      "renderer_ready": true
+    }
+  ],
+  "current_renderer": {
+    "root": true,
+    "version": "70",
+    "bound": "true",
+    "session": "01a1cd67-1423-7c22-ba77-0a9bf9f5b77e",
+    "requests": 7,
+    "tasks": 10,
+    "errors": [],
+    "health": {
+      "state": "ok",
+      "reason": "update-ok",
+      "detail": "CDP 连接正常",
+      "channelAvailable": true,
+      "consecutiveFailures": 0,
+      "healAttempts": 0,
+      "lastHealReason": "",
+      "transportState": "ok",
+      "followState": "confirmed",
+      "followReason": "confirmed",
+      "followStuckElapsedMs": 30672
+    }
+  },
+  "historical_task_navigation": {
+    "before": {
+      "idx": "14",
+      "ordinal": "Req 14/14"
+    },
+    "previous": {
+      "idx": "13",
+      "ordinal": "Req 13/14",
+      "pinned": "true"
+    },
+    "next": {
+      "idx": "14",
+      "ordinal": "Req 14/14",
+      "pinned": "true"
+    }
+  },
+  "live_history_projection": {
+    "session": "01a1cd67-1423-7c22-ba77-0a9bf9f5b77e",
+    "records": 920,
+    "record_type": "DiskRecordSequence",
+    "tasks": 10,
+    "history_type": "_TaskHistoryView",
+    "round_type": "_FrozenDiskSequence",
+    "rounds": 110,
+    "projection_class": "SelectedHistoryProjection",
+    "cursor_next": 920,
+    "closed_tasks": 9,
+    "round_storage_identity": 2772421192176,
+    "closed_storage_identity": 2772428608640
+  },
+  "memory_samples": [
+    {
+      "Time": "2026-11-12T16:10:07.3587938+08:00",
+      "Processes": [
+        {
+          "Id": 24888,
+          "PrivateBytes": 31961088,
+          "WorkingSetBytes": 34467840,
+          "CPU": 51.9375,
+          "Handles": 180
+        },
+        {
+          "Id": 30012,
+          "PrivateBytes": 82460672,
+          "WorkingSetBytes": 101294080,
+          "CPU": 35.3125,
+          "Handles": 333
+        },
+        {
+          "Id": 37840,
+          "PrivateBytes": 78352384,
+          "WorkingSetBytes": 144072704,
+          "CPU": 29.046875,
+          "Handles": 680
+        }
+      ]
+    },
+    {
+      "Time": "2026-11-12T16:10:10.3959359+08:00",
+      "Processes": [
+        {
+          "Id": 24888,
+          "PrivateBytes": 31961088,
+          "WorkingSetBytes": 34553856,
+          "CPU": 51.9375,
+          "Handles": 180
+        },
+        {
+          "Id": 30012,
+          "PrivateBytes": 76816384,
+          "WorkingSetBytes": 96665600,
+          "CPU": 37.25,
+          "Handles": 332
+        },
+        {
+          "Id": 37840,
+          "PrivateBytes": 78360576,
+          "WorkingSetBytes": 144240640,
+          "CPU": 29.703125,
+          "Handles": 680
+        }
+      ]
+    },
+    {
+      "Time": "2026-11-12T16:10:13.4389288+08:00",
+      "Processes": [
+        {
+          "Id": 24888,
+          "PrivateBytes": 32694272,
+          "WorkingSetBytes": 34639872,
+          "CPU": 51.9375,
+          "Handles": 171
+        },
+        {
+          "Id": 30012,
+          "PrivateBytes": 99774464,
+          "WorkingSetBytes": 119857152,
+          "CPU": 39.609375,
+          "Handles": 344
+        },
+        {
+          "Id": 37840,
+          "PrivateBytes": 78295040,
+          "WorkingSetBytes": 144216064,
+          "CPU": 30.171875,
+          "Handles": 676
+        }
+      ]
+    },
+    {
+      "Time": "2026-11-12T16:10:16.4663257+08:00",
+      "Processes": [
+        {
+          "Id": 24888,
+          "PrivateBytes": 32817152,
+          "WorkingSetBytes": 34766848,
+          "CPU": 51.96875,
+          "Handles": 171
+        },
+        {
+          "Id": 30012,
+          "PrivateBytes": 85729280,
+          "WorkingSetBytes": 105832448,
+          "CPU": 42.25,
+          "Handles": 338
+        },
+        {
+          "Id": 37840,
+          "PrivateBytes": 78303232,
+          "WorkingSetBytes": 144228352,
+          "CPU": 30.8125,
+          "Handles": 676
+        }
+      ]
+    },
+    {
+      "Time": "2026-11-12T16:10:19.5013954+08:00",
+      "Processes": [
+        {
+          "Id": 24888,
+          "PrivateBytes": 32882688,
+          "WorkingSetBytes": 35581952,
+          "CPU": 52.265625,
+          "Handles": 180
+        },
+        {
+          "Id": 30012,
+          "PrivateBytes": 87674880,
+          "WorkingSetBytes": 107917312,
+          "CPU": 45.0625,
+          "Handles": 334
+        },
+        {
+          "Id": 37840,
+          "PrivateBytes": 78303232,
+          "WorkingSetBytes": 144228352,
+          "CPU": 31.453125,
+          "Handles": 676
+        }
+      ]
+    },
+    {
+      "Time": "2026-11-12T16:10:22.5229546+08:00",
+      "Processes": [
+        {
+          "Id": 24888,
+          "PrivateBytes": 32882688,
+          "WorkingSetBytes": 35581952,
+          "CPU": 52.265625,
+          "Handles": 180
+        },
+        {
+          "Id": 30012,
+          "PrivateBytes": 87683072,
+          "WorkingSetBytes": 107962368,
+          "CPU": 45.125,
+          "Handles": 334
+        },
+        {
+          "Id": 37840,
+          "PrivateBytes": 78303232,
+          "WorkingSetBytes": 144228352,
+          "CPU": 31.875,
+          "Handles": 676
+        }
+      ]
+    }
+  ],
+  "main_private_commit_MiB_range": [
+    73.26,
+    95.15
+  ],
+  "total_hud_private_commit_MiB_range": [
+    178.47,
+    201.0
+  ],
+  "offline_comparison": {
+    "snapshot_parity": true,
+    "renderer_payload_parity": true,
+    "rows": [
+      {
+        "file": "many-tasks.jsonl",
+        "source_bytes": 12521591,
+        "cold_ms_before_after": [
+          586.88,
+          601.98
+        ],
+        "append_median_ms_before_after": [
+          491.1,
+          188.41
+        ],
+        "top3_peak_MiB_before_after": [
+          20.42,
+          4.47
+        ],
+        "hydration_peak_MiB_before_after": [
+          42.04,
+          4.95
+        ],
+        "snapshot_parity": true,
+        "renderer_payload_parity": true
+      },
+      {
+        "file": "real-0.jsonl",
+        "source_bytes": 6220459,
+        "cold_ms_before_after": [
+          463.69,
+          580.6
+        ],
+        "append_median_ms_before_after": [
+          674.35,
+          114.2
+        ],
+        "top3_peak_MiB_before_after": [
+          9.27,
+          3.96
+        ],
+        "hydration_peak_MiB_before_after": [
+          12.99,
+          3.44
+        ],
+        "snapshot_parity": true,
+        "renderer_payload_parity": true
+      },
+      {
+        "file": "real-1.jsonl",
+        "source_bytes": 7136581,
+        "cold_ms_before_after": [
+          1149.62,
+          786.51
+        ],
+        "append_median_ms_before_after": [
+          911.25,
+          137.95
+        ],
+        "top3_peak_MiB_before_after": [
+          9.79,
+          3.5
+        ],
+        "hydration_peak_MiB_before_after": [
+          15.62,
+          2.69
+        ],
+        "snapshot_parity": true,
+        "renderer_payload_parity": true
+      }
+    ]
+  },
+  "pre_change_ownership_probe": {
+    "at": 1794462520.408437,
+    "roots": {
+      "usage_insights_payload": 152492,
+      "session_cleanup_payload": 864969,
+      "session_cleanup_delta": 83726,
+      "session_index_payload": 1467,
+      "usage_cache": {
+        "_tail_state_sizes": 936,
+        "_last_parser_version": 85,
+        "_entries": 1183114,
+        "_dirty_entries": 216,
+        "_hydrated_scan_key": 533,
+        "_deleted_entries": 72956,
+        "_last_scan_key": 440,
+        "_observed_models_week_memo": 1906
+      },
+      "background_usage_runtime": {
+        "_notification_index": 5070,
+        "_provider_proxy_listener_token": 63,
+        "_diagnostic_codes": 216
+      },
+      "session_cleanup_manager": {
+        "transfer_ready_retry_delays": 240,
+        "_revision": 75,
+        "_items": 1066601,
+        "_search_state": 81405,
+        "_confirmations": 64,
+        "_operation": 981,
+        "_migrated_source_ids": 216,
+        "_pending_cleanup_source_ids": 216
+      },
+      "active_work_snapshot_cache": {
+        "_entries": 367220,
+        "_version": 177
+      },
+      "session_snapshot_cache": {
+        "_entries": 42788,
+        "_pending_session_ids": 64,
+        "_queued": 216
+      },
+      "sse_tracker": {
+        "session_id": 77,
+        "history": 56,
+        "pending_sse_events": 56
+      },
+      "session_resolver": {
+        "selection_source": 132
+      },
+      "active_session_tracker": {
+        "latest_session_id": 77,
+        "latest_title": 142,
+        "latest_source": 132,
+        "_mapped_title": 142,
+        "_title_cache_key": 294,
+        "_title_cache_value": 142,
+        "_thread_path_cache": 64,
+        "latest_event_source": 49,
+        "_renderer_session_id": 77,
+        "_renderer_raw_session_id": 83,
+        "_renderer_title": 142,
+        "_renderer_draft_text": 41,
+        "_renderer_collapsed_title": 386,
+        "_renderer_match_candidates": 56,
+        "_renderer_manual_candidate_id": 41,
+        "_follow_state": 50,
+        "_follow_reason": 50
+      }
+    },
+    "snapshots": [
+      {
+        "root": 4546,
+        "fields": {}
+      },
+      {
+        "root": 6077,
+        "fields": {}
+      },
+      {
+        "root": 31762,
+        "fields": {
+          "activity_steps": 27404
+        }
+      }
+    ],
+    "heap": {
+      "allocated": 21821296,
+      "committed": 55103488
+    },
+    "large_module_strings": 76433,
+    "project_modules": 138,
+    "notes": "Separate root measurements overlap and omit native storage; heap counters are separate layers."
+  },
+  "protected_bubble_files_unchanged": 23,
+  "validation": [
+    "116 selected-history, parser, disk-sequence, snapshot, request and projection tests plus 7 subtests passed",
+    "55 renderer presenter/projection, usage projection and delta tests passed; groups overlap",
+    "Two source reloads verified renderer readiness; latest source runs in PID 30012, existing proxy PID 24888 and bubble PID 37840 preserved",
+    "Live cursor at EOF, immutable projection reuse, 14-task navigation and renderer error state checked",
+    "Python compilation, Ruff, renderer contract check and git diff whitespace check passed"
+  ],
+  "limitations": [
+    "Live memory varies with request and Codex page activity; samples are not a strict idle A/B comparison",
+    "Total private commit remains around 178-201 MiB, above the 100 MB goal",
+    "No packaging or macOS live validation",
+    "No desktop bubble or proxy source changes"
+  ],
+  "status": "Latest source reloaded and live acceptance passed; ready to commit. Total 100 MB goal remains unmet."
+}

@@ -115,6 +115,9 @@ class DiskSequence(Sequence):
     def __len__(self):
         return len(self._offsets) - 1
 
+    def freeze(self):
+        return _FrozenDiskSequence(self, len(self))
+
     def __getitem__(self, index):
         if isinstance(index, slice):
             return _DiskSlice(self, range(len(self))[index])
@@ -160,6 +163,24 @@ class _DiskSlice(Sequence):
         return (self._owner[index] for index in self._indexes)
 
 
+class _FrozenDiskSequence(DiskSequence):
+    def __init__(self, owner, count):
+        self._owner = owner
+        self._count = count
+
+    def __len__(self):
+        return self._count
+
+    def __getitem__(self, index):
+        if isinstance(index, slice):
+            return _DiskSlice(self, range(len(self))[index])
+        if index < 0:
+            index += len(self)
+        if not 0 <= index < len(self):
+            raise IndexError(index)
+        return self._owner[index]
+
+
 class DiskRecordSequence(DiskSequence):
     """Keep small record headers hot; fetch large payload fields on demand.
 
@@ -171,6 +192,14 @@ Payload descriptors preserve every field and share the same total LRU budget.
     def __init__(self, *, cache):
         self._headers = DiskSequence(cache=cache)
         self._payloads = DiskSequence(cache=cache)
+        self._projection = None
+
+    def history_projection(self, parser):
+        from .core.selected_history import SelectedHistoryProjection
+
+        if self._projection is None or not self._projection.valid_for(parser):
+            self._projection = SelectedHistoryProjection(parser, self._headers._cache)
+        return self._projection
 
     def append(self, record):
         header = {key: value for key, value in record.items() if key != 'payload'}

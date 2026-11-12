@@ -8,7 +8,9 @@ imports while callers migrate to this owner.
 from __future__ import annotations
 
 import copy
+from collections.abc import Sequence
 from datetime import datetime
+from itertools import chain
 import json
 from pathlib import Path
 import time
@@ -377,10 +379,10 @@ def _connection_health_payload(
 def _observed_models(snapshot: ParsedSession) -> list[str]:
     seen: set[str] = set()
     models: list[str] = []
-    candidates = [snapshot.request.model]
-    candidates.extend(item.model for item in _task_rows(snapshot))
-    candidates.extend(
-        item.model for item in getattr(snapshot, "session_request_history", []) or []
+    candidates = chain(
+        (snapshot.request.model,),
+        (item.model for item in _task_rows(snapshot)),
+        (item.model for item in snapshot.session_request_history),
     )
     for model in candidates:
         text = str(model or "").strip()
@@ -587,7 +589,7 @@ def _activity_task_payload(
 
 
 def _activity_tasks(snapshot: ParsedSession) -> list[dict[str, object]]:
-    tasks = list(getattr(snapshot, "activity_tasks", []) or [])
+    tasks = getattr(snapshot, "activity_tasks", []) or []
     if not tasks:
         return []
     return [_activity_task_payload(snapshot, task) for task in tasks]
@@ -1341,50 +1343,37 @@ def _round_cost_value(item: RequestRound, fallback_model: str) -> tuple[float | 
     return cost, estimated
 
 
-def _session_round_rows(snapshot: ParsedSession) -> list[RequestRound]:
+def _session_round_rows(snapshot: ParsedSession) -> Sequence[RequestRound]:
     if _is_new_session_snapshot(snapshot) or _is_pending_session_snapshot(snapshot):
         return []
-    rows = list(getattr(snapshot, "session_request_history", []) or [])
+    rows = getattr(snapshot, "session_request_history", []) or []
     if rows:
         return rows
     return _task_rows(snapshot)
 
 
 def _top_heavy_rounds(snapshot: ParsedSession) -> list[dict[str, object]]:
-    task_rows: list[tuple[int, RequestRound]] = []
-    for task in getattr(snapshot, "activity_tasks", []) or []:
-        task_index = max(1, int(getattr(task, "index", 0) or 1))
-        task_rows.extend(
-            (task_index, item)
-            for item in (getattr(task, "request_history", []) or [])
-        )
-    if not task_rows:
-        fallback_task_index = max(1, int(getattr(snapshot, "task_index", 0) or 1))
-        task_rows = [
-            (fallback_task_index, item) for item in _session_round_rows(snapshot)
-        ]
-    ranked: list[tuple[float, int, int, RequestRound, float | None, bool]] = []
-    task_prompts = {
-        max(1, int(getattr(task, "index", 0) or 1)): str(
-            getattr(task, "prompt", "") or ""
-        ).strip()
-        for task in (getattr(snapshot, "activity_tasks", []) or [])
-    }
-    task_turn_ids = {
-        max(1, int(getattr(task, "index", 0) or 1)): str(
-            getattr(task, "turn_id", "") or ""
-        ).strip()
-        for task in (getattr(snapshot, "activity_tasks", []) or [])
-    }
-    task_rolled_back = {
-        max(1, int(getattr(task, "index", 0) or 1)): bool(
-            getattr(task, "rolled_back", False)
-        )
-        for task in (getattr(snapshot, "activity_tasks", []) or [])
-    }
     fallback_prompt = str(getattr(snapshot, "task_prompt", "") or "").strip()
     fallback_turn_id = str(getattr(snapshot, "task_turn_id", "") or "").strip()
-    for task_index, item in task_rows:
+
+    def rows():
+        found = False
+        for task in getattr(snapshot, "activity_tasks", []) or []:
+            task_index = max(1, int(getattr(task, "index", 0) or 1))
+            metadata = (task_index, str(task.prompt or "").strip() or fallback_prompt,
+                        str(task.turn_id or "").strip() or fallback_turn_id, bool(task.rolled_back))
+            for item in task.request_history:
+                found = True
+                yield item, metadata
+        if not found:
+            metadata = (max(1, int(snapshot.task_index or 1)), fallback_prompt, fallback_turn_id, False)
+            for item in _session_round_rows(snapshot):
+                yield item, metadata
+
+    # Keep only the three winners. A full sorted list would rehydrate and pin
+    # every large historical copy_text from the disk-backed sequences.
+    ranked = []
+    for item, metadata in rows():
         if not (
             item.status != "waiting"
             or item.total_tokens
@@ -1398,13 +1387,13 @@ def _top_heavy_rounds(snapshot: ParsedSession) -> list[dict[str, object]]:
         total = int(item.total_tokens or 0)
         if total <= 0:
             total = int(item.input_tokens or 0) + int(item.output_tokens or 0)
-        ranked.append(
-            (float(cost if cost is not None else -1.0), total, task_index, item, cost, estimated)
-        )
-    ranked.sort(key=lambda value: (value[0], value[1]), reverse=True)
+        ranked.append((float(cost if cost is not None else -1.0), total, item, cost, estimated, metadata))
+        ranked.sort(key=lambda value: (value[0], value[1]), reverse=True)
+        del ranked[3:]
 
     details: list[dict[str, object]] = []
-    for _score_cost, total, task_index, item, cost, estimated in ranked[:3]:
+    for _score_cost, total, item, cost, estimated, metadata in ranked:
+        task_index, task_prompt, task_turn_id, rolled_back = metadata
         duration = _round_duration_text(item)
         breakdown = (
             f"↑{_short_num(item.input_tokens)} "
@@ -1412,7 +1401,6 @@ def _top_heavy_rounds(snapshot: ParsedSession) -> list[dict[str, object]]:
             f"↓{_short_num(item.output_tokens)} "
             f"◇{_short_num(item.reasoning_tokens)}"
         )
-        rolled_back = bool(task_rolled_back.get(task_index, False))
         title = f"Req{task_index}-#{item.index} {_format_fixed_money(cost, estimated)} · ∑{_short_num(total)}"
         if rolled_back:
             title = f"{title} · 已回滚"
@@ -1442,8 +1430,8 @@ def _top_heavy_rounds(snapshot: ParsedSession) -> list[dict[str, object]]:
                 "copyText": copy_text,
                 "taskIndex": task_index,
                 "roundIndex": int(item.index),
-                "taskPrompt": task_prompts.get(task_index, "") or fallback_prompt,
-                "taskTurnId": task_turn_ids.get(task_index, "") or fallback_turn_id,
+                "taskPrompt": task_prompt,
+                "taskTurnId": task_turn_id,
                 "rolledBack": rolled_back,
                 "tooltip": tooltip,
                 "locateTexts": locate_texts,

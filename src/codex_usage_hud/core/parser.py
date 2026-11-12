@@ -1275,6 +1275,10 @@ class JsonlSessionParser:
         parsed = self.parse_records(
             tail.records, path, session_id, sse_tracker, snapshot,
             _previous_snapshot=tail.snapshot,
+            _history_projection=(
+                tail.records.history_projection(self)
+                if _record_cache is not None and hasattr(tail.records, "history_projection") else None
+            ),
         )
         tail.snapshot = parsed
         return parsed, tail
@@ -1501,6 +1505,7 @@ class JsonlSessionParser:
         *,
         include_session_history: bool = True,
         _previous_snapshot: ParsedSession | None = None,
+        _history_projection=None,
     ) -> ParsedSession:
         """Parse already loaded Codex JSONL records."""
         parsed = snapshot or ParsedSession(session_path=path)
@@ -1565,8 +1570,11 @@ class JsonlSessionParser:
             task_started_index,
         )
         if include_session_history:
-            parsed.session_request_history = self.reindex_rounds(
-                self.token_rounds_since_task(records, None)
+            parsed.session_request_history = (
+                _history_projection.session_rounds(self, records, parsed.model_provider)
+                if _history_projection is not None else self.reindex_rounds(
+                    self.token_rounds_since_task(records, None)
+                )
             )
         jsonl_rounds = self.token_rounds_since_task(records, task_started_index)
         parsed.request = self.build_request_tokens(
@@ -1578,12 +1586,11 @@ class JsonlSessionParser:
         )
         self.apply_output_speed(parsed, records)
         if include_session_history:
-            parsed.activity_tasks = self.build_task_history(
-                records,
-                parsed,
-                task_started_index,
-            )
-            self._share_request_history_texts(parsed, _previous_snapshot)
+            if _history_projection is not None:
+                parsed.activity_tasks = _history_projection.task_history(self, records, parsed, task_started_index)
+            else:
+                parsed.activity_tasks = self.build_task_history(records, parsed, task_started_index)
+                self._share_request_history_texts(parsed, _previous_snapshot)
         parsed.status = "parsed"
         return parsed
 
@@ -2227,74 +2234,72 @@ class JsonlSessionParser:
         latest_task_started_index: int | None,
     ) -> list[TaskHistory]:
         starts = self.task_start_indices(records)
-        if not starts:
-            return []
+        rolled_back = self.task_rolled_back_ordinals(records)
+        return [self.task_history_item(records, parsed, latest_task_started_index,
+                                       starts, ordinal, rolled_back)
+                for ordinal in range(1, len(starts) + 1)]
+
+    def task_history_item(self, records, parsed, latest_task_started_index,
+                          starts, ordinal, rolled_back_ordinals):
         count = len(starts)
-        rolled_back_ordinals = self.task_rolled_back_ordinals(records)
-        history: list[TaskHistory] = []
-        for ordinal, start in enumerate(starts, 1):
-            end = starts[ordinal] if ordinal < count else len(records)
-            segment_start = starts[ordinal - 2] if ordinal > 1 else 0
-            started_at = records[start].get("_dt")
-            completed_at, aborted_at = self.task_terminal_times(records, start, end)
-            rows = self.reindex_rounds(
-                self.token_rounds_since_task(records, start, end)
+        start = starts[ordinal - 1]
+        end = starts[ordinal] if ordinal < count else len(records)
+        segment_start = starts[ordinal - 2] if ordinal > 1 else 0
+        started_at = records[start].get("_dt")
+        completed_at, aborted_at = self.task_terminal_times(records, start, end)
+        is_latest = start == latest_task_started_index
+        if is_latest:
+            rows = list(parsed.request_history)
+            request = parsed.request
+            activity = parsed.activity
+            activity_steps = list(parsed.activity_steps)
+            last_output = parsed.last_output
+            slow = parsed.slow
+            last_event_time = parsed.last_event_time
+        else:
+            rows = self.reindex_rounds(self.token_rounds_since_task(records, start, end))
+            model = self.latest_model(records[start:end]) or parsed.request.model
+            request = self.request_from_task_rows(
+                rows,
+                model,
+                started_at,
+                completed_at,
+                aborted_at,
             )
-            is_latest = start == latest_task_started_index
-            if is_latest:
-                rows = list(parsed.request_history)
-                request = parsed.request
-                activity = parsed.activity
-                activity_steps = list(parsed.activity_steps)
-                last_output = parsed.last_output
-                slow = parsed.slow
-                last_event_time = parsed.last_event_time
-            else:
-                model = self.latest_model(records[start:end]) or parsed.request.model
-                request = self.request_from_task_rows(
-                    rows,
-                    model,
-                    started_at,
-                    completed_at,
-                    aborted_at,
-                )
-                activity = self.latest_activity(records[start:end])
-                activity_steps = self.activity_steps(records[start:end])
-                last_output = self.latest_output(records[start:end])
-                slow = self.slow_summary(
-                    records[start:end],
-                    records[end - 1].get("_dt") if end > start else started_at,
-                )
-                last_event_time = (
-                    records[end - 1].get("_dt") if end > start else started_at
-                )
-            history.append(
-                TaskHistory(
-                    index=ordinal,
-                    count=count,
-                    turn_id=self.task_turn_id(records, start),
-                    rolled_back=ordinal in rolled_back_ordinals,
-                    prompt=self.task_prompt_in_range(
-                        records,
-                        segment_start,
-                        start,
-                        end,
-                    ),
-                    started_at=started_at,
-                    completed_at=completed_at,
-                    aborted_at=aborted_at,
-                    final_answer_at=self.final_answer_in_range(records, start, end),
-                    last_event_time=last_event_time,
-                    request=request,
-                    request_history=rows,
-                    activity=activity,
-                    activity_steps=activity_steps,
-                    last_output=last_output,
-                    slow=slow,
-                    error=parsed.error if is_latest else "",
-                )
+            activity = self.latest_activity(records[start:end])
+            activity_steps = self.activity_steps(records[start:end])
+            last_output = self.latest_output(records[start:end])
+            slow = self.slow_summary(
+                records[start:end],
+                records[end - 1].get("_dt") if end > start else started_at,
             )
-        return history
+            last_event_time = (
+                records[end - 1].get("_dt") if end > start else started_at
+            )
+        return TaskHistory(
+            index=ordinal,
+            count=count,
+            turn_id=self.task_turn_id(records, start),
+            rolled_back=ordinal in rolled_back_ordinals,
+            prompt=self.task_prompt_in_range(
+                records,
+                segment_start,
+                start,
+                end,
+            ),
+            started_at=started_at,
+            completed_at=completed_at,
+            aborted_at=aborted_at,
+            final_answer_at=self.final_answer_in_range(records, start, end),
+            last_event_time=last_event_time,
+            request=request,
+            request_history=rows,
+            activity=activity,
+            activity_steps=activity_steps,
+            last_output=last_output,
+            slow=slow,
+            error=parsed.error if is_latest else "",
+        )
 
     def latest_task_completed_after(
         self,
@@ -2789,17 +2794,21 @@ class JsonlSessionParser:
         reasoning_tokens: int,
     ) -> tuple[str, str]:
         """Choose display and copy text for a request round."""
-        input_entries = [item for item in entries if item[0] == "input"]
-        output_entries = [item for item in entries if item[0] == "output"]
+        last_input = last_output = None
+        for item in entries:
+            if item[0] == "input":
+                last_input = item
+            elif item[0] == "output":
+                last_output = item
         output_weight = int(output_tokens or 0) + int(reasoning_tokens or 0)
         input_weight = max(0, int(input_tokens or 0) - int(cached_tokens or 0))
         preferred: tuple[str, str, str] | None = None
-        if output_weight >= input_weight and output_entries:
-            preferred = output_entries[-1]
-        elif input_entries:
-            preferred = input_entries[-1]
-        elif output_entries:
-            preferred = output_entries[-1]
+        if output_weight >= input_weight and last_output:
+            preferred = last_output
+        elif last_input:
+            preferred = last_input
+        elif last_output:
+            preferred = last_output
 
         if preferred is None:
             breakdown = (
@@ -2820,45 +2829,57 @@ class JsonlSessionParser:
         task_started_index: int | None,
         end_index: int | None = None,
     ) -> list[RequestRound]:
-        rounds: list[RequestRound] = []
-        model_provider = self.session_model_provider(records)
-        current_model = ""
-        start_index = 0 if task_started_index is None else task_started_index + 1
-        for record in records[:start_index]:
-            payload = record.get("payload") or {}
-            if (
-                record.get("type") == "turn_context"
-                and isinstance(payload, Mapping)
-                and payload.get("model")
-            ):
-                current_model = str(payload.get("model") or current_model)
+        return list(self.iter_token_rounds(records, task_started_index, end_index))
 
-        last_cumulative_total: int | None = None
-        seen_usage_keys: set[tuple[Any, ...]] = set()
-        round_activity_entries: list[tuple[str, str, str]] = []
-        round_started_at = (
-            records[task_started_index].get("_dt")
-            if task_started_index is not None
-            else None
+    def iter_token_rounds(
+        self,
+        records: Sequence[Mapping[str, Any]],
+        task_started_index: int | None,
+        end_index: int | None = None,
+        *, _cursor=None,
+    ):
+        # Local state keeps the legacy/bubble path's list behavior independent
+        # of the selected-session disk-history owner.
+        from types import SimpleNamespace
+
+        cursor = _cursor if _cursor is not None else SimpleNamespace(
+            model="", last_cumulative_total=None, seen_usage_keys=set(),
+            entries=[], started_at=None, count=0, next_record=None,
         )
-        for record in records[start_index:end_index]:
+        model_provider = self.session_model_provider(records)
+        start_index = 0 if task_started_index is None else task_started_index + 1
+        if cursor.next_record is None:
+            for record in records[:start_index]:
+                payload = record.get("payload") or {}
+                if (
+                    record.get("type") == "turn_context"
+                    and isinstance(payload, Mapping)
+                    and payload.get("model")
+                ):
+                    cursor.model = str(payload.get("model") or cursor.model)
+
+            cursor.started_at = records[task_started_index].get("_dt") if task_started_index is not None else None
+            cursor.next_record = start_index
+        for record_index in range(cursor.next_record, len(records) if end_index is None else end_index):
+            record = records[record_index]
+            cursor.next_record = record_index + 1
             payload = record.get("payload") or {}
             if not isinstance(payload, Mapping):
                 continue
             record_type = record.get("type")
             if record_type == "turn_context":
-                current_model = str(payload.get("model") or current_model)
+                cursor.model = str(payload.get("model") or cursor.model)
                 continue
 
             timestamp = record.get("_dt")
-            if round_started_at is None:
-                round_started_at = timestamp
+            if cursor.started_at is None:
+                cursor.started_at = timestamp
             if record_type != "event_msg" or payload.get("type") != "token_count":
                 entry = self.round_activity_entry(
                     record_type, payload.get("type"), payload
                 )
                 if entry is not None:
-                    round_activity_entries.append(entry)
+                    cursor.entries.append(entry)
                 continue
 
             info = payload.get("info") or {}
@@ -2880,24 +2901,17 @@ class JsonlSessionParser:
             cumulative_total = _as_int(cumulative.get("total_tokens"))
             if not (input_tokens or output_tokens or reasoning_tokens):
                 continue
-            activity_summary, copy_text = self.round_activity_summary(
-                round_activity_entries,
-                input_tokens,
-                cached_tokens,
-                output_tokens,
-                reasoning_tokens,
-            )
             if cumulative_total:
                 if (
-                    last_cumulative_total is not None
-                    and cumulative_total <= last_cumulative_total
+                    cursor.last_cumulative_total is not None
+                    and cumulative_total <= cursor.last_cumulative_total
                 ):
-                    round_activity_entries = []
+                    cursor.entries = cursor.entries_factory() if _cursor is not None else []
                     continue
-                last_cumulative_total = cumulative_total
+                cursor.last_cumulative_total = cumulative_total
             else:
                 usage_key = (
-                    current_model,
+                    cursor.model,
                     input_tokens,
                     cached_tokens,
                     output_tokens,
@@ -2905,47 +2919,54 @@ class JsonlSessionParser:
                     total_tokens,
                     timestamp,
                 )
-                if usage_key in seen_usage_keys:
-                    round_activity_entries = []
+                if usage_key in cursor.seen_usage_keys:
+                    cursor.entries = cursor.entries_factory() if _cursor is not None else []
                     continue
-                seen_usage_keys.add(usage_key)
+                cursor.seen_usage_keys.add(usage_key)
 
+            activity_summary, copy_text = self.round_activity_summary(
+                cursor.entries,
+                input_tokens,
+                cached_tokens,
+                output_tokens,
+                reasoning_tokens,
+            )
             round_activity_texts: list[str] = []
-            for _side, _label, entry_text in round_activity_entries:
+            for _side, _label, entry_text in cursor.entries:
                 cleaned = str(entry_text or "").strip()
                 if cleaned and cleaned not in round_activity_texts:
                     round_activity_texts.append(cleaned)
-            rounds.append(
-                RequestRound(
-                    index=len(rounds) + 1,
-                    status="confirmed",
-                    model=current_model,
-                    input_tokens=input_tokens,
-                    cached_tokens=cached_tokens,
+                    if len(round_activity_texts) == 8:
+                        break
+            cursor.count += 1
+            yield RequestRound(
+                index=cursor.count,
+                status="confirmed",
+                model=cursor.model,
+                input_tokens=input_tokens,
+                cached_tokens=cached_tokens,
+                cache_write_tokens=cache_write_tokens,
+                output_tokens=output_tokens,
+                reasoning_tokens=reasoning_tokens,
+                total_tokens=total_tokens,
+                estimated=False,
+                cost_usd=self.cost_estimator.calculate(
+                    cursor.model,
+                    input_tokens,
+                    cached_tokens,
+                    output_tokens,
+                    reasoning_tokens,
                     cache_write_tokens=cache_write_tokens,
-                    output_tokens=output_tokens,
-                    reasoning_tokens=reasoning_tokens,
-                    total_tokens=total_tokens,
-                    estimated=False,
-                    cost_usd=self.cost_estimator.calculate(
-                        current_model,
-                        input_tokens,
-                        cached_tokens,
-                        output_tokens,
-                        reasoning_tokens,
-                        cache_write_tokens=cache_write_tokens,
-                        provider=model_provider,
-                    ),
-                    started_at=round_started_at,
-                    completed_at=timestamp,
-                    activity_summary=activity_summary,
-                    copy_text=copy_text,
-                    activity_texts=tuple(round_activity_texts[:8]),
-                )
+                    provider=model_provider,
+                ),
+                started_at=cursor.started_at,
+                completed_at=timestamp,
+                activity_summary=activity_summary,
+                copy_text=copy_text,
+                activity_texts=tuple(round_activity_texts[:8]),
             )
-            round_started_at = timestamp
-            round_activity_entries = []
-        return rounds
+            cursor.started_at = timestamp
+            cursor.entries = cursor.entries_factory() if _cursor is not None else []
 
     def _legacy_latest_activity(self, records: Sequence[Mapping[str, Any]]) -> Activity:
         latest_token_count: Activity | None = None
