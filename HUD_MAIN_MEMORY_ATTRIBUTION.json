@@ -1,0 +1,3987 @@
+{
+  "captured_at_utc": "2026-11-17T13:52:21.746078+00:00",
+  "pid": 36468,
+  "stale_diagnostic_type_cache_entries_removed": 0,
+  "gc_before_census": 4435,
+  "baseline": {
+    "private_bytes": 109932544,
+    "working_set_bytes": 129339392,
+    "paged_pool_bytes": 232336,
+    "nonpaged_pool_bytes": 41144
+  },
+  "after_vm_census": {
+    "private_bytes": 112037888,
+    "working_set_bytes": 131444736,
+    "paged_pool_bytes": 232400,
+    "nonpaged_pool_bytes": 41416
+  },
+  "allocator": {
+    "arenas": 45,
+    "highwater_arenas": 55,
+    "used_blocks": 32026336,
+    "available_blocks": 4958672,
+    "unused_pools": 9928704,
+    "pool_headers": 109152,
+    "quantization": 163056,
+    "alignment": 0
+  },
+  "heaps": [
+    {
+      "allocated": 34851284,
+      "committed": 62423040,
+      "reserved": 76951552
+    },
+    {
+      "allocated": 0,
+      "committed": 4096,
+      "reserved": 65536
+    },
+    {
+      "allocated": 36790,
+      "committed": 94208,
+      "reserved": 1912832
+    },
+    {
+      "allocated": 288,
+      "committed": 8192,
+      "reserved": 65536
+    },
+    {
+      "allocated": 384,
+      "committed": 8192,
+      "reserved": 65536
+    }
+  ],
+  "heap_walks": [
+    {
+      "entries": 67141,
+      "busy_bytes": 30551400,
+      "allocation_count": 12
+    },
+    {
+      "entries": 3,
+      "busy_bytes": 0,
+      "allocation_count": 1
+    },
+    {
+      "entries": 72,
+      "busy_bytes": 36790,
+      "allocation_count": 3
+    },
+    {
+      "entries": 7,
+      "busy_bytes": 288,
+      "allocation_count": 1
+    },
+    {
+      "entries": 11,
+      "busy_bytes": 384,
+      "allocation_count": 1
+    }
+  ],
+  "stack_count": 25,
+  "ledger": {
+    "pymalloc_arenas": 47185920,
+    "native_heap_committed": 57610240,
+    "thread_stack_commit": 1060864,
+    "python_interpreter_frame_stacks": 393216,
+    "thread_environment_blocks": 208896,
+    "other_private_virtual": 36864,
+    "image_and_mapping_cow_commit": 2596864,
+    "address_translation_commit": 843776,
+    "python_large_container_backing": 2101248
+  },
+  "vm_commit_sum": 111194112,
+  "vm_query_failures": [],
+  "other_vm_regions": [
+    {
+      "base": 2147352576,
+      "size": 4096,
+      "commit": 4096,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 2
+    },
+    {
+      "base": 2147360768,
+      "size": 4096,
+      "commit": 4096,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 2
+    },
+    {
+      "base": 3146665361408,
+      "size": 8192,
+      "commit": 8192,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 3146714710016,
+      "size": 4096,
+      "commit": 4096,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 64
+    },
+    {
+      "base": 3146731880448,
+      "size": 1048576,
+      "commit": 4096,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 3146733125632,
+      "size": 4096,
+      "commit": 4096,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 3146733191168,
+      "size": 4096,
+      "commit": 4096,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 140694433759232,
+      "size": 33558528,
+      "commit": 4096,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    }
+  ],
+  "counter_minus_vm_commit": 843776,
+  "fully_committed_one_mib_allocations": 45,
+  "image_cow": [
+    {
+      "image": "python314.dll",
+      "commit": 1126400
+    },
+    {
+      "image": "shell32.dll",
+      "commit": 77824
+    },
+    {
+      "image": "windows.storage.dll",
+      "commit": 69632
+    },
+    {
+      "image": "msvcp_win.dll",
+      "commit": 61440
+    },
+    {
+      "image": "KernelBase.dll",
+      "commit": 57344
+    },
+    {
+      "image": "ntdll.dll",
+      "commit": 53248
+    },
+    {
+      "image": "crypt32.dll",
+      "commit": 45056
+    },
+    {
+      "image": "_ssl.pyd",
+      "commit": 40960
+    },
+    {
+      "image": "SHCore.dll",
+      "commit": 40960
+    },
+    {
+      "image": "combase.dll",
+      "commit": 40960
+    },
+    {
+      "image": "gdi32full.dll",
+      "commit": 36864
+    },
+    {
+      "image": "advapi32.dll",
+      "commit": 36864
+    },
+    {
+      "image": "libcrypto-3.dll",
+      "commit": 32768
+    },
+    {
+      "image": "user32.dll",
+      "commit": 32768
+    },
+    {
+      "image": "libssl-3.dll",
+      "commit": 28672
+    },
+    {
+      "image": "WindowsCodecs.dll",
+      "commit": 28672
+    },
+    {
+      "image": "dwmapi.dll",
+      "commit": 28672
+    },
+    {
+      "image": "kernel32.dll",
+      "commit": 28672
+    },
+    {
+      "image": "sechost.dll",
+      "commit": 28672
+    },
+    {
+      "image": "sqlite3.dll",
+      "commit": 24576
+    },
+    {
+      "image": "uxtheme.dll",
+      "commit": 24576
+    },
+    {
+      "image": "winsta.dll",
+      "commit": 24576
+    },
+    {
+      "image": "ole32.dll",
+      "commit": 24576
+    },
+    {
+      "image": "oleaut32.dll",
+      "commit": 24576
+    },
+    {
+      "image": "msvcrt.dll",
+      "commit": 24576
+    },
+    {
+      "image": "dnsapi.dll",
+      "commit": 20480
+    },
+    {
+      "image": "sspicli.dll",
+      "commit": 20480
+    },
+    {
+      "image": "ucrtbase.dll",
+      "commit": 20480
+    },
+    {
+      "image": "rpcrt4.dll",
+      "commit": 20480
+    },
+    {
+      "image": "ws2_32.dll",
+      "commit": 20480
+    },
+    {
+      "image": "shlwapi.dll",
+      "commit": 20480
+    },
+    {
+      "image": "_ctypes.pyd",
+      "commit": 16384
+    },
+    {
+      "image": "oleacc.dll",
+      "commit": 16384
+    },
+    {
+      "image": "_decimal.pyd",
+      "commit": 16384
+    },
+    {
+      "image": "kernel.appcore.dll",
+      "commit": 16384
+    },
+    {
+      "image": "mswsock.dll",
+      "commit": 16384
+    },
+    {
+      "image": "gdi32.dll",
+      "commit": 16384
+    },
+    {
+      "image": "wshbth.dll",
+      "commit": 12288
+    },
+    {
+      "image": "winrnr.dll",
+      "commit": 12288
+    },
+    {
+      "image": "unicodedata.pyd",
+      "commit": 12288
+    },
+    {
+      "image": "NapiNSP.dll",
+      "commit": 12288
+    },
+    {
+      "image": "_sqlite3.pyd",
+      "commit": 12288
+    },
+    {
+      "image": "IconCodecService.dll",
+      "commit": 12288
+    },
+    {
+      "image": "nlansp_c.dll",
+      "commit": 12288
+    },
+    {
+      "image": "FWPUCLNT.DLL",
+      "commit": 12288
+    },
+    {
+      "image": "rasadhlp.dll",
+      "commit": 12288
+    },
+    {
+      "image": "_socket.pyd",
+      "commit": 12288
+    },
+    {
+      "image": "_hashlib.pyd",
+      "commit": 12288
+    },
+    {
+      "image": "_zstd.pyd",
+      "commit": 12288
+    },
+    {
+      "image": "wtsapi32.dll",
+      "commit": 12288
+    },
+    {
+      "image": "IPHLPAPI.DLL",
+      "commit": 12288
+    },
+    {
+      "image": "bcrypt.dll",
+      "commit": 12288
+    },
+    {
+      "image": "bcryptprimitives.dll",
+      "commit": 12288
+    },
+    {
+      "image": "imm32.dll",
+      "commit": 12288
+    },
+    {
+      "image": "pythonw.exe",
+      "commit": 8192
+    },
+    {
+      "image": "_multiprocessing.pyd",
+      "commit": 8192
+    },
+    {
+      "image": "select.pyd",
+      "commit": 8192
+    },
+    {
+      "image": "libffi-8.dll",
+      "commit": 8192
+    },
+    {
+      "image": "_queue.pyd",
+      "commit": 8192
+    },
+    {
+      "image": "_uuid.pyd",
+      "commit": 8192
+    },
+    {
+      "image": "_lzma.pyd",
+      "commit": 8192
+    },
+    {
+      "image": "_bz2.pyd",
+      "commit": 8192
+    },
+    {
+      "image": "vcruntime140.dll",
+      "commit": 8192
+    },
+    {
+      "image": "dsparse.dll",
+      "commit": 8192
+    },
+    {
+      "image": "msasn1.dll",
+      "commit": 8192
+    },
+    {
+      "image": "version.dll",
+      "commit": 8192
+    },
+    {
+      "image": "win32u.dll",
+      "commit": 8192
+    },
+    {
+      "image": "psapi.dll",
+      "commit": 8192
+    },
+    {
+      "image": "nsi.dll",
+      "commit": 8192
+    }
+  ],
+  "sqlite": {
+    "memory": {
+      "current": 5109000,
+      "peak": 8413128,
+      "result": 0
+    },
+    "pagecache_overflow": {
+      "current": 3349192,
+      "peak": 7025976,
+      "result": 0
+    },
+    "malloc_size": {
+      "current": 0,
+      "peak": 1294044,
+      "result": 0
+    }
+  },
+  "python_module_count": 398,
+  "tracemalloc_active": false,
+  "external_vm_census": {
+    "before": {
+      "private_bytes": 112037888,
+      "working_set_bytes": 131444736,
+      "paged_pool_bytes": 232400,
+      "nonpaged_pool_bytes": 41416
+    },
+    "after": {
+      "private_bytes": 112037888,
+      "working_set_bytes": 131444736,
+      "paged_pool_bytes": 232400,
+      "nonpaged_pool_bytes": 41416
+    },
+    "virtualquery_private_commit": 108597248,
+    "query_failures": [],
+    "committed_page_table_span_counts": {
+      "21": 166,
+      "30": 8,
+      "39": 4
+    },
+    "nonzero_commit_translation_pages": 206
+  },
+  "address_translation_method": "x64 2 MiB/1 GiB span coverage of allocations with nonzero RegionInfo.CommitSize; independently checked against process counter",
+  "python_owners": {
+    "user_config": {
+      "bytes": 247132,
+      "objects": 3391,
+      "top_types": [
+        [
+          "builtins.str",
+          77388
+        ],
+        [
+          "decimal.Decimal",
+          67200
+        ],
+        [
+          "builtins.dict",
+          57528
+        ],
+        [
+          "datetime.datetime",
+          16128
+        ],
+        [
+          "builtins.float",
+          10992
+        ],
+        [
+          "codex_usage_hud.pricing.PriceAuditRecord",
+          5376
+        ],
+        [
+          "codex_usage_hud.pricing.PriceVersion",
+          5376
+        ],
+        [
+          "codex_usage_hud.config.ModelPrice",
+          3936
+        ]
+      ]
+    },
+    "provider_registry": {
+      "bytes": 17415,
+      "objects": 125,
+      "top_types": [
+        [
+          "builtins.str",
+          14307
+        ],
+        [
+          "builtins.dict",
+          2168
+        ],
+        [
+          "builtins.tuple",
+          360
+        ],
+        [
+          "codex_usage_hud.provider_registry.ProviderRegistryEntry",
+          336
+        ],
+        [
+          "builtins.int",
+          196
+        ],
+        [
+          "codex_usage_hud.provider_registry.ProviderRegistry",
+          48
+        ]
+      ]
+    },
+    "parser": {
+      "bytes": 183521,
+      "objects": 2698,
+      "top_types": [
+        [
+          "builtins.dict",
+          93544
+        ],
+        [
+          "builtins.str",
+          44385
+        ],
+        [
+          "builtins.float",
+          23088
+        ],
+        [
+          "datetime.datetime",
+          10752
+        ],
+        [
+          "codex_usage_hud.core.calculator._PriceProfile",
+          9600
+        ],
+        [
+          "builtins.list",
+          1992
+        ],
+        [
+          "codex_usage_hud.core.parser.JsonlSessionParser",
+          48
+        ],
+        [
+          "codex_usage_hud.core.parser.CostEstimator",
+          48
+        ]
+      ]
+    },
+    "pre_send_estimator": {
+      "bytes": 0,
+      "objects": 0,
+      "top_types": []
+    },
+    "runtime_events": {
+      "bytes": 2174878,
+      "objects": 21597,
+      "top_types": [
+        [
+          "builtins.dict",
+          1019440
+        ],
+        [
+          "builtins.str",
+          583374
+        ],
+        [
+          "builtins.list",
+          327488
+        ],
+        [
+          "codex_usage_hud.core.runtime_events.RuntimeEvent",
+          160800
+        ],
+        [
+          "builtins.float",
+          80400
+        ],
+        [
+          "collections.deque",
+          2280
+        ],
+        [
+          "builtins.builtin_function_or_method",
+          504
+        ],
+        [
+          "_thread.lock",
+          168
+        ]
+      ]
+    },
+    "runtime_errors": {
+      "bytes": 917,
+      "objects": 8,
+      "top_types": [
+        [
+          "builtins.dict",
+          544
+        ],
+        [
+          "builtins.function",
+          168
+        ],
+        [
+          "builtins.str",
+          157
+        ],
+        [
+          "codex_usage_hud.core.runtime_errors.RuntimeErrorRegistry",
+          48
+        ]
+      ]
+    },
+    "session_snapshot_cache": {
+      "bytes": 4174435,
+      "objects": 2525,
+      "top_types": [
+        [
+          "builtins.str",
+          1999335
+        ],
+        [
+          "_io.BufferedRandom",
+          1837360
+        ],
+        [
+          "_io.BufferedWriter",
+          131240
+        ],
+        [
+          "collections.OrderedDict",
+          55384
+        ],
+        [
+          "array.array",
+          46312
+        ],
+        [
+          "builtins.dict",
+          32136
+        ],
+        [
+          "builtins.tuple",
+          14088
+        ],
+        [
+          "builtins.int",
+          13124
+        ]
+      ]
+    },
+    "active_work_snapshot_cache": {
+      "bytes": 486103,
+      "objects": 4726,
+      "top_types": [
+        [
+          "builtins.str",
+          253115
+        ],
+        [
+          "builtins.dict",
+          120888
+        ],
+        [
+          "builtins.int",
+          31460
+        ],
+        [
+          "datetime.datetime",
+          24864
+        ],
+        [
+          "builtins.list",
+          16320
+        ],
+        [
+          "codex_usage_hud.core.parser.ActivityStep",
+          10800
+        ],
+        [
+          "codex_usage_hud.core.parser.RequestRound",
+          7920
+        ],
+        [
+          "builtins.float",
+          5352
+        ]
+      ]
+    },
+    "usage_cache": {
+      "bytes": 1152802,
+      "objects": 13691,
+      "top_types": [
+        [
+          "builtins.dict",
+          643168
+        ],
+        [
+          "builtins.str",
+          291386
+        ],
+        [
+          "builtins.int",
+          92952
+        ],
+        [
+          "datetime.datetime",
+          51984
+        ],
+        [
+          "codex_usage_hud.core.parser.UsageSummary",
+          22032
+        ],
+        [
+          "builtins.list",
+          19608
+        ],
+        [
+          "builtins.float",
+          10176
+        ],
+        [
+          "codex_usage_hud.usage_contributions.UsageInsightAggregate",
+          7392
+        ]
+      ]
+    },
+    "session_cleanup_manager": {
+      "bytes": 2352361,
+      "objects": 24039,
+      "top_types": [
+        [
+          "builtins.str",
+          1573390
+        ],
+        [
+          "builtins.dict",
+          258224
+        ],
+        [
+          "builtins.list",
+          215384
+        ],
+        [
+          "pathlib.WindowsPath",
+          102544
+        ],
+        [
+          "builtins.tuple",
+          71192
+        ],
+        [
+          "builtins.bytes",
+          55531
+        ],
+        [
+          "codex_usage_hud.core.session_cleanup.SessionCleanupItem",
+          43248
+        ],
+        [
+          "builtins.int",
+          20056
+        ]
+      ]
+    },
+    "session_index_warm_job": {
+      "bytes": 5178,
+      "objects": 61,
+      "top_types": [
+        [
+          "builtins.str",
+          1874
+        ],
+        [
+          "builtins.dict",
+          816
+        ],
+        [
+          "collections.deque",
+          760
+        ],
+        [
+          "builtins.function",
+          504
+        ],
+        [
+          "builtins.set",
+          216
+        ],
+        [
+          "builtins.builtin_function_or_method",
+          216
+        ],
+        [
+          "builtins.list",
+          208
+        ],
+        [
+          "builtins.float",
+          120
+        ]
+      ]
+    },
+    "active_session_tracker": {
+      "bytes": 41404,
+      "objects": 459,
+      "top_types": [
+        [
+          "builtins.str",
+          15156
+        ],
+        [
+          "builtins.dict",
+          7016
+        ],
+        [
+          "builtins.function",
+          6384
+        ],
+        [
+          "collections.deque",
+          3040
+        ],
+        [
+          "codex_usage_hud.runtime_compat._LazyCallable",
+          2160
+        ],
+        [
+          "builtins.float",
+          912
+        ],
+        [
+          "builtins.list",
+          888
+        ],
+        [
+          "builtins.builtin_function_or_method",
+          864
+        ]
+      ]
+    },
+    "session_resolver": {
+      "bytes": 607,
+      "objects": 7,
+      "top_types": [
+        [
+          "builtins.dict",
+          296
+        ],
+        [
+          "builtins.str",
+          239
+        ],
+        [
+          "codex_usage_hud.platforms.active_session.SessionPathResolver",
+          48
+        ],
+        [
+          "builtins.float",
+          24
+        ]
+      ]
+    },
+    "background_usage_runtime": {
+      "bytes": 221066,
+      "objects": 2267,
+      "top_types": [
+        [
+          "builtins.dict",
+          137984
+        ],
+        [
+          "builtins.str",
+          33562
+        ],
+        [
+          "builtins.float",
+          13488
+        ],
+        [
+          "codex_usage_hud.core.calculator._PriceProfile",
+          9600
+        ],
+        [
+          "collections.deque",
+          7600
+        ],
+        [
+          "builtins.list",
+          5560
+        ],
+        [
+          "builtins.builtin_function_or_method",
+          2160
+        ],
+        [
+          "pathlib.WindowsPath",
+          1768
+        ]
+      ]
+    },
+    "usage_insights_worker": {
+      "bytes": 5742,
+      "objects": 49,
+      "top_types": [
+        [
+          "collections.deque",
+          2280
+        ],
+        [
+          "builtins.dict",
+          1224
+        ],
+        [
+          "builtins.builtin_function_or_method",
+          648
+        ],
+        [
+          "builtins.function",
+          336
+        ],
+        [
+          "_thread.lock",
+          280
+        ],
+        [
+          "builtins.cell",
+          200
+        ],
+        [
+          "builtins.str",
+          166
+        ],
+        [
+          "threading.Event",
+          144
+        ]
+      ]
+    },
+    "sse_tracker": {
+      "bytes": 1793,
+      "objects": 23,
+      "top_types": [
+        [
+          "builtins.str",
+          697
+        ],
+        [
+          "builtins.dict",
+          528
+        ],
+        [
+          "builtins.list",
+          320
+        ],
+        [
+          "pathlib.WindowsPath",
+          104
+        ],
+        [
+          "codex_usage_hud.core.parser.SseRequestStateMachine",
+          48
+        ],
+        [
+          "codex_usage_hud.core.parser.RequestTokens",
+          48
+        ],
+        [
+          "datetime.datetime",
+          48
+        ]
+      ]
+    },
+    "renderer_history_store": {
+      "bytes": 794304,
+      "objects": 811,
+      "top_types": [
+        [
+          "_io.BufferedRandom",
+          656200
+        ],
+        [
+          "builtins.dict",
+          63936
+        ],
+        [
+          "builtins.str",
+          52172
+        ],
+        [
+          "builtins.tuple",
+          4704
+        ],
+        [
+          "builtins.function",
+          4032
+        ],
+        [
+          "builtins.set",
+          2656
+        ],
+        [
+          "builtins.int",
+          1508
+        ],
+        [
+          "builtins.list",
+          1216
+        ]
+      ]
+    },
+    "renderer_client": {
+      "bytes": 47376,
+      "objects": 488,
+      "top_types": [
+        [
+          "builtins.str",
+          19880
+        ],
+        [
+          "builtins.dict",
+          11128
+        ],
+        [
+          "collections.deque",
+          7600
+        ],
+        [
+          "builtins.builtin_function_or_method",
+          2232
+        ],
+        [
+          "_thread.lock",
+          1288
+        ],
+        [
+          "builtins.tuple",
+          1104
+        ],
+        [
+          "builtins.float",
+          696
+        ],
+        [
+          "builtins.list",
+          536
+        ]
+      ]
+    },
+    "loop_state": {
+      "bytes": 19688,
+      "objects": 119,
+      "top_types": [
+        [
+          "builtins.dict",
+          9696
+        ],
+        [
+          "builtins.str",
+          9128
+        ],
+        [
+          "builtins.tuple",
+          288
+        ],
+        [
+          "builtins.set",
+          216
+        ],
+        [
+          "builtins.float",
+          96
+        ],
+        [
+          "builtins.list",
+          72
+        ],
+        [
+          "codex_usage_hud.renderer_event_loop.RendererLoopState",
+          48
+        ],
+        [
+          "codex_usage_hud.renderer_event_reduction.RefreshPlan",
+          48
+        ]
+      ]
+    },
+    "work_overlay": {
+      "bytes": 53623,
+      "objects": 302,
+      "top_types": [
+        [
+          "builtins.str",
+          34599
+        ],
+        [
+          "builtins.dict",
+          10984
+        ],
+        [
+          "collections.deque",
+          3040
+        ],
+        [
+          "builtins.list",
+          1064
+        ],
+        [
+          "builtins.function",
+          672
+        ],
+        [
+          "builtins.builtin_function_or_method",
+          432
+        ],
+        [
+          "pathlib.WindowsPath",
+          416
+        ],
+        [
+          "builtins.float",
+          288
+        ]
+      ]
+    },
+    "daemon_manager": {
+      "bytes": 5480,
+      "objects": 59,
+      "top_types": [
+        [
+          "builtins.dict",
+          2184
+        ],
+        [
+          "builtins.str",
+          1136
+        ],
+        [
+          "collections.deque",
+          760
+        ],
+        [
+          "builtins.builtin_function_or_method",
+          216
+        ],
+        [
+          "builtins.int",
+          196
+        ],
+        [
+          "builtins.function",
+          168
+        ],
+        [
+          "_thread.lock",
+          112
+        ],
+        [
+          "builtins.tuple",
+          112
+        ]
+      ]
+    },
+    "assembly": {
+      "bytes": 81438,
+      "objects": 893,
+      "top_types": [
+        [
+          "builtins.str",
+          20046
+        ],
+        [
+          "builtins.dict",
+          16272
+        ],
+        [
+          "collections.deque",
+          14440
+        ],
+        [
+          "builtins.function",
+          6552
+        ],
+        [
+          "builtins.list",
+          3872
+        ],
+        [
+          "builtins.builtin_function_or_method",
+          3672
+        ],
+        [
+          "pathlib.WindowsPath",
+          2184
+        ],
+        [
+          "builtins.cell",
+          2120
+        ]
+      ]
+    },
+    "context": {
+      "bytes": 779247,
+      "objects": 4311,
+      "top_types": [
+        [
+          "builtins.dict",
+          535976
+        ],
+        [
+          "builtins.str",
+          146711
+        ],
+        [
+          "builtins.set",
+          33632
+        ],
+        [
+          "collections.deque",
+          15960
+        ],
+        [
+          "builtins.int",
+          14504
+        ],
+        [
+          "builtins.list",
+          14416
+        ],
+        [
+          "builtins.float",
+          4896
+        ],
+        [
+          "builtins.builtin_function_or_method",
+          4104
+        ]
+      ]
+    },
+    "other_thread_and_loop_locals": {
+      "bytes": 21476003,
+      "objects": 110707
+    },
+    "thread_state_storage": {
+      "bytes": 2180,
+      "objects": 19,
+      "top_types": [
+        [
+          "builtins.dict",
+          1472
+        ],
+        [
+          "builtins.PyCapsule",
+          320
+        ],
+        [
+          "builtins.list",
+          280
+        ],
+        [
+          "builtins.str",
+          108
+        ]
+      ]
+    },
+    "module_code_globals_and_interpreter_metadata": {
+      "bytes": 24322514,
+      "objects": 147802,
+      "top_types": [
+        [
+          "builtins.code",
+          6096944
+        ],
+        [
+          "builtins.str",
+          4330383
+        ],
+        [
+          "builtins.tuple",
+          2695936
+        ],
+        [
+          "builtins.dict",
+          2203280
+        ],
+        [
+          "builtins.bytes",
+          2162296
+        ],
+        [
+          "builtins.function",
+          2118144
+        ],
+        [
+          "builtins.type",
+          1761576
+        ],
+        [
+          "_io.BufferedWriter",
+          524960
+        ]
+      ]
+    },
+    "interpreter_interned_string_tables": {
+      "bytes": 1454188,
+      "objects": 9054,
+      "top_types": [
+        [
+          "builtins.dict",
+          961280
+        ],
+        [
+          "builtins.str",
+          492908
+        ]
+      ]
+    },
+    "static_type_subclass_weak_maps": {
+      "bytes": 334896,
+      "objects": 3971,
+      "top_types": [
+        [
+          "weakref.ReferenceType",
+          143600
+        ],
+        [
+          "builtins.dict",
+          131104
+        ],
+        [
+          "builtins.int",
+          60192
+        ]
+      ]
+    },
+    "remaining_gc_cohort": {
+      "bytes": 874512,
+      "objects": 7931,
+      "top_types": [
+        [
+          "builtins.list",
+          181568
+        ],
+        [
+          "builtins.bytes",
+          179288
+        ],
+        [
+          "builtins.dict",
+          117952
+        ],
+        [
+          "builtins.str",
+          92290
+        ],
+        [
+          "builtins.wrapper_descriptor",
+          65808
+        ],
+        [
+          "builtins.method_descriptor",
+          38016
+        ],
+        [
+          "builtins.tuple",
+          34520
+        ],
+        [
+          "builtins.type",
+          21392
+        ]
+      ]
+    }
+  },
+  "python_object_size_sum": 61310803,
+  "one_mib_allocations_with_python_objects": 38,
+  "gc_disk_owner_counts": {
+    "DecodedHistoryCache": 1,
+    "DiskRecordSequence": 2,
+    "DiskSequence": 16,
+    "SelectedHistoryProjection": 2,
+    "_FrozenDiskSequence": 6,
+    "_TaskHistoryView": 3,
+    "_RoundCursor": 2
+  },
+  "interned_string_tables_found": 1,
+  "coherent_python_root_snapshot": true,
+  "python_native_buffer_regions": [
+    {
+      "base": 3146826317824,
+      "object_type": "frozenset",
+      "logical_bytes": 2097368,
+      "commit": 2101248
+    },
+    {
+      "base": 3146715955200,
+      "object_type": "dict",
+      "logical_bytes": 961280,
+      "commit": 8171520
+    }
+  ],
+  "thread_frame_owners": [
+    {
+      "source": "session_search_disk.py",
+      "function": "_store",
+      "bytes": 12412409,
+      "objects": 104879,
+      "top_types": [
+        [
+          "builtins.str",
+          5514456
+        ],
+        [
+          "builtins.set",
+          4194736
+        ],
+        [
+          "builtins.frozenset",
+          2296888
+        ],
+        [
+          "builtins.bytes",
+          273789
+        ],
+        [
+          "builtins.tuple",
+          132312
+        ],
+        [
+          "builtins.list",
+          112
+        ],
+        [
+          "builtins.int",
+          92
+        ],
+        [
+          "builtins.float",
+          24
+        ]
+      ]
+    },
+    {
+      "source": "session_search_disk.py",
+      "function": "_apply_memory_documents",
+      "bytes": 6178251,
+      "objects": 7,
+      "top_types": [
+        [
+          "builtins.str",
+          6177795
+        ],
+        [
+          "sqlite3.Connection",
+          232
+        ],
+        [
+          "codex_usage_hud.core.session_search.SearchDocument",
+          104
+        ],
+        [
+          "builtins.dict",
+          64
+        ],
+        [
+          "builtins.tuple",
+          56
+        ]
+      ]
+    },
+    {
+      "source": "session_search_disk.py",
+      "function": "_masks",
+      "bytes": 2097368,
+      "objects": 1,
+      "top_types": [
+        [
+          "builtins.set",
+          2097368
+        ]
+      ]
+    },
+    {
+      "source": "session_snapshots.py",
+      "function": "_run",
+      "bytes": 289091,
+      "objects": 257,
+      "top_types": [
+        [
+          "_io.BufferedRandom",
+          262480
+        ],
+        [
+          "builtins.str",
+          11947
+        ],
+        [
+          "builtins.dict",
+          6304
+        ],
+        [
+          "builtins.function",
+          1680
+        ],
+        [
+          "builtins.int",
+          928
+        ],
+        [
+          "datetime.datetime",
+          864
+        ],
+        [
+          "builtins.builtin_function_or_method",
+          720
+        ],
+        [
+          "codex_usage_hud.core.parser.ActivityStep",
+          576
+        ]
+      ]
+    },
+    {
+      "source": "pricing_sync_scheduler.py",
+      "function": "_run",
+      "bytes": 254480,
+      "objects": 3440,
+      "top_types": [
+        [
+          "builtins.str",
+          76468
+        ],
+        [
+          "decimal.Decimal",
+          67200
+        ],
+        [
+          "builtins.dict",
+          64360
+        ],
+        [
+          "datetime.datetime",
+          16128
+        ],
+        [
+          "builtins.float",
+          12168
+        ],
+        [
+          "codex_usage_hud.pricing.PriceAuditRecord",
+          5376
+        ],
+        [
+          "codex_usage_hud.pricing.PriceVersion",
+          5376
+        ],
+        [
+          "codex_usage_hud.config.ModelPrice",
+          3936
+        ]
+      ]
+    },
+    {
+      "source": "usage_insights.py",
+      "function": "_run",
+      "bytes": 128028,
+      "objects": 1132,
+      "top_types": [
+        [
+          "builtins.dict",
+          84712
+        ],
+        [
+          "builtins.str",
+          19756
+        ],
+        [
+          "builtins.int",
+          13888
+        ],
+        [
+          "builtins.list",
+          4968
+        ],
+        [
+          "builtins.float",
+          4704
+        ]
+      ]
+    },
+    {
+      "source": "cli_app.py",
+      "function": "main",
+      "bytes": 31117,
+      "objects": 326,
+      "top_types": [
+        [
+          "builtins.str",
+          10961
+        ],
+        [
+          "builtins.dict",
+          10216
+        ],
+        [
+          "builtins.list",
+          4144
+        ],
+        [
+          "builtins.function",
+          3192
+        ],
+        [
+          "argparse._StoreAction",
+          864
+        ],
+        [
+          "argparse._StoreTrueAction",
+          624
+        ],
+        [
+          "re.Pattern",
+          588
+        ],
+        [
+          "argparse._ArgumentGroup",
+          96
+        ]
+      ]
+    },
+    {
+      "source": "renderer_event_loop.py",
+      "function": "run",
+      "bytes": 15929,
+      "objects": 141,
+      "top_types": [
+        [
+          "builtins.function",
+          7896
+        ],
+        [
+          "builtins.dict",
+          2448
+        ],
+        [
+          "builtins.method",
+          1920
+        ],
+        [
+          "builtins.str",
+          673
+        ],
+        [
+          "builtins.set",
+          648
+        ],
+        [
+          "builtins.cell",
+          600
+        ],
+        [
+          "codex_usage_hud.renderer_event_loop.RendererRefreshPorts",
+          304
+        ],
+        [
+          "codex_usage_hud.renderer_event_loop.RendererTickSamplerPorts",
+          216
+        ]
+      ]
+    },
+    {
+      "source": "windows_tray.py",
+      "function": "_run",
+      "bytes": 10429,
+      "objects": 91,
+      "top_types": [
+        [
+          "collections.deque",
+          2280
+        ],
+        [
+          "ctypes._FuncPtr",
+          2000
+        ],
+        [
+          "builtins.dict",
+          1816
+        ],
+        [
+          "builtins.str",
+          857
+        ],
+        [
+          "builtins.builtin_function_or_method",
+          648
+        ],
+        [
+          "builtins.function",
+          504
+        ],
+        [
+          "builtins.cell",
+          360
+        ],
+        [
+          "_thread.lock",
+          224
+        ]
+      ]
+    },
+    {
+      "source": "session_cleanup_runtime.py",
+      "function": "_run",
+      "bytes": 9843,
+      "objects": 15,
+      "top_types": [
+        [
+          "builtins.list",
+          7888
+        ],
+        [
+          "builtins.dict",
+          1712
+        ],
+        [
+          "builtins.str",
+          131
+        ],
+        [
+          "builtins.int",
+          112
+        ]
+      ]
+    },
+    {
+      "source": "session_search.py",
+      "function": "sync_batches",
+      "bytes": 9167,
+      "objects": 29,
+      "top_types": [
+        [
+          "builtins.tuple",
+          7208
+        ],
+        [
+          "builtins.function",
+          504
+        ],
+        [
+          "builtins.dict",
+          472
+        ],
+        [
+          "builtins.cell",
+          360
+        ],
+        [
+          "builtins.list",
+          304
+        ],
+        [
+          "builtins.str",
+          207
+        ],
+        [
+          "builtins.int",
+          64
+        ],
+        [
+          "codex_usage_hud.session_cleanup_runtime._SearchIndexJob",
+          48
+        ]
+      ]
+    },
+    {
+      "source": "renderer_runtime.py",
+      "function": "run_renderer_hud_session",
+      "bytes": 8524,
+      "objects": 82,
+      "top_types": [
+        [
+          "builtins.str",
+          2672
+        ],
+        [
+          "builtins.dict",
+          2608
+        ],
+        [
+          "builtins.function",
+          1680
+        ],
+        [
+          "builtins.list",
+          432
+        ],
+        [
+          "builtins.method",
+          384
+        ],
+        [
+          "pathlib.WindowsPath",
+          208
+        ],
+        [
+          "builtins.cell",
+          160
+        ],
+        [
+          "codex_usage_hud.runtime_ports.RuntimeServices",
+          112
+        ]
+      ]
+    }
+  ],
+  "accounted_private_commit": 112037888,
+  "unaccounted_private_commit": 0,
+  "after_object_walk": {
+    "private_bytes": 124669952,
+    "working_set_bytes": 144003072,
+    "paged_pool_bytes": 232400,
+    "nonpaged_pool_bytes": 42392
+  },
+  "gc_experiment": {
+    "collected_objects": 90,
+    "after_gc": {
+      "private_bytes": 122568704,
+      "working_set_bytes": 141905920,
+      "paged_pool_bytes": 232400,
+      "nonpaged_pool_bytes": 42120
+    },
+    "allocator_after_gc": {
+      "arenas": 48,
+      "highwater_arenas": 58,
+      "used_blocks": 34482352,
+      "available_blocks": 5228032,
+      "unused_pools": 10338304,
+      "pool_headers": 117168,
+      "quantization": 165792,
+      "alignment": 0
+    },
+    "heaps_after_gc": [
+      {
+        "allocated": 41974958,
+        "committed": 69775360,
+        "reserved": 83374080
+      },
+      {
+        "allocated": 0,
+        "committed": 4096,
+        "reserved": 65536
+      },
+      {
+        "allocated": 36790,
+        "committed": 94208,
+        "reserved": 1912832
+      },
+      {
+        "allocated": 288,
+        "committed": 8192,
+        "reserved": 65536
+      },
+      {
+        "allocated": 384,
+        "committed": 8192,
+        "reserved": 65536
+      }
+    ]
+  },
+  "elapsed_ms": 2255.7,
+  "limitations": [
+    "Python owner sizes are unique logical object sizes, not additional to the OS commit ledger.",
+    "Shared objects go to the first owner in the recorded traversal order; no object values are exported.",
+    "The main-thread callback includes its setup overhead and may briefly pause HUD updates.",
+    "VM and OS private counters are sampled sequentially; record their difference rather than forcing equality.",
+    "Native heap busy bytes include large Python allocations, SQLite, CRT and other native libraries; the summary is not an allocation-stack trace."
+  ],
+  "python_version": "3.14.3 (tags/v3.14.3:323c59a, Feb  3 2026, 16:04:56) [MSC v.1944 64 bit (AMD64)]",
+  "windows_build": 26200,
+  "repository_base_commit": "55785d8370b2fd4dff92712d75ab4a26ae3c8403",
+  "tool_sha256_when_archived": "30ca07093b6cc2de7e6d46e427430406bc46ee166f925c80dc5f9f2e8d154446",
+  "vm_allocation_inventory": [
+    {
+      "base": 2147352576,
+      "size": 4096,
+      "commit": 4096,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 2
+    },
+    {
+      "base": 2147360768,
+      "size": 4096,
+      "commit": 4096,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 2
+    },
+    {
+      "base": 1049628770304,
+      "size": 2097152,
+      "commit": 208896,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 1049630867456,
+      "size": 3014656,
+      "commit": 118784,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 1049633882112,
+      "size": 3014656,
+      "commit": 24576,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 1049642926080,
+      "size": 3014656,
+      "commit": 45056,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 1049648955392,
+      "size": 3014656,
+      "commit": 73728,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 1049651970048,
+      "size": 3014656,
+      "commit": 73728,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 1049654984704,
+      "size": 3014656,
+      "commit": 20480,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 1049657999360,
+      "size": 3014656,
+      "commit": 32768,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 1049661014016,
+      "size": 3014656,
+      "commit": 45056,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 1049664028672,
+      "size": 3014656,
+      "commit": 40960,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 1049667043328,
+      "size": 3014656,
+      "commit": 28672,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 1049670057984,
+      "size": 3014656,
+      "commit": 32768,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 1049676087296,
+      "size": 3014656,
+      "commit": 32768,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 1049679101952,
+      "size": 3014656,
+      "commit": 36864,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 1049682116608,
+      "size": 3014656,
+      "commit": 32768,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 1049685131264,
+      "size": 3014656,
+      "commit": 36864,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 1049688145920,
+      "size": 3014656,
+      "commit": 36864,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 1049691160576,
+      "size": 3014656,
+      "commit": 73728,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 1049694175232,
+      "size": 3014656,
+      "commit": 36864,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 1049724321792,
+      "size": 3014656,
+      "commit": 28672,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 1049727336448,
+      "size": 3014656,
+      "commit": 32768,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 1049730351104,
+      "size": 3014656,
+      "commit": 32768,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 1049733365760,
+      "size": 3014656,
+      "commit": 40960,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 1049736380416,
+      "size": 3014656,
+      "commit": 36864,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 1049739395072,
+      "size": 3014656,
+      "commit": 32768,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 1049742409728,
+      "size": 3014656,
+      "commit": 32768,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 3146664902656,
+      "size": 8192,
+      "commit": 0,
+      "kind": 262144,
+      "flags": 8,
+      "protection": 4
+    },
+    {
+      "base": 3146664968192,
+      "size": 65536,
+      "commit": 0,
+      "kind": 262144,
+      "flags": 8,
+      "protection": 4
+    },
+    {
+      "base": 3146665033728,
+      "size": 172032,
+      "commit": 0,
+      "kind": 262144,
+      "flags": 8,
+      "protection": 2
+    },
+    {
+      "base": 3146665230336,
+      "size": 16384,
+      "commit": 0,
+      "kind": 262144,
+      "flags": 8,
+      "protection": 2
+    },
+    {
+      "base": 3146665295872,
+      "size": 12288,
+      "commit": 0,
+      "kind": 262144,
+      "flags": 8,
+      "protection": 2
+    },
+    {
+      "base": 3146665361408,
+      "size": 8192,
+      "commit": 8192,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 3146665426944,
+      "size": 200704,
+      "commit": 0,
+      "kind": 262144,
+      "flags": 2,
+      "protection": 2
+    },
+    {
+      "base": 3146665689088,
+      "size": 12288,
+      "commit": 0,
+      "kind": 262144,
+      "flags": 2,
+      "protection": 2
+    },
+    {
+      "base": 3146665754624,
+      "size": 40960,
+      "commit": 0,
+      "kind": 262144,
+      "flags": 8,
+      "protection": 2
+    },
+    {
+      "base": 3146665820160,
+      "size": 1048576,
+      "commit": 1040384,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 3146666868736,
+      "size": 81920,
+      "commit": 0,
+      "kind": 262144,
+      "flags": 8,
+      "protection": 2
+    },
+    {
+      "base": 3146666999808,
+      "size": 81920,
+      "commit": 0,
+      "kind": 262144,
+      "flags": 8,
+      "protection": 2
+    },
+    {
+      "base": 3146667130880,
+      "size": 53248,
+      "commit": 0,
+      "kind": 262144,
+      "flags": 8,
+      "protection": 2
+    },
+    {
+      "base": 3146667196416,
+      "size": 798720,
+      "commit": 163840,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 3146668048384,
+      "size": 12288,
+      "commit": 0,
+      "kind": 262144,
+      "flags": 2,
+      "protection": 2
+    },
+    {
+      "base": 3146668113920,
+      "size": 864256,
+      "commit": 0,
+      "kind": 262144,
+      "flags": 2,
+      "protection": 2
+    },
+    {
+      "base": 3146669031424,
+      "size": 200704,
+      "commit": 0,
+      "kind": 262144,
+      "flags": 2,
+      "protection": 2
+    },
+    {
+      "base": 3146669293568,
+      "size": 12288,
+      "commit": 0,
+      "kind": 262144,
+      "flags": 8,
+      "protection": 2
+    },
+    {
+      "base": 3146669359104,
+      "size": 65536,
+      "commit": 61440,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 3146669424640,
+      "size": 798720,
+      "commit": 8192,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 3146670276608,
+      "size": 1048576,
+      "commit": 1048576,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 3146671325184,
+      "size": 16384,
+      "commit": 16384,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 3146671390720,
+      "size": 712704,
+      "commit": 0,
+      "kind": 262144,
+      "flags": 2,
+      "protection": 2
+    },
+    {
+      "base": 3146672111616,
+      "size": 1048576,
+      "commit": 1048576,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 3146673160192,
+      "size": 1048576,
+      "commit": 1044480,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 3146674208768,
+      "size": 2097152,
+      "commit": 2093056,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 3146676305920,
+      "size": 1048576,
+      "commit": 1048576,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 3146677354496,
+      "size": 1048576,
+      "commit": 1048576,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 3146678403072,
+      "size": 1048576,
+      "commit": 1048576,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 3146679451648,
+      "size": 4194304,
+      "commit": 4190208,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 3146683645952,
+      "size": 1048576,
+      "commit": 1048576,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 3146684694528,
+      "size": 65536,
+      "commit": 0,
+      "kind": 16777216,
+      "flags": 4,
+      "protection": 128,
+      "image": "python3.dll"
+    },
+    {
+      "base": 3146684760064,
+      "size": 12288,
+      "commit": 0,
+      "kind": 262144,
+      "flags": 8,
+      "protection": 2
+    },
+    {
+      "base": 3146684825600,
+      "size": 12288,
+      "commit": 0,
+      "kind": 262144,
+      "flags": 8,
+      "protection": 2
+    },
+    {
+      "base": 3146684891136,
+      "size": 12288,
+      "commit": 0,
+      "kind": 262144,
+      "flags": 8,
+      "protection": 2
+    },
+    {
+      "base": 3146684956672,
+      "size": 12288,
+      "commit": 0,
+      "kind": 262144,
+      "flags": 8,
+      "protection": 2
+    },
+    {
+      "base": 3146685022208,
+      "size": 1048576,
+      "commit": 1048576,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 3146686070784,
+      "size": 12288,
+      "commit": 0,
+      "kind": 262144,
+      "flags": 8,
+      "protection": 2
+    },
+    {
+      "base": 3146686136320,
+      "size": 2097152,
+      "commit": 0,
+      "kind": 262144,
+      "flags": 8,
+      "protection": 2
+    },
+    {
+      "base": 3146688233472,
+      "size": 32768,
+      "commit": 0,
+      "kind": 262144,
+      "flags": 8,
+      "protection": 2
+    },
+    {
+      "base": 3146688299008,
+      "size": 1048576,
+      "commit": 1048576,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 3146689347584,
+      "size": 12288,
+      "commit": 0,
+      "kind": 262144,
+      "flags": 8,
+      "protection": 2
+    },
+    {
+      "base": 3146689413120,
+      "size": 12288,
+      "commit": 0,
+      "kind": 262144,
+      "flags": 8,
+      "protection": 2
+    },
+    {
+      "base": 3146689478656,
+      "size": 12288,
+      "commit": 0,
+      "kind": 262144,
+      "flags": 8,
+      "protection": 2
+    },
+    {
+      "base": 3146689544192,
+      "size": 12288,
+      "commit": 0,
+      "kind": 262144,
+      "flags": 8,
+      "protection": 2
+    },
+    {
+      "base": 3146689609728,
+      "size": 65536,
+      "commit": 8192,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 3146689675264,
+      "size": 1576960,
+      "commit": 0,
+      "kind": 262144,
+      "flags": 8,
+      "protection": 2
+    },
+    {
+      "base": 3146691313664,
+      "size": 20975616,
+      "commit": 0,
+      "kind": 262144,
+      "flags": 8,
+      "protection": 2
+    },
+    {
+      "base": 3146712350720,
+      "size": 1048576,
+      "commit": 1048576,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 3146713399296,
+      "size": 12288,
+      "commit": 0,
+      "kind": 262144,
+      "flags": 8,
+      "protection": 2
+    },
+    {
+      "base": 3146713464832,
+      "size": 12288,
+      "commit": 0,
+      "kind": 262144,
+      "flags": 8,
+      "protection": 2
+    },
+    {
+      "base": 3146713530368,
+      "size": 12288,
+      "commit": 0,
+      "kind": 262144,
+      "flags": 8,
+      "protection": 2
+    },
+    {
+      "base": 3146713595904,
+      "size": 1048576,
+      "commit": 1048576,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 3146714644480,
+      "size": 12288,
+      "commit": 0,
+      "kind": 262144,
+      "flags": 8,
+      "protection": 2
+    },
+    {
+      "base": 3146714710016,
+      "size": 4096,
+      "commit": 4096,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 64
+    },
+    {
+      "base": 3146714775552,
+      "size": 12288,
+      "commit": 0,
+      "kind": 262144,
+      "flags": 8,
+      "protection": 2
+    },
+    {
+      "base": 3146714841088,
+      "size": 12288,
+      "commit": 0,
+      "kind": 262144,
+      "flags": 8,
+      "protection": 2
+    },
+    {
+      "base": 3146714906624,
+      "size": 1048576,
+      "commit": 1048576,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 3146715955200,
+      "size": 8388608,
+      "commit": 8171520,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 3146724343808,
+      "size": 1048576,
+      "commit": 1048576,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 3146725392384,
+      "size": 12288,
+      "commit": 0,
+      "kind": 262144,
+      "flags": 8,
+      "protection": 2
+    },
+    {
+      "base": 3146725457920,
+      "size": 1048576,
+      "commit": 1048576,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 3146726506496,
+      "size": 1048576,
+      "commit": 1048576,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 3146727555072,
+      "size": 1048576,
+      "commit": 1048576,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 3146728603648,
+      "size": 1048576,
+      "commit": 1048576,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 3146729652224,
+      "size": 1048576,
+      "commit": 1048576,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 3146730700800,
+      "size": 1048576,
+      "commit": 1048576,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 3146731749376,
+      "size": 16384,
+      "commit": 16384,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 3146731814912,
+      "size": 4096,
+      "commit": 0,
+      "kind": 262144,
+      "flags": 8,
+      "protection": 4
+    },
+    {
+      "base": 3146731880448,
+      "size": 1048576,
+      "commit": 4096,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 3146732929024,
+      "size": 65536,
+      "commit": 0,
+      "kind": 262144,
+      "flags": 8,
+      "protection": 4
+    },
+    {
+      "base": 3146732994560,
+      "size": 65536,
+      "commit": 0,
+      "kind": 262144,
+      "flags": 8,
+      "protection": 4
+    },
+    {
+      "base": 3146733060096,
+      "size": 65536,
+      "commit": 0,
+      "kind": 262144,
+      "flags": 8,
+      "protection": 4
+    },
+    {
+      "base": 3146733125632,
+      "size": 4096,
+      "commit": 4096,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 3146733191168,
+      "size": 4096,
+      "commit": 4096,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 3146733256704,
+      "size": 16384,
+      "commit": 16384,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 3146733322240,
+      "size": 16384,
+      "commit": 16384,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 3146733387776,
+      "size": 69632,
+      "commit": 0,
+      "kind": 262144,
+      "flags": 2,
+      "protection": 2
+    },
+    {
+      "base": 3146733518848,
+      "size": 12288,
+      "commit": 0,
+      "kind": 262144,
+      "flags": 2,
+      "protection": 2
+    },
+    {
+      "base": 3146733584384,
+      "size": 16384,
+      "commit": 16384,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 3146733649920,
+      "size": 16384,
+      "commit": 16384,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 3146733715456,
+      "size": 16384,
+      "commit": 16384,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 3146733780992,
+      "size": 16384,
+      "commit": 16384,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 3146733846528,
+      "size": 32768,
+      "commit": 0,
+      "kind": 262144,
+      "flags": 2,
+      "protection": 4
+    },
+    {
+      "base": 3146733912064,
+      "size": 16384,
+      "commit": 16384,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 3146733977600,
+      "size": 65536,
+      "commit": 8192,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 3146734043136,
+      "size": 3387392,
+      "commit": 0,
+      "kind": 262144,
+      "flags": 2,
+      "protection": 2
+    },
+    {
+      "base": 3146737451008,
+      "size": 1048576,
+      "commit": 1048576,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 3146738499584,
+      "size": 1048576,
+      "commit": 1048576,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 3146739548160,
+      "size": 16580608,
+      "commit": 14761984,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 3146756128768,
+      "size": 1048576,
+      "commit": 1048576,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 3146757177344,
+      "size": 16384,
+      "commit": 16384,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 3146757242880,
+      "size": 16384,
+      "commit": 16384,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 3146757308416,
+      "size": 16384,
+      "commit": 16384,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 3146757373952,
+      "size": 16384,
+      "commit": 16384,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 3146757439488,
+      "size": 1048576,
+      "commit": 1048576,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 3146758488064,
+      "size": 16384,
+      "commit": 16384,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 3146758553600,
+      "size": 16384,
+      "commit": 16384,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 3146758619136,
+      "size": 1048576,
+      "commit": 1048576,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 3146759667712,
+      "size": 16384,
+      "commit": 16384,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 3146759733248,
+      "size": 1048576,
+      "commit": 1048576,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 3146760781824,
+      "size": 1048576,
+      "commit": 1048576,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 3146761830400,
+      "size": 405504,
+      "commit": 0,
+      "kind": 262144,
+      "flags": 2,
+      "protection": 2
+    },
+    {
+      "base": 3146762289152,
+      "size": 1048576,
+      "commit": 24576,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 3146763403264,
+      "size": 32768,
+      "commit": 0,
+      "kind": 262144,
+      "flags": 2,
+      "protection": 4
+    },
+    {
+      "base": 3146763468800,
+      "size": 16384,
+      "commit": 16384,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 3146763534336,
+      "size": 16384,
+      "commit": 16384,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 3146763599872,
+      "size": 16384,
+      "commit": 16384,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 3146763665408,
+      "size": 16384,
+      "commit": 16384,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 3146763730944,
+      "size": 1048576,
+      "commit": 1048576,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 3146764779520,
+      "size": 1048576,
+      "commit": 1048576,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 3146765828096,
+      "size": 1048576,
+      "commit": 1048576,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 3146766876672,
+      "size": 16384,
+      "commit": 16384,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 3146766942208,
+      "size": 16384,
+      "commit": 16384,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 3146767007744,
+      "size": 1048576,
+      "commit": 1048576,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 3146768056320,
+      "size": 1048576,
+      "commit": 1048576,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 3146769104896,
+      "size": 16384,
+      "commit": 16384,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 3146769170432,
+      "size": 16384,
+      "commit": 16384,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 3146769498112,
+      "size": 1048576,
+      "commit": 1048576,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 3146770546688,
+      "size": 1048576,
+      "commit": 1048576,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 3146771595264,
+      "size": 1048576,
+      "commit": 1048576,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 3146772840448,
+      "size": 16580608,
+      "commit": 14852096,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 3146789421056,
+      "size": 16580608,
+      "commit": 3780608,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 3146806001664,
+      "size": 1048576,
+      "commit": 1048576,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 3146807050240,
+      "size": 1048576,
+      "commit": 1048576,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 3146809278464,
+      "size": 1048576,
+      "commit": 1048576,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 3146810327040,
+      "size": 1048576,
+      "commit": 1048576,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 3146811375616,
+      "size": 1048576,
+      "commit": 1048576,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 3146812424192,
+      "size": 1048576,
+      "commit": 1048576,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 3146813472768,
+      "size": 1048576,
+      "commit": 1048576,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 3146814521344,
+      "size": 1048576,
+      "commit": 1048576,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 3146815569920,
+      "size": 1048576,
+      "commit": 1048576,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 3146816618496,
+      "size": 1261568,
+      "commit": 1257472,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 3146819108864,
+      "size": 1048576,
+      "commit": 1048576,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 3146821009408,
+      "size": 1048576,
+      "commit": 1048576,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 3146822057984,
+      "size": 1298432,
+      "commit": 1257472,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 3146825269248,
+      "size": 1048576,
+      "commit": 1048576,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 3146826317824,
+      "size": 2150400,
+      "commit": 2101248,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 3146903977984,
+      "size": 4923392,
+      "commit": 4886528,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 140690137612288,
+      "size": 1048576,
+      "commit": 0,
+      "kind": 262144,
+      "flags": 8,
+      "protection": 2
+    },
+    {
+      "base": 140690138660864,
+      "size": 4295098368,
+      "commit": 0,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 140694433759232,
+      "size": 33558528,
+      "commit": 4096,
+      "kind": 131072,
+      "flags": 1,
+      "protection": 4
+    },
+    {
+      "base": 140694467379200,
+      "size": 4096,
+      "commit": 0,
+      "kind": 262144,
+      "flags": 8,
+      "protection": 2
+    },
+    {
+      "base": 140702271864832,
+      "size": 106496,
+      "commit": 8192,
+      "kind": 16777216,
+      "flags": 4,
+      "protection": 128,
+      "image": "pythonw.exe"
+    },
+    {
+      "base": 140731415855104,
+      "size": 110592,
+      "commit": 12288,
+      "kind": 16777216,
+      "flags": 4,
+      "protection": 128,
+      "image": "wshbth.dll"
+    },
+    {
+      "base": 140731415986176,
+      "size": 98304,
+      "commit": 12288,
+      "kind": 16777216,
+      "flags": 4,
+      "protection": 128,
+      "image": "winrnr.dll"
+    },
+    {
+      "base": 140731453079552,
+      "size": 1585152,
+      "commit": 24576,
+      "kind": 16777216,
+      "flags": 4,
+      "protection": 128,
+      "image": "sqlite3.dll"
+    },
+    {
+      "base": 140731454717952,
+      "size": 5246976,
+      "commit": 32768,
+      "kind": 16777216,
+      "flags": 4,
+      "protection": 128,
+      "image": "libcrypto-3.dll"
+    },
+    {
+      "base": 140731548499968,
+      "size": 761856,
+      "commit": 12288,
+      "kind": 16777216,
+      "flags": 4,
+      "protection": 128,
+      "image": "unicodedata.pyd"
+    },
+    {
+      "base": 140732175351808,
+      "size": 7262208,
+      "commit": 1126400,
+      "kind": 16777216,
+      "flags": 4,
+      "protection": 128,
+      "image": "python314.dll"
+    },
+    {
+      "base": 140732196061184,
+      "size": 118784,
+      "commit": 12288,
+      "kind": 16777216,
+      "flags": 4,
+      "protection": 128,
+      "image": "NapiNSP.dll"
+    },
+    {
+      "base": 140732207005696,
+      "size": 147456,
+      "commit": 16384,
+      "kind": 16777216,
+      "flags": 4,
+      "protection": 128,
+      "image": "_ctypes.pyd"
+    },
+    {
+      "base": 140732237676544,
+      "size": 40960,
+      "commit": 8192,
+      "kind": 16777216,
+      "flags": 4,
+      "protection": 128,
+      "image": "_multiprocessing.pyd"
+    },
+    {
+      "base": 140732302426112,
+      "size": 499712,
+      "commit": 16384,
+      "kind": 16777216,
+      "flags": 4,
+      "protection": 128,
+      "image": "oleacc.dll"
+    },
+    {
+      "base": 140732307734528,
+      "size": 36864,
+      "commit": 8192,
+      "kind": 16777216,
+      "flags": 4,
+      "protection": 128,
+      "image": "select.pyd"
+    },
+    {
+      "base": 140732307800064,
+      "size": 131072,
+      "commit": 12288,
+      "kind": 16777216,
+      "flags": 4,
+      "protection": 128,
+      "image": "_sqlite3.pyd"
+    },
+    {
+      "base": 140732307931136,
+      "size": 290816,
+      "commit": 16384,
+      "kind": 16777216,
+      "flags": 4,
+      "protection": 128,
+      "image": "_decimal.pyd"
+    },
+    {
+      "base": 140732308520960,
+      "size": 798720,
+      "commit": 28672,
+      "kind": 16777216,
+      "flags": 4,
+      "protection": 128,
+      "image": "libssl-3.dll"
+    },
+    {
+      "base": 140732317433856,
+      "size": 45056,
+      "commit": 8192,
+      "kind": 16777216,
+      "flags": 4,
+      "protection": 128,
+      "image": "libffi-8.dll"
+    },
+    {
+      "base": 140732317499392,
+      "size": 36864,
+      "commit": 8192,
+      "kind": 16777216,
+      "flags": 4,
+      "protection": 128,
+      "image": "_queue.pyd"
+    },
+    {
+      "base": 140732376940544,
+      "size": 65536,
+      "commit": 12288,
+      "kind": 16777216,
+      "flags": 4,
+      "protection": 128,
+      "image": "IconCodecService.dll"
+    },
+    {
+      "base": 140732612739072,
+      "size": 180224,
+      "commit": 12288,
+      "kind": 16777216,
+      "flags": 4,
+      "protection": 128,
+      "image": "nlansp_c.dll"
+    },
+    {
+      "base": 140732617064448,
+      "size": 188416,
+      "commit": 40960,
+      "kind": 16777216,
+      "flags": 4,
+      "protection": 128,
+      "image": "_ssl.pyd"
+    },
+    {
+      "base": 140732737191936,
+      "size": 569344,
+      "commit": 12288,
+      "kind": 16777216,
+      "flags": 4,
+      "protection": 128,
+      "image": "FWPUCLNT.DLL"
+    },
+    {
+      "base": 140732751282176,
+      "size": 65536,
+      "commit": 12288,
+      "kind": 16777216,
+      "flags": 4,
+      "protection": 128,
+      "image": "rasadhlp.dll"
+    },
+    {
+      "base": 140732909158400,
+      "size": 32768,
+      "commit": 8192,
+      "kind": 16777216,
+      "flags": 4,
+      "protection": 128,
+      "image": "_uuid.pyd"
+    },
+    {
+      "base": 140732909223936,
+      "size": 90112,
+      "commit": 12288,
+      "kind": 16777216,
+      "flags": 4,
+      "protection": 128,
+      "image": "_socket.pyd"
+    },
+    {
+      "base": 140732915843072,
+      "size": 2367488,
+      "commit": 28672,
+      "kind": 16777216,
+      "flags": 4,
+      "protection": 128,
+      "image": "WindowsCodecs.dll"
+    },
+    {
+      "base": 140732929474560,
+      "size": 69632,
+      "commit": 12288,
+      "kind": 16777216,
+      "flags": 4,
+      "protection": 128,
+      "image": "_hashlib.pyd"
+    },
+    {
+      "base": 140732929605632,
+      "size": 507904,
+      "commit": 12288,
+      "kind": 16777216,
+      "flags": 4,
+      "protection": 128,
+      "image": "_zstd.pyd"
+    },
+    {
+      "base": 140732930129920,
+      "size": 163840,
+      "commit": 8192,
+      "kind": 16777216,
+      "flags": 4,
+      "protection": 128,
+      "image": "_lzma.pyd"
+    },
+    {
+      "base": 140732930326528,
+      "size": 90112,
+      "commit": 8192,
+      "kind": 16777216,
+      "flags": 4,
+      "protection": 128,
+      "image": "_bz2.pyd"
+    },
+    {
+      "base": 140732930457600,
+      "size": 122880,
+      "commit": 8192,
+      "kind": 16777216,
+      "flags": 4,
+      "protection": 128,
+      "image": "vcruntime140.dll"
+    },
+    {
+      "base": 140732931440640,
+      "size": 192512,
+      "commit": 12288,
+      "kind": 16777216,
+      "flags": 4,
+      "protection": 128,
+      "image": "wtsapi32.dll"
+    },
+    {
+      "base": 140732931833856,
+      "size": 716800,
+      "commit": 24576,
+      "kind": 16777216,
+      "flags": 4,
+      "protection": 128,
+      "image": "uxtheme.dll"
+    },
+    {
+      "base": 140732932882432,
+      "size": 208896,
+      "commit": 28672,
+      "kind": 16777216,
+      "flags": 4,
+      "protection": 128,
+      "image": "dwmapi.dll"
+    },
+    {
+      "base": 140732957655040,
+      "size": 9195520,
+      "commit": 69632,
+      "kind": 16777216,
+      "flags": 4,
+      "protection": 128,
+      "image": "windows.storage.dll"
+    },
+    {
+      "base": 140732972138496,
+      "size": 1380352,
+      "commit": 20480,
+      "kind": 16777216,
+      "flags": 4,
+      "protection": 128,
+      "image": "dnsapi.dll"
+    },
+    {
+      "base": 140732978167808,
+      "size": 131072,
+      "commit": 16384,
+      "kind": 16777216,
+      "flags": 4,
+      "protection": 128,
+      "image": "kernel.appcore.dll"
+    },
+    {
+      "base": 140732981051392,
+      "size": 323584,
+      "commit": 20480,
+      "kind": 16777216,
+      "flags": 4,
+      "protection": 128,
+      "image": "sspicli.dll"
+    },
+    {
+      "base": 140732981968896,
+      "size": 73728,
+      "commit": 8192,
+      "kind": 16777216,
+      "flags": 4,
+      "protection": 128,
+      "image": "dsparse.dll"
+    },
+    {
+      "base": 140732984066048,
+      "size": 458752,
+      "commit": 16384,
+      "kind": 16777216,
+      "flags": 4,
+      "protection": 128,
+      "image": "mswsock.dll"
+    },
+    {
+      "base": 140732988915712,
+      "size": 98304,
+      "commit": 8192,
+      "kind": 16777216,
+      "flags": 4,
+      "protection": 128,
+      "image": "msasn1.dll"
+    },
+    {
+      "base": 140732991406080,
+      "size": 65536,
+      "commit": 8192,
+      "kind": 16777216,
+      "flags": 4,
+      "protection": 128,
+      "image": "version.dll"
+    },
+    {
+      "base": 140732991471616,
+      "size": 229376,
+      "commit": 12288,
+      "kind": 16777216,
+      "flags": 4,
+      "protection": 128,
+      "image": "IPHLPAPI.DLL"
+    },
+    {
+      "base": 140732994879488,
+      "size": 438272,
+      "commit": 24576,
+      "kind": 16777216,
+      "flags": 4,
+      "protection": 128,
+      "image": "winsta.dll"
+    },
+    {
+      "base": 140732998418432,
+      "size": 192512,
+      "commit": 12288,
+      "kind": 16777216,
+      "flags": 4,
+      "protection": 128,
+      "image": "bcrypt.dll"
+    },
+    {
+      "base": 140733000187904,
+      "size": 1380352,
+      "commit": 20480,
+      "kind": 16777216,
+      "flags": 4,
+      "protection": 128,
+      "image": "ucrtbase.dll"
+    },
+    {
+      "base": 140733001629696,
+      "size": 4251648,
+      "commit": 57344,
+      "kind": 16777216,
+      "flags": 4,
+      "protection": 128,
+      "image": "KernelBase.dll"
+    },
+    {
+      "base": 140733006675968,
+      "size": 1585152,
+      "commit": 45056,
+      "kind": 16777216,
+      "flags": 4,
+      "protection": 128,
+      "image": "crypt32.dll"
+    },
+    {
+      "base": 140733008314368,
+      "size": 688128,
+      "commit": 61440,
+      "kind": 16777216,
+      "flags": 4,
+      "protection": 128,
+      "image": "msvcp_win.dll"
+    },
+    {
+      "base": 140733009035264,
+      "size": 724992,
+      "commit": 12288,
+      "kind": 16777216,
+      "flags": 4,
+      "protection": 128,
+      "image": "bcryptprimitives.dll"
+    },
+    {
+      "base": 140733009821696,
+      "size": 1236992,
+      "commit": 36864,
+      "kind": 16777216,
+      "flags": 4,
+      "protection": 128,
+      "image": "gdi32full.dll"
+    },
+    {
+      "base": 140733011066880,
+      "size": 180224,
+      "commit": 8192,
+      "kind": 16777216,
+      "flags": 4,
+      "protection": 128,
+      "image": "win32u.dll"
+    },
+    {
+      "base": 140733011591168,
+      "size": 1978368,
+      "commit": 32768,
+      "kind": 16777216,
+      "flags": 4,
+      "protection": 128,
+      "image": "user32.dll"
+    },
+    {
+      "base": 140733013622784,
+      "size": 1695744,
+      "commit": 24576,
+      "kind": 16777216,
+      "flags": 4,
+      "protection": 128,
+      "image": "ole32.dll"
+    },
+    {
+      "base": 140733015326720,
+      "size": 1167360,
+      "commit": 20480,
+      "kind": 16777216,
+      "flags": 4,
+      "protection": 128,
+      "image": "rpcrt4.dll"
+    },
+    {
+      "base": 140733016506368,
+      "size": 913408,
+      "commit": 24576,
+      "kind": 16777216,
+      "flags": 4,
+      "protection": 128,
+      "image": "oleaut32.dll"
+    },
+    {
+      "base": 140733017489408,
+      "size": 53248,
+      "commit": 8192,
+      "kind": 16777216,
+      "flags": 4,
+      "protection": 128,
+      "image": "psapi.dll"
+    },
+    {
+      "base": 140733017751552,
+      "size": 1036288,
+      "commit": 40960,
+      "kind": 16777216,
+      "flags": 4,
+      "protection": 128,
+      "image": "SHCore.dll"
+    },
+    {
+      "base": 140733018865664,
+      "size": 8081408,
+      "commit": 77824,
+      "kind": 16777216,
+      "flags": 4,
+      "protection": 128,
+      "image": "shell32.dll"
+    },
+    {
+      "base": 140733029154816,
+      "size": 221184,
+      "commit": 12288,
+      "kind": 16777216,
+      "flags": 4,
+      "protection": 128,
+      "image": "imm32.dll"
+    },
+    {
+      "base": 140733029416960,
+      "size": 712704,
+      "commit": 24576,
+      "kind": 16777216,
+      "flags": 4,
+      "protection": 128,
+      "image": "msvcrt.dll"
+    },
+    {
+      "base": 140733030137856,
+      "size": 544768,
+      "commit": 20480,
+      "kind": 16777216,
+      "flags": 4,
+      "protection": 128,
+      "image": "ws2_32.dll"
+    },
+    {
+      "base": 140733030727680,
+      "size": 851968,
+      "commit": 28672,
+      "kind": 16777216,
+      "flags": 4,
+      "protection": 128,
+      "image": "kernel32.dll"
+    },
+    {
+      "base": 140733036363776,
+      "size": 196608,
+      "commit": 16384,
+      "kind": 16777216,
+      "flags": 4,
+      "protection": 128,
+      "image": "gdi32.dll"
+    },
+    {
+      "base": 140733036953600,
+      "size": 3842048,
+      "commit": 40960,
+      "kind": 16777216,
+      "flags": 4,
+      "protection": 128,
+      "image": "combase.dll"
+    },
+    {
+      "base": 140733040820224,
+      "size": 61440,
+      "commit": 8192,
+      "kind": 16777216,
+      "flags": 4,
+      "protection": 128,
+      "image": "nsi.dll"
+    },
+    {
+      "base": 140733041475584,
+      "size": 446464,
+      "commit": 20480,
+      "kind": 16777216,
+      "flags": 4,
+      "protection": 128,
+      "image": "shlwapi.dll"
+    },
+    {
+      "base": 140733045342208,
+      "size": 708608,
+      "commit": 28672,
+      "kind": 16777216,
+      "flags": 4,
+      "protection": 128,
+      "image": "sechost.dll"
+    },
+    {
+      "base": 140733047111680,
+      "size": 790528,
+      "commit": 36864,
+      "kind": 16777216,
+      "flags": 4,
+      "protection": 128,
+      "image": "advapi32.dll"
+    },
+    {
+      "base": 140733048225792,
+      "size": 2560000,
+      "commit": 53248,
+      "kind": 16777216,
+      "flags": 4,
+      "protection": 128,
+      "image": "ntdll.dll"
+    }
+  ],
+  "address_translation_controls": [
+    {
+      "mode": "private_commit",
+      "size_mib": 2,
+      "private_charge_delta": 2101248,
+      "region_commit": 2097152,
+      "extra_charge": 4096,
+      "restored_delta": 0
+    },
+    {
+      "mode": "private_commit",
+      "size_mib": 8,
+      "private_charge_delta": 8404992,
+      "region_commit": 8388608,
+      "extra_charge": 16384,
+      "restored_delta": 0
+    },
+    {
+      "mode": "private_commit",
+      "size_mib": 64,
+      "private_charge_delta": 67239936,
+      "region_commit": 67108864,
+      "extra_charge": 131072,
+      "restored_delta": 0
+    },
+    {
+      "mode": "pagefile_mapping",
+      "size_mib": 2,
+      "private_charge_delta": 4096,
+      "region_commit": 0,
+      "extra_charge": 4096,
+      "restored_delta": 0
+    },
+    {
+      "mode": "pagefile_mapping",
+      "size_mib": 8,
+      "private_charge_delta": 16384,
+      "region_commit": 0,
+      "extra_charge": 16384,
+      "restored_delta": 0
+    },
+    {
+      "mode": "pagefile_mapping",
+      "size_mib": 64,
+      "private_charge_delta": 131072,
+      "region_commit": 0,
+      "extra_charge": 131072,
+      "restored_delta": 0
+    }
+  ],
+  "native_heap_busy_bytes_observed": 30588862,
+  "native_heap_free_and_metadata_estimate": 27021378,
+  "small_object_available_capacity_bytes": 14887376,
+  "runtime_acceptance": {
+    "hud_pid": 36468,
+    "proxy_pid": 10316,
+    "proxy_restarted": false,
+    "hud_restarted": false,
+    "renderer_ready": true,
+    "session_present": true,
+    "runtime_error_count": 0,
+    "proxy_active_requests_when_checked": 1
+  },
+  "allocator_raw": "Small block threshold = 512, in 32 size classes.\n\nclass   size   num pools   blocks in use  avail blocks\n-----   ----   ---------   -------------  ------------\n    0     16           4             561          3523\n    1     32         129           23858         41932\n    2     48         267           90669           111\n    3     64         496          113846         12634\n    4     80         248           41383          9209\n    5     96          88           13258          1702\n    6    112          91            8476          4719\n    7    128         152           19172           132\n    8    144          32            2486          1130\n    9    160          71            7194            48\n   10    176         179           14824          1644\n   11    192          19            1496           119\n   12    208          44            2240          1192\n   13    224          41            2508           444\n   14    240          47            3092           104\n   15    256          58            3490           164\n   16    272          26            1511            49\n   17    288          27            1492            20\n   18    304          25             970           355\n   19    320          23            1126            47\n   20    336          18             854            10\n   21    352          13             564            34\n   22    368          13             538            34\n   23    384          12             483            21\n   24    400          70            2591           209\n   25    416          10             381             9\n   26    432          11             376            31\n   27    448           9             306            18\n   28    464          10             318            32\n   29    480          12             326            82\n   30    496           9             267            21\n   31    512          20             517           103\n\n# arenas allocated total           =                   98\n# arenas reclaimed                 =                   53\n# arenas highwater mark            =                   55\n# arenas allocated current         =                   45\n45 arenas * 1048576 bytes/arena    =           47,185,920\n\n# bytes in allocated blocks        =           32,026,336\n# bytes in available blocks        =            4,958,672\n606 unused pools * 16384 bytes     =            9,928,704\n# bytes lost to pool headers       =              109,152\n# bytes lost to quantization       =              163,056\n# bytes lost to arena alignment    =                    0\nTotal                              =           47,185,920\n\narena map counts\n# arena map mid nodes              =                    1\n# arena map bot nodes              =                    1\n\n# bytes lost to arena map root     =              262,144\n# bytes lost to arena map mid      =              262,144\n# bytes lost to arena map bot      =              131,072\nTotal                              =              655,360\n",
+  "method_limits": [
+    "OS private commit ledger is exhaustive by allocation family at this sample; native allocation call stacks were not recorded historically.",
+    "The 36 KiB additional private control pages are inventoried by region but not assigned fabricated business-function names.",
+    "Python GC objects outside visible roots are itemized by type and include interpreter/C-extension roots and sampling objects; they are already inside the OS ledger.",
+    "Explicit GC and transient GIL-held waits were used; no heap trimming, memory-setting changes, HUD restart or proxy restart occurred.",
+    "Runtime workload and previous diagnostic peaks differ from the earlier 90.53 MiB snapshot; this report does not claim a before/after optimization."
+  ]
+}

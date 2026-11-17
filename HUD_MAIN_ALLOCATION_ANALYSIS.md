@@ -1,5 +1,8 @@
 # 主控基础分配与快照保留量分析
 
+后续的运行中主控全量核算见 [HUD_MAIN_MEMORY_ATTRIBUTION.md](HUD_MAIN_MEMORY_ATTRIBUTION.md)。
+该报告补齐了临时文件包装器的 IO 缓冲，并将索引更新局部对象与进程提交类别分开计数。
+
 2026-11-17，Windows / Python 3.14，源码基线 `bda35d4`。
 原显示修复已提交，分析期间未修改产品逻辑、重载 HUD 或中断代理。
 数据见 `HUD_MAIN_ALLOCATION_ANALYSIS.json`。
