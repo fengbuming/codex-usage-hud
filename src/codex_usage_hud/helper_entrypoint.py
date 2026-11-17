@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 from collections.abc import Sequence
 import os
 import sys
@@ -36,22 +37,25 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         return run_hud(argv)
 
-    # Use the same parser and helper owners as the regular CLI. This is only
-    # an import boundary: flags, dependency overrides and diagnostics retain
-    # their existing behavior, including frozen Windows/macOS launches.
-    from .cli_app import build_parser, configure_stdout
-    from .desktop_overlay_setup import (
-        _init_force_desktop_overlay_missing_from_env,
-        run_work_overlay_helper,
-    )
+    # Parse only helper flags so detached UI processes do not import the
+    # coordinator CLI, daemon, or updater modules.
+    parser = argparse.ArgumentParser(prog="codex-hud")
+    parser.add_argument("--work-overlay-helper", action="store_true")
+    parser.add_argument("--work-overlay-state-file", default="")
+    parser.add_argument("--loading-feedback-helper", action="store_true")
+    parser.add_argument("--loading-feedback-state-file", default="")
+    args = parser.parse_args(arguments)
     from .runtime_diagnostics import enable_crash_diagnostics
 
-    configure_stdout()
-    args = build_parser().parse_args(arguments)
     enable_crash_diagnostics()
-    _init_force_desktop_overlay_missing_from_env()
     if args.loading_feedback_helper:
         from .loading_feedback import run_loading_feedback_helper
 
         return run_loading_feedback_helper(args.loading_feedback_state_file)
+    from .desktop_overlay_setup import (
+        _init_force_desktop_overlay_missing_from_env,
+        run_work_overlay_helper,
+    )
+
+    _init_force_desktop_overlay_missing_from_env()
     return run_work_overlay_helper(args.work_overlay_state_file)

@@ -357,10 +357,7 @@ def range_candidates(
     snapshot are dropped here so the warm job only appends the delta.
     """
     bucket, _newest, _oldest = entries_in_range(
-        list(entries),
-        range_key,
-        now=now,
-        use_mtime=use_mtime,
+        entries, range_key, now=now, use_mtime=use_mtime
     )
     known = {str(item or "").strip() for item in covered_ids}
     return [

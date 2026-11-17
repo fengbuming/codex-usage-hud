@@ -25,7 +25,7 @@ from codex_usage_hud.helper_entrypoint import main
 with patch.object(overlay, 'run_work_overlay_helper', return_value=17) as bubble, patch.object(loading, 'run_loading_feedback_helper', return_value=18) as startup:
     result = main(['--'+sys.argv[1]+'-helper', '--'+sys.argv[1]+'-state-file', 'chosen.json'])
     called = bubble.call_args if sys.argv[1] == 'work-overlay' else startup.call_args
-    print(json.dumps({'result':result, 'path':called.args[0], 'renderer_imported':any(n.startswith('codex_usage_hud.renderer_assets') for n in sys.modules), 'root_imported':'codex_usage_hud.runtime_orchestration' in sys.modules}))
+print(json.dumps({'result':result, 'path':called.args[0], 'renderer_imported':any(n.startswith('codex_usage_hud.renderer_assets') for n in sys.modules), 'root_imported':'codex_usage_hud.runtime_orchestration' in sys.modules, 'cli_imported':'codex_usage_hud.cli_app' in sys.modules}))
 """
     env = dict(os.environ, PYTHONPATH=str(root / "src"))
     completed = subprocess.run(
@@ -42,6 +42,7 @@ with patch.object(overlay, 'run_work_overlay_helper', return_value=17) as bubble
         "path": "chosen.json",
         "renderer_imported": False,
         "root_imported": False,
+        "cli_imported": False,
     }
 
 

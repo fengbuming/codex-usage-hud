@@ -462,19 +462,26 @@ class SessionIndexWarmJob:
             self._publish_locked(force=True)
             return True
 
-    def _trim_index_to_range(self, range_key: str) -> None:
+    def _trim_index_to_range(
+        self,
+        range_key: str,
+        *,
+        entries: Sequence[tuple[str, Sequence[Path], str, str, str, str]] | None = None,
+        target_bucket: list[tuple[str, Sequence[Path], str, str, str, str]] | None = None,
+    ) -> None:
         """Reconcile documents left by pre-progressive full indexing."""
         entries_fn = self._capability("search_index_entries")
         remove_fn = self._capability("remove_missing")
         if not callable(entries_fn) or not callable(remove_fn):
             return
         try:
-            entries = list(entries_fn())
+            candidate_entries = entries if entries is not None else entries_fn()
+            candidates = target_bucket
+            if candidates is None:
+                candidates = range_candidates(candidate_entries, range_key)
             keep = {
                 str(entry[0] or "").strip()
-                for entry in range_candidates(
-                    entries, range_key, covered_ids=frozenset()
-                )
+                for entry in candidates
                 if str(entry[0] or "").strip()
             }
             remove_fn(keep)
@@ -879,6 +886,7 @@ class SessionIndexWarmJob:
 
         with self._lock:
             range_key = self._state.selected_range
+        target_bucket = range_candidates(candidates, range_key)
         if not self._range_reconciled:
             self._range_reconciled = True
             # Scope reconciliation is a one-time migration aid for indexes left
@@ -889,7 +897,11 @@ class SessionIndexWarmJob:
             # reconciliation only runs while coverage was never established
             # (PRD D3: extension is incremental; committed batches are kept).
             if not self._state.completed_range:
-                self._trim_index_to_range(range_key)
+                self._trim_index_to_range(
+                    range_key,
+                    entries=candidates,
+                    target_bucket=target_bucket,
+                )
         covered_fn = self._capability("indexed_session_ids")
         covered_ids = frozenset(covered_fn()) if callable(covered_fn) else frozenset()
         previously_covered = covered_ids
@@ -906,27 +918,25 @@ class SessionIndexWarmJob:
                 # its own fingerprint check for the entries it receives.
                 pass
         pass_range = range_key
-        target_bucket = range_candidates(
-            list(candidates),
-            range_key,
-            covered_ids=frozenset(),
-        )
-        bucket = range_candidates(
-            list(candidates),
-            range_key,
-            covered_ids=covered_ids,
-        )
+        known_ids = {str(item or "").strip() for item in covered_ids}
+        target_ids: set[str] = set()
+        bucket = []
+        for entry in target_bucket:
+            session_id = str(entry[0] or "").strip()
+            target_ids.add(entry[0])
+            if session_id not in known_ids:
+                bucket.append(entry)
+        target_total = len(target_bucket)
+        covered_target = max(0, target_total - len(bucket))
         # Coverage is retained as sessions age out of the selected window.
         # Repair changed *already indexed* documents too (notably stale
         # .jsonl paths after compression), without indexing new older sessions.
-        target_ids = {entry[0] for entry in target_bucket}
+        repair_ids = stale_ids & previously_covered
         repairs = [
             entry for entry in candidates
-            if entry[0] in stale_ids & previously_covered and entry[0] not in target_ids
+            if entry[0] in repair_ids and entry[0] not in target_ids
         ]
         bucket.extend(repairs)
-        target_total = len(target_bucket)
-        covered_target = max(0, target_total - (len(bucket) - len(repairs)))
         target_total += len(repairs)
         if not bucket:
             self._finish_range(

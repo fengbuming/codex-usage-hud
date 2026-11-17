@@ -23,6 +23,7 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 from codex_usage_hud.config import UserConfigStore
+from codex_usage_hud.core import session_index_job as session_index_job_module
 from codex_usage_hud.core.session_index_job import (
     SessionIndexWarmJob,
     WarmJobSnapshot,
@@ -941,6 +942,32 @@ def test_progress_publish_throttled_to_four_hz(tmp_path: Path) -> None:
     assert counts == sorted(counts)
     assert final_status["jobState"] == "idle"
     assert final_status["coverage"] == "range_done(1m)"
+
+
+def test_warm_pass_computes_range_candidates_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    entries = _make_entries(tmp_path, {"a": 1, "b": 10, "c": 45})
+    index = _FakeSearchIndex(entries)
+    calls = 0
+    original = session_index_job_module.range_candidates
+
+    def count_candidates(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(session_index_job_module, "range_candidates", count_candidates)
+    job = SessionIndexWarmJob(index, state_path=tmp_path / "warm.json")
+    try:
+        assert job.start("1m") is True
+        assert _wait_until(lambda: job.status()["jobState"] == "idle")
+        assert calls == 1
+        assert index.removed_keeps == [{"a", "b"}]
+        assert index.sync_calls == [["a", "b"]]
+    finally:
+        job.close()
 
 
 def test_extend_publishes_range_change_before_worker_bucket(tmp_path: Path) -> None:
