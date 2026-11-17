@@ -1,0 +1,1061 @@
+{
+  "captured_at_utc": "2026-11-17T19:46:17.915122+08:00",
+  "commit": "bda35d40e713638bb7439a21e4fa7c1e4007699b",
+  "imports_no_trace": {
+    "stages": [
+      {
+        "name": "probe-baseline",
+        "private_bytes": 14450688,
+        "working_set_bytes": 22036480,
+        "modules": 137,
+        "allocated_blocks": 58500
+      },
+      {
+        "name": "helper_entrypoint",
+        "private_bytes": 14876672,
+        "working_set_bytes": 22687744,
+        "modules": 142,
+        "allocated_blocks": 61334,
+        "elapsed_ms": 4.2
+      },
+      {
+        "name": "runtime_orchestration",
+        "private_bytes": 34758656,
+        "working_set_bytes": 44982272,
+        "modules": 353,
+        "allocated_blocks": 182371,
+        "elapsed_ms": 171.5
+      },
+      {
+        "name": "renderer_runtime",
+        "private_bytes": 36216832,
+        "working_set_bytes": 46571520,
+        "modules": 375,
+        "allocated_blocks": 192418,
+        "elapsed_ms": 24.8
+      }
+    ],
+    "qt_loaded": false,
+    "renderer_manifest_loaded": false
+  },
+  "imports_traced": {
+    "stages": [
+      {
+        "name": "probe-baseline",
+        "private_bytes": 20004864,
+        "working_set_bytes": 27643904,
+        "traced_current_bytes": 7080155,
+        "traced_peak_bytes": 7158970,
+        "tracemalloc_metadata_bytes": 2886192,
+        "modules": 137,
+        "allocated_blocks": 58524
+      },
+      {
+        "name": "helper_entrypoint",
+        "private_bytes": 20697088,
+        "working_set_bytes": 28594176,
+        "traced_current_bytes": 7691599,
+        "traced_peak_bytes": 7730281,
+        "tracemalloc_metadata_bytes": 2992112,
+        "modules": 142,
+        "allocated_blocks": 61359,
+        "elapsed_ms": 9.0
+      },
+      {
+        "name": "runtime_orchestration",
+        "private_bytes": 55828480,
+        "working_set_bytes": 65683456,
+        "traced_current_bytes": 24356608,
+        "traced_peak_bytes": 24396924,
+        "tracemalloc_metadata_bytes": 11101264,
+        "modules": 353,
+        "allocated_blocks": 182387,
+        "elapsed_ms": 753.4
+      },
+      {
+        "name": "renderer_runtime",
+        "private_bytes": 58781696,
+        "working_set_bytes": 68370432,
+        "traced_current_bytes": 25761789,
+        "traced_peak_bytes": 26048216,
+        "tracemalloc_metadata_bytes": 11449520,
+        "modules": 375,
+        "allocated_blocks": 192438,
+        "elapsed_ms": 86.6
+      }
+    ],
+    "qt_loaded": false,
+    "renderer_manifest_loaded": false,
+    "top_project_files": [
+      {
+        "source": "src/codex_usage_hud/platforms/windows_tracker.py",
+        "bytes": 139427,
+        "count": 808
+      },
+      {
+        "source": "src/codex_usage_hud/core/parser.py",
+        "bytes": 109909,
+        "count": 542
+      },
+      {
+        "source": "src/codex_usage_hud/renderer_payload_builder.py",
+        "bytes": 54391,
+        "count": 300
+      },
+      {
+        "source": "src/codex_usage_hud/core/session_cleanup.py",
+        "bytes": 52988,
+        "count": 293
+      },
+      {
+        "source": "src/codex_usage_hud/core/session_search.py",
+        "bytes": 51114,
+        "count": 269
+      },
+      {
+        "source": "src/codex_usage_hud/core/rest_reminder.py",
+        "bytes": 43616,
+        "count": 243
+      },
+      {
+        "source": "src/codex_usage_hud/platforms/active_session.py",
+        "bytes": 40310,
+        "count": 229
+      },
+      {
+        "source": "src/codex_usage_hud/windows_tray.py",
+        "bytes": 39232,
+        "count": 219
+      },
+      {
+        "source": "src/codex_usage_hud/config.py",
+        "bytes": 39182,
+        "count": 206
+      },
+      {
+        "source": "src/codex_usage_hud/renderer_event_loop.py",
+        "bytes": 37240,
+        "count": 168
+      },
+      {
+        "source": "src/codex_usage_hud/platforms/codex_theme.py",
+        "bytes": 35485,
+        "count": 187
+      },
+      {
+        "source": "src/codex_usage_hud/core/background_usage.py",
+        "bytes": 35212,
+        "count": 196
+      },
+      {
+        "source": "src/codex_usage_hud/platforms/file_watcher.py",
+        "bytes": 34941,
+        "count": 180
+      },
+      {
+        "source": "src/codex_usage_hud/updater.py",
+        "bytes": 32852,
+        "count": 177
+      },
+      {
+        "source": "src/codex_usage_hud/platforms/session_switch.py",
+        "bytes": 31939,
+        "count": 197
+      },
+      {
+        "source": "src/codex_usage_hud/daemon.py",
+        "bytes": 31608,
+        "count": 167
+      },
+      {
+        "source": "src/codex_usage_hud/pricing.py",
+        "bytes": 28022,
+        "count": 146
+      },
+      {
+        "source": "src/codex_usage_hud/codex_provider_config.py",
+        "bytes": 27827,
+        "count": 146
+      },
+      {
+        "source": "src/codex_usage_hud/platforms/cdp_probe.py",
+        "bytes": 26351,
+        "count": 136
+      },
+      {
+        "source": "src/codex_usage_hud/renderer_client.py",
+        "bytes": 26163,
+        "count": 145
+      }
+    ],
+    "top_all_files": [
+      {
+        "source": "<frozen importlib._bootstrap_external>",
+        "bytes": 14635807,
+        "count": 114280
+      },
+      {
+        "source": "dataclasses.py",
+        "bytes": 1850737,
+        "count": 12860
+      },
+      {
+        "source": "<frozen importlib._bootstrap>",
+        "bytes": 1637707,
+        "count": 15269
+      },
+      {
+        "source": "<unknown>",
+        "bytes": 1061867,
+        "count": 1383
+      },
+      {
+        "source": "<frozen abc>",
+        "bytes": 421094,
+        "count": 2046
+      },
+      {
+        "source": "enum.py",
+        "bytes": 310409,
+        "count": 1731
+      },
+      {
+        "source": "__init__.py",
+        "bytes": 221059,
+        "count": 1012
+      },
+      {
+        "source": "typing.py",
+        "bytes": 196933,
+        "count": 1186
+      },
+      {
+        "source": "<string>",
+        "bytes": 166632,
+        "count": 1510
+      },
+      {
+        "source": "__init__.py",
+        "bytes": 163331,
+        "count": 1391
+      },
+      {
+        "source": "src/codex_usage_hud/platforms/windows_tracker.py",
+        "bytes": 139427,
+        "count": 808
+      },
+      {
+        "source": "src/codex_usage_hud/core/parser.py",
+        "bytes": 109909,
+        "count": 542
+      },
+      {
+        "source": "__init__.py",
+        "bytes": 108065,
+        "count": 590
+      },
+      {
+        "source": "argparse.py",
+        "bytes": 102803,
+        "count": 453
+      },
+      {
+        "source": "ipaddress.py",
+        "bytes": 99158,
+        "count": 739
+      }
+    ]
+  },
+  "cold_import_roots": {
+    "core": {
+      "stages": [
+        {
+          "name": "probe-baseline",
+          "private_bytes": 14364672,
+          "working_set_bytes": 21999616,
+          "modules": 137,
+          "allocated_blocks": 58504
+        },
+        {
+          "name": "helper_entrypoint",
+          "private_bytes": 14782464,
+          "working_set_bytes": 22749184,
+          "modules": 142,
+          "allocated_blocks": 61335,
+          "elapsed_ms": 2.8
+        },
+        {
+          "name": "core",
+          "private_bytes": 25522176,
+          "working_set_bytes": 36319232,
+          "modules": 253,
+          "allocated_blocks": 126744,
+          "elapsed_ms": 83.1
+        }
+      ],
+      "qt_loaded": false,
+      "renderer_manifest_loaded": false
+    },
+    "cli_app": {
+      "stages": [
+        {
+          "name": "probe-baseline",
+          "private_bytes": 14675968,
+          "working_set_bytes": 22196224,
+          "modules": 137,
+          "allocated_blocks": 58504
+        },
+        {
+          "name": "helper_entrypoint",
+          "private_bytes": 15097856,
+          "working_set_bytes": 22962176,
+          "modules": 142,
+          "allocated_blocks": 61335,
+          "elapsed_ms": 2.8
+        },
+        {
+          "name": "cli_app",
+          "private_bytes": 27529216,
+          "working_set_bytes": 37920768,
+          "modules": 261,
+          "allocated_blocks": 133366,
+          "elapsed_ms": 98.0
+        }
+      ],
+      "qt_loaded": false,
+      "renderer_manifest_loaded": false
+    },
+    "runtime_context": {
+      "stages": [
+        {
+          "name": "probe-baseline",
+          "private_bytes": 14573568,
+          "working_set_bytes": 22032384,
+          "modules": 137,
+          "allocated_blocks": 58519
+        },
+        {
+          "name": "helper_entrypoint",
+          "private_bytes": 14995456,
+          "working_set_bytes": 22892544,
+          "modules": 142,
+          "allocated_blocks": 61349,
+          "elapsed_ms": 5.6
+        },
+        {
+          "name": "runtime_context",
+          "private_bytes": 31526912,
+          "working_set_bytes": 41717760,
+          "modules": 297,
+          "allocated_blocks": 159304,
+          "elapsed_ms": 134.0
+        }
+      ],
+      "qt_loaded": false,
+      "renderer_manifest_loaded": false
+    },
+    "ui.renderer_domains": {
+      "stages": [
+        {
+          "name": "probe-baseline",
+          "private_bytes": 14458880,
+          "working_set_bytes": 22028288,
+          "modules": 137,
+          "allocated_blocks": 58518
+        },
+        {
+          "name": "helper_entrypoint",
+          "private_bytes": 14876672,
+          "working_set_bytes": 22794240,
+          "modules": 142,
+          "allocated_blocks": 61349,
+          "elapsed_ms": 3.0
+        },
+        {
+          "name": "ui.renderer_domains",
+          "private_bytes": 29945856,
+          "working_set_bytes": 40173568,
+          "modules": 295,
+          "allocated_blocks": 150871,
+          "elapsed_ms": 130.1
+        }
+      ],
+      "qt_loaded": false,
+      "renderer_manifest_loaded": false
+    }
+  },
+  "snapshots_traced": {
+    "stages": [
+      {
+        "name": "parser-imported",
+        "private_bytes": 43061248,
+        "working_set_bytes": 53141504,
+        "traced_current_bytes": 18182585,
+        "traced_peak_bytes": 18607754,
+        "tracemalloc_metadata_bytes": 7217072,
+        "modules": 260,
+        "allocated_blocks": 136150
+      },
+      {
+        "name": "selected",
+        "private_bytes": 52854784,
+        "working_set_bytes": 63127552,
+        "traced_current_bytes": 21533800,
+        "traced_peak_bytes": 24242993,
+        "tracemalloc_metadata_bytes": 10026096,
+        "modules": 262,
+        "allocated_blocks": 155521
+      },
+      {
+        "name": "recent",
+        "private_bytes": 57110528,
+        "working_set_bytes": 67682304,
+        "traced_current_bytes": 22590871,
+        "traced_peak_bytes": 25504304,
+        "tracemalloc_metadata_bytes": 10042576,
+        "modules": 262,
+        "allocated_blocks": 155723
+      },
+      {
+        "name": "large-1",
+        "private_bytes": 60661760,
+        "working_set_bytes": 71122944,
+        "traced_current_bytes": 23851260,
+        "traced_peak_bytes": 38452131,
+        "tracemalloc_metadata_bytes": 10697264,
+        "modules": 262,
+        "allocated_blocks": 176136
+      },
+      {
+        "name": "large-2",
+        "private_bytes": 61145088,
+        "working_set_bytes": 71385088,
+        "traced_current_bytes": 24177544,
+        "traced_peak_bytes": 38452131,
+        "tracemalloc_metadata_bytes": 10318352,
+        "modules": 262,
+        "allocated_blocks": 164281
+      },
+      {
+        "name": "cache-closed-gc",
+        "private_bytes": 56803328,
+        "working_set_bytes": 66695168,
+        "traced_current_bytes": 18393851,
+        "traced_peak_bytes": 38452131,
+        "tracemalloc_metadata_bytes": 9473360,
+        "modules": 262,
+        "allocated_blocks": 137886
+      }
+    ],
+    "entries": [
+      {
+        "label": "selected",
+        "source_bytes": 2818419,
+        "elapsed_ms": 508.8,
+        "records": 413,
+        "snapshot_is_state_snapshot": true,
+        "last_complete_line_bytes": 41,
+        "history_types": {
+          "request_history": "DiskSequence",
+          "session_request_history": "_FrozenDiskSequence",
+          "activity_tasks": "_TaskHistoryView"
+        }
+      },
+      {
+        "label": "recent",
+        "source_bytes": 2564461,
+        "elapsed_ms": 435.2,
+        "records": 382,
+        "snapshot_is_state_snapshot": true,
+        "last_complete_line_bytes": 41,
+        "history_types": {
+          "request_history": "DiskSequence",
+          "session_request_history": "_FrozenDiskSequence",
+          "activity_tasks": "_TaskHistoryView"
+        }
+      },
+      {
+        "label": "large-1",
+        "source_bytes": 34318923,
+        "elapsed_ms": 4527.1,
+        "records": 2245,
+        "snapshot_is_state_snapshot": true,
+        "last_complete_line_bytes": 41,
+        "history_types": {
+          "request_history": "DiskSequence",
+          "session_request_history": "_FrozenDiskSequence",
+          "activity_tasks": "_TaskHistoryView"
+        }
+      },
+      {
+        "label": "large-2",
+        "source_bytes": 16661518,
+        "elapsed_ms": 1350.2,
+        "records": 664,
+        "snapshot_is_state_snapshot": true,
+        "last_complete_line_bytes": 41,
+        "history_types": {
+          "request_history": "DiskSequence",
+          "session_request_history": "_FrozenDiskSequence",
+          "activity_tasks": "_TaskHistoryView"
+        }
+      }
+    ],
+    "owner_walk_enabled": false,
+    "retention": {
+      "entry_count": 4,
+      "decoded_cache_budget_bytes": 2097152,
+      "decoded_cache_reported_bytes": 1195567
+    },
+    "after_close_disk_objects": {
+      "DecodedHistoryCache": 1
+    },
+    "after_close_top_project_allocations": [
+      {
+        "source": "src/codex_usage_hud/disk_sequence.py",
+        "line": 133,
+        "bytes": 22718,
+        "count": 459
+      },
+      {
+        "source": "src/codex_usage_hud/core/session_cleanup.py",
+        "line": 519,
+        "bytes": 7040,
+        "count": 12
+      },
+      {
+        "source": "src/codex_usage_hud/core/session_search.py",
+        "line": 419,
+        "bytes": 5561,
+        "count": 13
+      },
+      {
+        "source": "src/codex_usage_hud/core/parser.py",
+        "line": 951,
+        "bytes": 5492,
+        "count": 11
+      },
+      {
+        "source": "src/codex_usage_hud/platforms/session_switch.py",
+        "line": 145,
+        "bytes": 4513,
+        "count": 14
+      },
+      {
+        "source": "src/codex_usage_hud/core/session_search.py",
+        "line": 1147,
+        "bytes": 4071,
+        "count": 11
+      },
+      {
+        "source": "src/codex_usage_hud/platforms/active_session.py",
+        "line": 401,
+        "bytes": 3780,
+        "count": 11
+      },
+      {
+        "source": "src/codex_usage_hud/platforms/windows_tracker.py",
+        "line": 2778,
+        "bytes": 3779,
+        "count": 11
+      },
+      {
+        "source": "src/codex_usage_hud/core/parser.py",
+        "line": 1245,
+        "bytes": 3768,
+        "count": 11
+      },
+      {
+        "source": "src/codex_usage_hud/platforms/windows_tracker.py",
+        "line": 611,
+        "bytes": 3767,
+        "count": 11
+      },
+      {
+        "source": "src/codex_usage_hud/core/parser.py",
+        "line": 895,
+        "bytes": 3764,
+        "count": 11
+      },
+      {
+        "source": "src/codex_usage_hud/codex_provider_config.py",
+        "line": 820,
+        "bytes": 3664,
+        "count": 4
+      },
+      {
+        "source": "src/codex_usage_hud/core/pre_send_estimator.py",
+        "line": 755,
+        "bytes": 3588,
+        "count": 12
+      },
+      {
+        "source": "src/codex_usage_hud/core/runtime_errors.py",
+        "line": 57,
+        "bytes": 3402,
+        "count": 12
+      },
+      {
+        "source": "src/codex_usage_hud/core/session_search_disk.py",
+        "line": 188,
+        "bytes": 3392,
+        "count": 12
+      }
+    ],
+    "allocator_stats": "ALLOCATOR before-hydration\n            0 free PyDictObjects * 48 bytes each =                    0\n        1 free PyDictKeysObjects * 32 bytes each =                   32\n           1 free PyFloatObjects * 24 bytes each =                   24\n            2 free PyListObjects * 40 bytes each =                   80\n   2 free 1-sized PyTupleObjects * 40 bytes each =                   80\n   6 free 2-sized PyTupleObjects * 48 bytes each =                  288\n   1 free 3-sized PyTupleObjects * 56 bytes each =                   56\n   1 free 4-sized PyTupleObjects * 64 bytes each =                   64\n   0 free 5-sized PyTupleObjects * 72 bytes each =                    0\n   1 free 6-sized PyTupleObjects * 80 bytes each =                   80\n   0 free 7-sized PyTupleObjects * 88 bytes each =                    0\n  13 free 8-sized PyTupleObjects * 96 bytes each =                1,248\n  1 free 9-sized PyTupleObjects * 104 bytes each =                  104\n 0 free 10-sized PyTupleObjects * 112 bytes each =                    0\n 0 free 11-sized PyTupleObjects * 120 bytes each =                    0\n 0 free 12-sized PyTupleObjects * 128 bytes each =                    0\n 0 free 13-sized PyTupleObjects * 136 bytes each =                    0\n 0 free 14-sized PyTupleObjects * 144 bytes each =                    0\n 0 free 15-sized PyTupleObjects * 152 bytes each =                    0\n 0 free 16-sized PyTupleObjects * 160 bytes each =                    0\n 0 free 17-sized PyTupleObjects * 168 bytes each =                    0\n 0 free 18-sized PyTupleObjects * 176 bytes each =                    0\n 0 free 19-sized PyTupleObjects * 184 bytes each =                    0\n 0 free 20-sized PyTupleObjects * 192 bytes each =                    0\nALLOCATOR after-cache-close\n           80 free PyDictObjects * 48 bytes each =                3,840\n       80 free PyDictKeysObjects * 32 bytes each =                2,560\n           0 free PyFloatObjects * 24 bytes each =                    0\n            8 free PyListObjects * 40 bytes each =                  320\n2000 free 1-sized PyTupleObjects * 40 bytes each =               80,000\n   2 free 2-sized PyTupleObjects * 48 bytes each =                   96\n2000 free 3-sized PyTupleObjects * 56 bytes each =              112,000\n   0 free 4-sized PyTupleObjects * 64 bytes each =                    0\n   0 free 5-sized PyTupleObjects * 72 bytes each =                    0\n   0 free 6-sized PyTupleObjects * 80 bytes each =                    0\n   0 free 7-sized PyTupleObjects * 88 bytes each =                    0\n   0 free 8-sized PyTupleObjects * 96 bytes each =                    0\n  0 free 9-sized PyTupleObjects * 104 bytes each =                    0\n 0 free 10-sized PyTupleObjects * 112 bytes each =                    0\n 0 free 11-sized PyTupleObjects * 120 bytes each =                    0\n 0 free 12-sized PyTupleObjects * 128 bytes each =                    0\n 0 free 13-sized PyTupleObjects * 136 bytes each =                    0\n 0 free 14-sized PyTupleObjects * 144 bytes each =                    0\n 0 free 15-sized PyTupleObjects * 152 bytes each =                    0\n 0 free 16-sized PyTupleObjects * 160 bytes each =                    0\n 0 free 17-sized PyTupleObjects * 168 bytes each =                    0\n 0 free 18-sized PyTupleObjects * 176 bytes each =                    0\n 0 free 19-sized PyTupleObjects * 184 bytes each =                    0\n 0 free 20-sized PyTupleObjects * 192 bytes each =                    0\n"
+  },
+  "snapshots_no_trace": {
+    "stages": [
+      {
+        "name": "parser-imported",
+        "private_bytes": 27185152,
+        "working_set_bytes": 37773312,
+        "modules": 260,
+        "allocated_blocks": 136098
+      },
+      {
+        "name": "selected",
+        "private_bytes": 33726464,
+        "working_set_bytes": 44318720,
+        "modules": 262,
+        "allocated_blocks": 155464
+      },
+      {
+        "name": "recent",
+        "private_bytes": 36683776,
+        "working_set_bytes": 47235072,
+        "modules": 262,
+        "allocated_blocks": 155661
+      },
+      {
+        "name": "large-1",
+        "private_bytes": 36933632,
+        "working_set_bytes": 47882240,
+        "modules": 262,
+        "allocated_blocks": 176069
+      },
+      {
+        "name": "large-2",
+        "private_bytes": 38518784,
+        "working_set_bytes": 49135616,
+        "modules": 262,
+        "allocated_blocks": 164227
+      },
+      {
+        "name": "cache-closed-gc",
+        "private_bytes": 33853440,
+        "working_set_bytes": 44138496,
+        "modules": 262,
+        "allocated_blocks": 137829
+      }
+    ],
+    "entries": [
+      {
+        "label": "selected",
+        "source_bytes": 2818419,
+        "elapsed_ms": 156.9,
+        "records": 413,
+        "snapshot_is_state_snapshot": true,
+        "last_complete_line_bytes": 41,
+        "history_types": {
+          "request_history": "DiskSequence",
+          "session_request_history": "_FrozenDiskSequence",
+          "activity_tasks": "_TaskHistoryView"
+        }
+      },
+      {
+        "label": "recent",
+        "source_bytes": 2564461,
+        "elapsed_ms": 153.2,
+        "records": 382,
+        "snapshot_is_state_snapshot": true,
+        "last_complete_line_bytes": 41,
+        "history_types": {
+          "request_history": "DiskSequence",
+          "session_request_history": "_FrozenDiskSequence",
+          "activity_tasks": "_TaskHistoryView"
+        }
+      },
+      {
+        "label": "large-1",
+        "source_bytes": 34318923,
+        "elapsed_ms": 902.1,
+        "records": 2245,
+        "snapshot_is_state_snapshot": true,
+        "last_complete_line_bytes": 41,
+        "history_types": {
+          "request_history": "DiskSequence",
+          "session_request_history": "_FrozenDiskSequence",
+          "activity_tasks": "_TaskHistoryView"
+        }
+      },
+      {
+        "label": "large-2",
+        "source_bytes": 16661518,
+        "elapsed_ms": 316.7,
+        "records": 664,
+        "snapshot_is_state_snapshot": true,
+        "last_complete_line_bytes": 41,
+        "history_types": {
+          "request_history": "DiskSequence",
+          "session_request_history": "_FrozenDiskSequence",
+          "activity_tasks": "_TaskHistoryView"
+        }
+      }
+    ],
+    "owner_walk_enabled": false,
+    "retention": {
+      "entry_count": 4,
+      "decoded_cache_budget_bytes": 2097152,
+      "decoded_cache_reported_bytes": 1195567
+    },
+    "after_close_disk_objects": {
+      "DecodedHistoryCache": 1
+    },
+    "allocator_stats": "ALLOCATOR before-hydration\nSmall block threshold = 512, in 32 size classes.\n\nclass   size   num pools   blocks in use  avail blocks\n-----   ----   ---------   -------------  ------------\n    0     16           1             318           703\n    1     32          10            5011            89\n    2     48          66           21738           702\n    3     64         192           48216           744\n    4     80          96           19400           184\n    5     96          36            6092            28\n    6    112          25            3509           116\n    7    128          32            4043            21\n    8    144          12            1233           123\n    9    160          14            1338            90\n   10    176          88            8044            52\n   11    192           7             523            72\n   12    208          15            1126            44\n   13    224          18            1263            33\n   14    240          19            1238            54\n   15    256          20            1199            61\n   16    272          16             930            30\n   17    288          20            1074            46\n   18    304          12             615            21\n   19    320          13             614            49\n   20    336          11             490            38\n   21    352           8             346            22\n   22    368           8             337            15\n   23    384           8             307            29\n   24    400          21             834             6\n   25    416           6             232             2\n   26    432           7             233            26\n   27    448           5             173             7\n   28    464           5             175             0\n   29    480           6             180            24\n   30    496           5             159             1\n   31    512           9             269            10\n\n# arenas allocated total           =                   13\n# arenas reclaimed                 =                    0\n# arenas highwater mark            =                   13\n# arenas allocated current         =                   13\n13 arenas * 1048576 bytes/arena    =           13,631,488\n\n# bytes in allocated blocks        =           12,837,520\n# bytes in available blocks        =              344,080\n21 unused pools * 16384 bytes      =              344,064\n# bytes lost to pool headers       =               38,928\n# bytes lost to quantization       =               66,896\n# bytes lost to arena alignment    =                    0\nTotal                              =           13,631,488\n\narena map counts\n# arena map mid nodes              =                    1\n# arena map bot nodes              =                    1\n\n# bytes lost to arena map root     =              262,144\n# bytes lost to arena map mid      =              262,144\n# bytes lost to arena map bot      =              131,072\nTotal                              =              655,360\n\n            0 free PyDictObjects * 48 bytes each =                    0\n        1 free PyDictKeysObjects * 32 bytes each =                   32\n           1 free PyFloatObjects * 24 bytes each =                   24\n            2 free PyListObjects * 40 bytes each =                   80\n   2 free 1-sized PyTupleObjects * 40 bytes each =                   80\n   6 free 2-sized PyTupleObjects * 48 bytes each =                  288\n   1 free 3-sized PyTupleObjects * 56 bytes each =                   56\n   1 free 4-sized PyTupleObjects * 64 bytes each =                   64\n   0 free 5-sized PyTupleObjects * 72 bytes each =                    0\n   1 free 6-sized PyTupleObjects * 80 bytes each =                   80\n   0 free 7-sized PyTupleObjects * 88 bytes each =                    0\n  13 free 8-sized PyTupleObjects * 96 bytes each =                1,248\n  1 free 9-sized PyTupleObjects * 104 bytes each =                  104\n 0 free 10-sized PyTupleObjects * 112 bytes each =                    0\n 0 free 11-sized PyTupleObjects * 120 bytes each =                    0\n 0 free 12-sized PyTupleObjects * 128 bytes each =                    0\n 0 free 13-sized PyTupleObjects * 136 bytes each =                    0\n 0 free 14-sized PyTupleObjects * 144 bytes each =                    0\n 0 free 15-sized PyTupleObjects * 152 bytes each =                    0\n 0 free 16-sized PyTupleObjects * 160 bytes each =                    0\n 0 free 17-sized PyTupleObjects * 168 bytes each =                    0\n 0 free 18-sized PyTupleObjects * 176 bytes each =                    0\n 0 free 19-sized PyTupleObjects * 184 bytes each =                    0\n 0 free 20-sized PyTupleObjects * 192 bytes each =                    0\nALLOCATOR after-cache-close\nSmall block threshold = 512, in 32 size classes.\n\nclass   size   num pools   blocks in use  avail blocks\n-----   ----   ---------   -------------  ------------\n    0     16           1             331           690\n    1     32          22            5055          6165\n    2     48          69           21813          1647\n    3     64         234           48919         10751\n    4     80         103           19636          1376\n    5     96          37            6166           124\n    6    112          25            3574            51\n    7    128          41            4110          1097\n    8    144          12            1251           105\n    9    160          14            1351            77\n   10    176          89            8129            59\n   11    192           7             528            67\n   12    208          17            1134           192\n   13    224          19            1294            74\n   14    240          19            1251            41\n   15    256          20            1224            36\n   16    272          16             934            26\n   17    288          20            1082            38\n   18    304          12             620            16\n   19    320          13             618            45\n   20    336          11             494            34\n   21    352           8             349            19\n   22    368           8             338            14\n   23    384           8             312            24\n   24    400          22             842            38\n   25    416           6             234             0\n   26    432           7             235            24\n   27    448           5             174             6\n   28    464           6             178            32\n   29    480           6             180            24\n   30    496           5             159             1\n   31    512           9             271             8\n\n# arenas allocated total           =                   17\n# arenas reclaimed                 =                    0\n# arenas highwater mark            =                   17\n# arenas allocated current         =                   17\n17 arenas * 1048576 bytes/arena    =           17,825,792\n\n# bytes in allocated blocks        =           12,986,928\n# bytes in available blocks        =            1,498,784\n197 unused pools * 16384 bytes     =            3,227,648\n# bytes lost to pool headers       =               42,768\n# bytes lost to quantization       =               69,664\n# bytes lost to arena alignment    =                    0\nTotal                              =           17,825,792\n\narena map counts\n# arena map mid nodes              =                    1\n# arena map bot nodes              =                    1\n\n# bytes lost to arena map root     =              262,144\n# bytes lost to arena map mid      =              262,144\n# bytes lost to arena map bot      =              131,072\nTotal                              =              655,360\n\n            0 free PyDictObjects * 48 bytes each =                    0\n        0 free PyDictKeysObjects * 32 bytes each =                    0\n           0 free PyFloatObjects * 24 bytes each =                    0\n            1 free PyListObjects * 40 bytes each =                   40\n   0 free 1-sized PyTupleObjects * 40 bytes each =                    0\n   0 free 2-sized PyTupleObjects * 48 bytes each =                    0\n   1 free 3-sized PyTupleObjects * 56 bytes each =                   56\n   0 free 4-sized PyTupleObjects * 64 bytes each =                    0\n   0 free 5-sized PyTupleObjects * 72 bytes each =                    0\n   0 free 6-sized PyTupleObjects * 80 bytes each =                    0\n   0 free 7-sized PyTupleObjects * 88 bytes each =                    0\n   0 free 8-sized PyTupleObjects * 96 bytes each =                    0\n  0 free 9-sized PyTupleObjects * 104 bytes each =                    0\n 0 free 10-sized PyTupleObjects * 112 bytes each =                    0\n 0 free 11-sized PyTupleObjects * 120 bytes each =                    0\n 0 free 12-sized PyTupleObjects * 128 bytes each =                    0\n 0 free 13-sized PyTupleObjects * 136 bytes each =                    0\n 0 free 14-sized PyTupleObjects * 144 bytes each =                    0\n 0 free 15-sized PyTupleObjects * 152 bytes each =                    0\n 0 free 16-sized PyTupleObjects * 160 bytes each =                    0\n 0 free 17-sized PyTupleObjects * 168 bytes each =                    0\n 0 free 18-sized PyTupleObjects * 176 bytes each =                    0\n 0 free 19-sized PyTupleObjects * 184 bytes each =                    0\n 0 free 20-sized PyTupleObjects * 192 bytes each =                    0\n"
+  },
+  "corpus": [
+    {
+      "label": "selected",
+      "bytes": 2818419,
+      "sha256": "19ba5c759d33333e7ae2932397e576d0d0160f49e18227e734cfc19f83c0a829"
+    },
+    {
+      "label": "recent",
+      "bytes": 2564461,
+      "sha256": "7e43dc8feafff07eedebe46a1bab39427f4337afd79ea5834e2a5af8fece9da4"
+    },
+    {
+      "label": "large-1",
+      "bytes": 34318923,
+      "sha256": "b7d9f86a980a901d5b26421382c67e4e88ac93a7918b4f55087d381fd17c5e18"
+    },
+    {
+      "label": "large-2",
+      "bytes": 16661518,
+      "sha256": "d7d721d46655631e794749da7315cf65de752d2bad5f3ac98c335e8de6c3d982"
+    }
+  ],
+  "snapshot_retention": {
+    "stages": [
+      {
+        "name": "parser-imported",
+        "private_bytes": 27660288,
+        "working_set_bytes": 38105088,
+        "modules": 260,
+        "allocated_blocks": 136100
+      },
+      {
+        "name": "selected",
+        "private_bytes": 34017280,
+        "working_set_bytes": 45858816,
+        "modules": 262,
+        "allocated_blocks": 155632
+      },
+      {
+        "name": "recent",
+        "private_bytes": 37949440,
+        "working_set_bytes": 47804416,
+        "modules": 262,
+        "allocated_blocks": 155875
+      },
+      {
+        "name": "large-1",
+        "private_bytes": 37908480,
+        "working_set_bytes": 48971776,
+        "modules": 262,
+        "allocated_blocks": 176326
+      },
+      {
+        "name": "large-2",
+        "private_bytes": 40599552,
+        "working_set_bytes": 50806784,
+        "modules": 262,
+        "allocated_blocks": 164532
+      },
+      {
+        "name": "cache-closed-gc",
+        "private_bytes": 34463744,
+        "working_set_bytes": 45142016,
+        "modules": 262,
+        "allocated_blocks": 137918
+      }
+    ],
+    "entries": [
+      {
+        "label": "selected",
+        "source_bytes": 2818419,
+        "elapsed_ms": 200.9,
+        "records": 413,
+        "snapshot_is_state_snapshot": true,
+        "nominal_retained_size_bytes": 40050,
+        "owned_entry_including_shared_cache_bytes": 2179235,
+        "last_complete_line_bytes": 41,
+        "projection_metadata_bytes": 1229,
+        "history_types": {
+          "request_history": "DiskSequence",
+          "session_request_history": "_FrozenDiskSequence",
+          "activity_tasks": "_TaskHistoryView"
+        },
+        "top_snapshot_fields": [
+          {
+            "field": "activity_tasks",
+            "owned_bytes": 2100881
+          },
+          {
+            "field": "session_request_history",
+            "owned_bytes": 2100098
+          },
+          {
+            "field": "request_history",
+            "owned_bytes": 2099154
+          },
+          {
+            "field": "activity_steps",
+            "owned_bytes": 42885
+          },
+          {
+            "field": "slow",
+            "owned_bytes": 1280
+          },
+          {
+            "field": "last_output",
+            "owned_bytes": 1034
+          },
+          {
+            "field": "estimate_base",
+            "owned_bytes": 827
+          },
+          {
+            "field": "request",
+            "owned_bytes": 797
+          }
+        ]
+      },
+      {
+        "label": "recent",
+        "source_bytes": 2564461,
+        "elapsed_ms": 194.2,
+        "records": 382,
+        "snapshot_is_state_snapshot": true,
+        "nominal_retained_size_bytes": 13479,
+        "owned_entry_including_shared_cache_bytes": 2220862,
+        "last_complete_line_bytes": 41,
+        "projection_metadata_bytes": 3674,
+        "history_types": {
+          "request_history": "DiskSequence",
+          "session_request_history": "_FrozenDiskSequence",
+          "activity_tasks": "_TaskHistoryView"
+        },
+        "top_snapshot_fields": [
+          {
+            "field": "activity_tasks",
+            "owned_bytes": 2179315
+          },
+          {
+            "field": "session_request_history",
+            "owned_bytes": 2177324
+          },
+          {
+            "field": "request_history",
+            "owned_bytes": 2176204
+          },
+          {
+            "field": "activity_steps",
+            "owned_bytes": 8195
+          },
+          {
+            "field": "slow",
+            "owned_bytes": 1152
+          },
+          {
+            "field": "last_output",
+            "owned_bytes": 1075
+          },
+          {
+            "field": "activity",
+            "owned_bytes": 817
+          },
+          {
+            "field": "estimate_base",
+            "owned_bytes": 779
+          }
+        ]
+      },
+      {
+        "label": "large-1",
+        "source_bytes": 34318923,
+        "elapsed_ms": 1049.7,
+        "records": 2245,
+        "snapshot_is_state_snapshot": true,
+        "nominal_retained_size_bytes": 185448,
+        "owned_entry_including_shared_cache_bytes": 2436261,
+        "last_complete_line_bytes": 41,
+        "projection_metadata_bytes": 2417,
+        "history_types": {
+          "request_history": "DiskSequence",
+          "session_request_history": "_FrozenDiskSequence",
+          "activity_tasks": "_TaskHistoryView"
+        },
+        "top_snapshot_fields": [
+          {
+            "field": "session_request_history",
+            "owned_bytes": 2110965
+          },
+          {
+            "field": "activity_tasks",
+            "owned_bytes": 2108447
+          },
+          {
+            "field": "request_history",
+            "owned_bytes": 2106633
+          },
+          {
+            "field": "activity_steps",
+            "owned_bytes": 199579
+          },
+          {
+            "field": "slow",
+            "owned_bytes": 1328
+          },
+          {
+            "field": "request",
+            "owned_bytes": 751
+          },
+          {
+            "field": "estimate_base",
+            "owned_bytes": 731
+          },
+          {
+            "field": "confirmed",
+            "owned_bytes": 612
+          }
+        ]
+      },
+      {
+        "label": "large-2",
+        "source_bytes": 16661518,
+        "elapsed_ms": 415.5,
+        "records": 664,
+        "snapshot_is_state_snapshot": true,
+        "nominal_retained_size_bytes": 90193,
+        "owned_entry_including_shared_cache_bytes": 1515039,
+        "last_complete_line_bytes": 41,
+        "projection_metadata_bytes": 1626,
+        "history_types": {
+          "request_history": "DiskSequence",
+          "session_request_history": "_FrozenDiskSequence",
+          "activity_tasks": "_TaskHistoryView"
+        },
+        "top_snapshot_fields": [
+          {
+            "field": "activity_tasks",
+            "owned_bytes": 1372658
+          },
+          {
+            "field": "session_request_history",
+            "owned_bytes": 1371957
+          },
+          {
+            "field": "request_history",
+            "owned_bytes": 1370837
+          },
+          {
+            "field": "activity_steps",
+            "owned_bytes": 95668
+          },
+          {
+            "field": "last_output",
+            "owned_bytes": 1197
+          },
+          {
+            "field": "slow",
+            "owned_bytes": 1130
+          },
+          {
+            "field": "activity",
+            "owned_bytes": 929
+          },
+          {
+            "field": "request",
+            "owned_bytes": 781
+          }
+        ]
+      }
+    ],
+    "owner_walk_enabled": true,
+    "retention": {
+      "entry_count": 4,
+      "decoded_cache_budget_bytes": 2097152,
+      "decoded_cache_reported_bytes": 1195567,
+      "decoded_cache_graph_bytes": 1369485,
+      "raw_storage_metadata_bytes": 183608,
+      "projection_exclusive_bytes": 25128,
+      "entry_snapshots_exclusive_bytes": 388816,
+      "renderer_clone_exclusive_bytes": 17800,
+      "total_owner_estimate_bytes": 1984837,
+      "nominal_retained_size_bytes": 325165
+    },
+    "after_close_disk_objects": {
+      "DecodedHistoryCache": 1
+    },
+    "allocator_stats": "ALLOCATOR before-hydration\nSmall block threshold = 512, in 32 size classes.\n\nclass   size   num pools   blocks in use  avail blocks\n-----   ----   ---------   -------------  ------------\n    0     16           1             318           703\n    1     32          10            5011            89\n    2     48          66           21749           691\n    3     64         192           48202           758\n    4     80          96           19405           179\n    5     96          36            6090            30\n    6    112          25            3509           116\n    7    128          32            4043            21\n    8    144          12            1233           123\n    9    160          14            1338            90\n   10    176          88            8044            52\n   11    192           7             523            72\n   12    208          15            1126            44\n   13    224          18            1263            33\n   14    240          19            1238            54\n   15    256          20            1199            61\n   16    272          16             930            30\n   17    288          20            1074            46\n   18    304          12             615            21\n   19    320          13             614            49\n   20    336          11             490            38\n   21    352           8             346            22\n   22    368           8             337            15\n   23    384           8             307            29\n   24    400          21             834             6\n   25    416           6             232             2\n   26    432           7             233            26\n   27    448           5             173             7\n   28    464           5             175             0\n   29    480           6             180            24\n   30    496           5             159             1\n   31    512           9             269            10\n\n# arenas allocated total           =                   13\n# arenas reclaimed                 =                    0\n# arenas highwater mark            =                   13\n# arenas allocated current         =                   13\n13 arenas * 1048576 bytes/arena    =           13,631,488\n\n# bytes in allocated blocks        =           12,837,360\n# bytes in available blocks        =              344,240\n21 unused pools * 16384 bytes      =              344,064\n# bytes lost to pool headers       =               38,928\n# bytes lost to quantization       =               66,896\n# bytes lost to arena alignment    =                    0\nTotal                              =           13,631,488\n\narena map counts\n# arena map mid nodes              =                    1\n# arena map bot nodes              =                    1\n\n# bytes lost to arena map root     =              262,144\n# bytes lost to arena map mid      =              262,144\n# bytes lost to arena map bot      =              131,072\nTotal                              =              655,360\n\n            0 free PyDictObjects * 48 bytes each =                    0\n        1 free PyDictKeysObjects * 32 bytes each =                   32\n           1 free PyFloatObjects * 24 bytes each =                   24\n            2 free PyListObjects * 40 bytes each =                   80\n   2 free 1-sized PyTupleObjects * 40 bytes each =                   80\n   6 free 2-sized PyTupleObjects * 48 bytes each =                  288\n   1 free 3-sized PyTupleObjects * 56 bytes each =                   56\n   1 free 4-sized PyTupleObjects * 64 bytes each =                   64\n   0 free 5-sized PyTupleObjects * 72 bytes each =                    0\n   1 free 6-sized PyTupleObjects * 80 bytes each =                   80\n   0 free 7-sized PyTupleObjects * 88 bytes each =                    0\n  13 free 8-sized PyTupleObjects * 96 bytes each =                1,248\n  1 free 9-sized PyTupleObjects * 104 bytes each =                  104\n 0 free 10-sized PyTupleObjects * 112 bytes each =                    0\n 0 free 11-sized PyTupleObjects * 120 bytes each =                    0\n 0 free 12-sized PyTupleObjects * 128 bytes each =                    0\n 0 free 13-sized PyTupleObjects * 136 bytes each =                    0\n 0 free 14-sized PyTupleObjects * 144 bytes each =                    0\n 0 free 15-sized PyTupleObjects * 152 bytes each =                    0\n 0 free 16-sized PyTupleObjects * 160 bytes each =                    0\n 0 free 17-sized PyTupleObjects * 168 bytes each =                    0\n 0 free 18-sized PyTupleObjects * 176 bytes each =                    0\n 0 free 19-sized PyTupleObjects * 184 bytes each =                    0\n 0 free 20-sized PyTupleObjects * 192 bytes each =                    0\nALLOCATOR after-cache-close\nSmall block threshold = 512, in 32 size classes.\n\nclass   size   num pools   blocks in use  avail blocks\n-----   ----   ---------   -------------  ------------\n    0     16           1             331           690\n    1     32          28            5106          9174\n    2     48          72           21819          2661\n    3     64         236           48917         11263\n    4     80         104           19640          1576\n    5     96          37            6164           126\n    6    112          25            3574            51\n    7    128          40            4142           938\n    8    144          12            1251           105\n    9    160          14            1351            77\n   10    176          89            8129            59\n   11    192           7             528            67\n   12    208          17            1134           192\n   13    224          19            1294            74\n   14    240          19            1251            41\n   15    256          20            1224            36\n   16    272          16             934            26\n   17    288          20            1082            38\n   18    304          12             620            16\n   19    320          13             618            45\n   20    336          11             494            34\n   21    352           8             349            19\n   22    368           8             338            14\n   23    384           8             312            24\n   24    400          22             842            38\n   25    416           6             234             0\n   26    432           7             235            24\n   27    448           5             174             6\n   28    464           6             178            32\n   29    480           6             180            24\n   30    496           5             159             1\n   31    512           9             271             8\n\n# arenas allocated total           =                   17\n# arenas reclaimed                 =                    0\n# arenas highwater mark            =                   17\n# arenas allocated current         =                   17\n17 arenas * 1048576 bytes/arena    =           17,825,792\n\n# bytes in allocated blocks        =           12,992,944\n# bytes in available blocks        =            1,672,352\n186 unused pools * 16384 bytes     =            3,047,424\n# bytes lost to pool headers       =               43,296\n# bytes lost to quantization       =               69,776\n# bytes lost to arena alignment    =                    0\nTotal                              =           17,825,792\n\narena map counts\n# arena map mid nodes              =                    1\n# arena map bot nodes              =                    1\n\n# bytes lost to arena map root     =              262,144\n# bytes lost to arena map mid      =              262,144\n# bytes lost to arena map bot      =              131,072\nTotal                              =              655,360\n\n            0 free PyDictObjects * 48 bytes each =                    0\n        0 free PyDictKeysObjects * 32 bytes each =                    0\n           0 free PyFloatObjects * 24 bytes each =                    0\n            1 free PyListObjects * 40 bytes each =                   40\n   0 free 1-sized PyTupleObjects * 40 bytes each =                    0\n   0 free 2-sized PyTupleObjects * 48 bytes each =                    0\n   1 free 3-sized PyTupleObjects * 56 bytes each =                   56\n   0 free 4-sized PyTupleObjects * 64 bytes each =                    0\n   0 free 5-sized PyTupleObjects * 72 bytes each =                    0\n   0 free 6-sized PyTupleObjects * 80 bytes each =                    0\n   0 free 7-sized PyTupleObjects * 88 bytes each =                    0\n   0 free 8-sized PyTupleObjects * 96 bytes each =                    0\n  0 free 9-sized PyTupleObjects * 104 bytes each =                    0\n 0 free 10-sized PyTupleObjects * 112 bytes each =                    0\n 0 free 11-sized PyTupleObjects * 120 bytes each =                    0\n 0 free 12-sized PyTupleObjects * 128 bytes each =                    0\n 0 free 13-sized PyTupleObjects * 136 bytes each =                    0\n 0 free 14-sized PyTupleObjects * 144 bytes each =                    0\n 0 free 15-sized PyTupleObjects * 152 bytes each =                    0\n 0 free 16-sized PyTupleObjects * 160 bytes each =                    0\n 0 free 17-sized PyTupleObjects * 168 bytes each =                    0\n 0 free 18-sized PyTupleObjects * 176 bytes each =                    0\n 0 free 19-sized PyTupleObjects * 184 bytes each =                    0\n 0 free 20-sized PyTupleObjects * 192 bytes each =                    0\n"
+  },
+  "live_process_sample": {
+    "captured_at": "2026-11-17T19:53:35.1541129+08:00",
+    "processes": [
+      {
+        "role": "provider proxy",
+        "pid": 10316,
+        "private_bytes": 38821888,
+        "working_set_bytes": 35602432,
+        "thread_count": 6,
+        "handle_count": 171,
+        "loaded_module_count": 53,
+        "qt_modules": []
+      },
+      {
+        "role": "HUD main",
+        "pid": 36468,
+        "private_bytes": 94924800,
+        "working_set_bytes": 115441664,
+        "thread_count": 37,
+        "handle_count": 349,
+        "loaded_module_count": 69,
+        "qt_modules": []
+      },
+      {
+        "role": "work-overlay helper",
+        "pid": 37664,
+        "private_bytes": 77377536,
+        "working_set_bytes": 105934848,
+        "thread_count": 13,
+        "handle_count": 721,
+        "loaded_module_count": 109,
+        "qt_modules": [
+          "QtCore.pyd",
+          "pyside6.abi3.dll",
+          "Qt6Core.dll",
+          "QtWidgets.pyd",
+          "Qt6Widgets.dll",
+          "Qt6Gui.dll",
+          "QtGui.pyd"
+        ]
+      }
+    ],
+    "private_total_bytes": 211124224.0
+  },
+  "methodology": {
+    "fixed_corpus": true,
+    "owner_walk_in_separate_process": true,
+    "input_limit": "Four logs, each below 40 MiB; actual selected log plus recent and two larger bounded samples.",
+    "owner_estimator": "Unique object graph: containers, dataclass fields and instance dict overhead, known disk_sequence/selected_history owner attrs; excludes parser globals, finalizers, and native allocation internals."
+  },
+  "limitations": [
+    "Offline probes do not enumerate objects in the running HUD process.",
+    "Import graphs overlap; cold-root measurements cannot be added.",
+    "Tracemalloc changes process memory; use the separate untraced replay for process-level results.",
+    "Four samples do not establish a bound for all possible snapshots.",
+    "Module source labels outside this repository use basenames and can be ambiguous."
+  ]
+}
