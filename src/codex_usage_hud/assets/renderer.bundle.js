@@ -27681,10 +27681,26 @@ searchDraft: String(_sessionCleanupFilterSnapshot.search || ""),
         return Math.max(...leftControls.map((rect) => rect.right - header.left)) + 14;
       }
 
+      function headerNativeTitleElement(headerNode) {
+        const candidates = Array.from(headerNode?.querySelectorAll([
+          "[data-thread-title]", "[data-testid*='thread-title' i]",
+          "[data-testid*='conversation-title' i]", ".truncate", "h1", "h2",
+        ].join(", ")) || []).filter((node) => (
+          visible(node) && !node.closest?.(`#${rootId}`) && normalize(node.textContent)
+        ));
+        const titles = candidates.filter((node) => !candidates.some((other) => (
+          other !== node && node.contains?.(other)
+        )));
+        return titles.length === 1 ? titles[0] : null;
+      }
+
       function headerTitleTextBounds(headerNode, header) {
         if (!headerNode) return null;
+        const nativeTitle = headerNativeTitleElement(headerNode);
         const maxTextWidth = Math.min(520, header.width * .55);
-        const textRects = Array.from(headerNode.querySelectorAll("span, h1, h2, [data-thread-title]"))
+        // A recognized title can fill most of the toolbar. The legacy width
+        // heuristic is only for unmarked spans, not Desktop's ellipsized title.
+        const textRects = (nativeTitle ? [nativeTitle] : Array.from(headerNode.querySelectorAll("span, h1, h2, [data-thread-title]")))
           .filter((node) => visible(node) && !node.closest(`#${rootId}`))
           .filter((node) => normalize(node.textContent).length > 0)
           .map((node) => node.getBoundingClientRect())
@@ -27695,7 +27711,7 @@ searchDraft: String(_sessionCleanupFilterSnapshot.search || ""),
             && rect.right <= header.right + 2
             && rect.top >= header.top - 2
             && rect.bottom <= header.bottom + 2
-            && rect.width <= maxTextWidth
+            && (nativeTitle || rect.width <= maxTextWidth)
             && rect.left < header.left + (header.width * .68)
           ));
         if (!textRects.length) return null;
@@ -27753,8 +27769,13 @@ searchDraft: String(_sessionCleanupFilterSnapshot.search || ""),
 
       function headerControlButtons(headerNode, header) {
         if (!headerNode || !header) return [];
+        const nativeTitle = headerNativeTitleElement(headerNode);
         return Array.from(headerNode.querySelectorAll("button, [role='button'], a"))
           .filter((node) => visible(node) && !node.closest(`#${rootId}`))
+          // The conversation menu is now the title button itself. Let the HUD
+          // cover it while retaining the exposed title/hover interaction;
+          // treating it as a right-side control can consume the entire slot.
+          .filter((node) => !nativeTitle || (node !== nativeTitle && !node.contains?.(nativeTitle)))
           .map((node, index) => ({ node, index, rect: node.getBoundingClientRect(), label: normalize([
             node.getAttribute("aria-label"),
             node.getAttribute("title"),

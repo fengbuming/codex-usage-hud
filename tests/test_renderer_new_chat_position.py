@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 
 import pytest
@@ -129,6 +130,38 @@ assert.equal(topAnchor(36).blocked, true);
 buttons = [];
 assert.equal(topAnchor(36).blocked, false);
 assertClear(topAnchor(36));
+""")
+
+
+@pytest.mark.parametrize("title_width", [260, 520, 760])
+@pytest.mark.parametrize("title_text", ["Conversation title", "Chat actions for a long conversation", "很长的原生会话标题"])
+def test_title_button_can_be_covered_without_hiding_hud(title_width: int, title_text: str) -> None:
+    run_geometry(f"const titleWidth = {title_width}; titleText = {json.dumps(title_text)};\n" + r"""
+const title = {
+  textContent: titleText, closest: () => null,
+  getBoundingClientRect: () => ({left: 333, right: 333 + titleWidth,
+    top: 60, bottom: 80, width: titleWidth, height: 20}),
+};
+// Desktop wraps the title span with a truncating wrapper and a menu button.
+const wrapper = {...title, contains: node => node === title};
+const titleButton = button(304, 333 + titleWidth + 27);
+titleButton.textContent = titleText;
+titleButton.contains = node => node === title || node === wrapper;
+buttons = [titleButton, button(1140, 1168), button(1181, 1209)];
+header.querySelectorAll = selector => selector.startsWith('button')
+  ? buttons.slice(0, 2) : [wrapper, title];
+const anchor = fitTopContentRect(panel, topAnchor(36));
+assert.equal(anchor.blocked, false);
+assert.equal(anchor.area.right, 1130);
+assert.equal(anchor.width, 424);
+assert.equal(anchor.left + anchor.width, 1130);
+assert.ok(anchor.area.left >= 333 + 48);
+assert.ok(anchor.area.left <= 333 + 96);
+assert.ok(anchor.left < title.getBoundingClientRect().right || titleWidth === 260);
+// Only the title button can overlap; the summary and side-panel controls stay clear.
+for (const control of buttons.slice(1)) {
+  assert.ok(anchor.left + anchor.width <= control.getBoundingClientRect().left);
+}
 """)
 
 

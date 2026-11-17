@@ -1,0 +1,291 @@
+{
+  "captured_at_utc": "2026-11-17T19:38:56.152973+08:00",
+  "base_commit": "87e07443f77ec8cf9a480f734d02d7d70e9d20af",
+  "live_hover": {
+    "method": "CDP Input.dispatchMouseEvent with Codex foreground",
+    "before": {
+      "ready": true,
+      "documentHidden": false,
+      "reveal": false,
+      "rect": {
+        "x": 541,
+        "y": 52,
+        "width": 596,
+        "height": 36,
+        "top": 52,
+        "right": 1137,
+        "bottom": 88,
+        "left": 541
+      },
+      "titleRect": {
+        "x": 333,
+        "y": 60,
+        "width": 321.1875,
+        "height": 20,
+        "top": 60,
+        "right": 654.1875,
+        "bottom": 80,
+        "left": 333
+      },
+      "runtimeErrors": 0,
+      "sessionPresent": true,
+      "indexCoverage": "range_done(1m)"
+    },
+    "hovered": {
+      "ready": true,
+      "documentHidden": false,
+      "reveal": true,
+      "rect": {
+        "x": 661.609375,
+        "y": 52,
+        "width": 475.375,
+        "height": 36,
+        "top": 52,
+        "right": 1136.984375,
+        "bottom": 88,
+        "left": 661.609375
+      },
+      "titleRect": {
+        "x": 333,
+        "y": 60,
+        "width": 321.1875,
+        "height": 20,
+        "top": 60,
+        "right": 654.1875,
+        "bottom": 80,
+        "left": 333
+      },
+      "runtimeErrors": 0,
+      "sessionPresent": true,
+      "indexCoverage": "range_done(1m)"
+    },
+    "restored": {
+      "ready": true,
+      "documentHidden": false,
+      "reveal": false,
+      "rect": {
+        "x": 541,
+        "y": 52,
+        "width": 596,
+        "height": 36,
+        "top": 52,
+        "right": 1137,
+        "bottom": 88,
+        "left": 541
+      },
+      "titleRect": {
+        "x": 333,
+        "y": 60,
+        "width": 321.1875,
+        "height": 20,
+        "top": 60,
+        "right": 654.1875,
+        "bottom": 80,
+        "left": 333
+      },
+      "runtimeErrors": 0,
+      "sessionPresent": true,
+      "indexCoverage": "range_done(1m)"
+    }
+  },
+  "geometry_on_live_header": {
+    "beforeFix": [
+      {
+        "titleWidth": 260,
+        "slot": {
+          "left": 424,
+          "right": 1137,
+          "width": 713
+        }
+      },
+      {
+        "titleWidth": 520,
+        "slot": {
+          "left": 894,
+          "right": 1137,
+          "width": 243
+        }
+      },
+      {
+        "titleWidth": 760,
+        "slot": null
+      }
+    ],
+    "afterFix": [
+      {
+        "titleWidth": 260,
+        "slot": {
+          "left": 424,
+          "right": 1137,
+          "width": 713
+        }
+      },
+      {
+        "titleWidth": 520,
+        "slot": {
+          "left": 429,
+          "right": 1137,
+          "width": 708
+        }
+      },
+      {
+        "titleWidth": 760,
+        "slot": {
+          "left": 429,
+          "right": 1137,
+          "width": 708
+        }
+      }
+    ]
+  },
+  "startup_profile": {
+    "captured_at_utc": "2026-11-17T15:58:41.737254+08:00",
+    "pid": 20300,
+    "profiling": {
+      "tracemalloc_frames": 1,
+      "tracemalloc_started_here": true,
+      "trace_started_stage": "daemon-runtime-entry",
+      "current_traced_bytes": 15969334,
+      "peak_traced_bytes": 40035261,
+      "private_minus_traced_bytes": 85418954
+    },
+    "process": {
+      "source": "GetProcessMemoryInfo",
+      "private_bytes": 101388288,
+      "working_set_bytes": 119418880,
+      "peak_working_set_bytes": 148144128
+    },
+    "runtime": {
+      "loaded_modules": 395,
+      "active_threads": 28
+    },
+    "top_allocation_files": [
+      {
+        "source": "src/codex_usage_hud/disk_sequence.py",
+        "bytes": 2161449,
+        "allocations": 8086
+      },
+      {
+        "source": "src/codex_usage_hud/core/session_search.py",
+        "bytes": 1903446,
+        "allocations": 1299
+      },
+      {
+        "source": "__init__.py",
+        "bytes": 1661861,
+        "allocations": 13289
+      },
+      {
+        "source": "src/codex_usage_hud/core/session_cleanup.py",
+        "bytes": 1615919,
+        "allocations": 10250
+      },
+      {
+        "source": "<frozen importlib._bootstrap_external>",
+        "bytes": 1399003,
+        "allocations": 10634
+      },
+      {
+        "source": "tempfile.py",
+        "bytes": 1053269,
+        "allocations": 60
+      },
+      {
+        "source": "decoder.py",
+        "bytes": 821799,
+        "allocations": 7623
+      },
+      {
+        "source": "src/codex_usage_hud/core/session_search_disk.py",
+        "bytes": 421997,
+        "allocations": 3292
+      },
+      {
+        "source": "dataclasses.py",
+        "bytes": 357306,
+        "allocations": 1915
+      },
+      {
+        "source": "src/codex_usage_hud/support_assets.py",
+        "bytes": 328132,
+        "allocations": 2
+      },
+      {
+        "source": "src/codex_usage_hud/pricing.py",
+        "bytes": 223144,
+        "allocations": 2957
+      },
+      {
+        "source": "src/codex_usage_hud/core/background_usage.py",
+        "bytes": 154672,
+        "allocations": 1486
+      },
+      {
+        "source": "<frozen ntpath>",
+        "bytes": 153226,
+        "allocations": 980
+      },
+      {
+        "source": "uuid.py",
+        "bytes": 128744,
+        "allocations": 1672
+      },
+      {
+        "source": "<string>",
+        "bytes": 125304,
+        "allocations": 159
+      },
+      {
+        "source": "src/codex_usage_hud/active_work.py",
+        "bytes": 82327,
+        "allocations": 411
+      },
+      {
+        "source": "threading.py",
+        "bytes": 72200,
+        "allocations": 190
+      },
+      {
+        "source": "src/codex_usage_hud/usage_insights.py",
+        "bytes": 68672,
+        "allocations": 296
+      }
+    ]
+  },
+  "limitations": [
+    "Long-title widths use read-only geometry wrappers on the live header; no conversation renamed or switched.",
+    "Process totals exclude the HUD increment inside Codex renderer.",
+    "Initial input timed out while Codex was hidden; foreground input and hover/restore subsequently passed."
+  ],
+  "memory": {
+    "captured_at": "2026-11-17T19:39:41.2696686+08:00",
+    "processes": [
+      {
+        "role": "provider proxy",
+        "pid": 10316,
+        "parent_pid": 8648,
+        "started_at": "2026-11-17T08:52:21.1355411+08:00",
+        "private_bytes": 38940672,
+        "working_set_bytes": 35733504
+      },
+      {
+        "role": "HUD main",
+        "pid": 36468,
+        "parent_pid": 37352,
+        "started_at": "2026-11-17T19:32:47.5383295+08:00",
+        "private_bytes": 92844032,
+        "working_set_bytes": 113225728
+      },
+      {
+        "role": "work-overlay helper",
+        "pid": 37664,
+        "parent_pid": 36468,
+        "started_at": "2026-11-17T19:32:54.7053371+08:00",
+        "private_bytes": 72151040,
+        "working_set_bytes": 133238784
+      }
+    ],
+    "private_total_bytes": 203935744.0,
+    "working_set_sum_bytes": 282198016.0
+  }
+}
