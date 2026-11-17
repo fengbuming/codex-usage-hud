@@ -135,6 +135,16 @@ class RendererHudClient:
         from .renderer_history import RendererHistoryStore
 
         self.history_store = RendererHistoryStore()
+        self._memory_profile_capture = None
+        if os.environ.get("CODEX_USAGE_HUD_MEMORY_PROFILE", "").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }:
+            from .runtime_memory_profile import capture_profile_once
+
+            self._memory_profile_capture = capture_profile_once
         self._target_discovery = _RendererTargetDiscovery(
             port=self.port,
             timeout_seconds=self.timeout_seconds,
@@ -789,6 +799,11 @@ class RendererHudClient:
                 history_scope.acknowledge()
             if support_images:
                 self._support_images_sent = True
+            if payload.get("sessionId") and self._memory_profile_capture is not None:
+                try:
+                    self._memory_profile_capture()
+                except Exception:
+                    _LOGGER.warning("renderer_memory_profile_capture_failed", exc_info=True)
             return True
         return False
 

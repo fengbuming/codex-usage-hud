@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+import os
 import sys
 
 
@@ -23,6 +24,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     }
     action_names = {argument.split("=", 1)[0] for argument in arguments}
     if helper_flags.isdisjoint(action_names) or not prior_actions.isdisjoint(action_names):
+        if (
+            os.environ.get("CODEX_USAGE_HUD_MEMORY_PROFILE", "").strip().lower()
+            in {"1", "true", "yes", "on"}
+            and "--multiprocessing-fork" not in arguments
+        ):
+            from .runtime_memory_profile import start_if_enabled
+
+            start_if_enabled()
         from .runtime_orchestration import main as run_hud
 
         return run_hud(argv)
