@@ -132,6 +132,9 @@ class RendererHudClient:
         self._payload_domain_digests: dict[str, str] = {}
         self._payload_extras_digest: str | None = None
         self._payload_digest_target_id = ""
+        from .renderer_history import RendererHistoryStore
+
+        self.history_store = RendererHistoryStore()
         self._target_discovery = _RendererTargetDiscovery(
             port=self.port,
             timeout_seconds=self.timeout_seconds,
@@ -735,6 +738,7 @@ class RendererHudClient:
             theme_snapshot = self._theme_probe.snapshot()
             self._theme_snapshot = theme_snapshot
         theme_probe_ms = (time.perf_counter() - theme_started) * 1000.0
+        history_scope = (self.history_store.begin(snapshot) if self.history_store.url else None)
         payload = payload_from_snapshot(
             snapshot,
             settings=settings,
@@ -762,7 +766,10 @@ class RendererHudClient:
             session_cleanup=session_cleanup,
             connection_health=connection_health,
             request_rows_limit=request_rows_limit,
+            history_scope=history_scope,
         ).to_json()
+        if history_scope is not None:
+            history_scope.finish()
         update_ok = (
             self.update_payload(payload, startup_retry=True)
             if startup_retry
@@ -778,6 +785,8 @@ class RendererHudClient:
         )
         self.last_update_metrics = metrics
         if update_ok:
+            if history_scope is not None:
+                history_scope.acknowledge()
             if support_images:
                 self._support_images_sent = True
             return True
@@ -1402,6 +1411,7 @@ class RendererHudClient:
         attempt only delays the stop. The fresh session after unlock performs
         the real cleanup before it reinstalls.
         """
+        self.history_store.close()
         if self._active_session_binding is not None:
             self._active_session_binding.close()
             self._active_session_binding = None

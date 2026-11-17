@@ -37,6 +37,7 @@ class SelectedHistoryProjection:
         self.cursor = _RoundCursor(self.cache)
         self.closed = DiskSequence(cache=self.cache)
         self.closed_keys = []
+        self.closed_metadata = []
 
     def valid_for(self, parser):
         return (parser is self.parser and self.pricing ==
@@ -68,23 +69,40 @@ class SelectedHistoryProjection:
             # their old storage while this owner rebuilds the closed prefix.
             self.closed = DiskSequence(cache=self.cache)
             self.closed_keys = []
+            self.closed_metadata = []
         for index in range(len(self.closed_keys), len(keys)):
             item = parser.task_history_item(records, parsed, latest, starts, index + 1, rolled_back)
             self.closed.append(item)
             self.closed_keys.append(keys[index])
+            self.closed_metadata.append({"index": item.index, "turnId": item.turn_id, "currentTask": item.prompt,
+                                         "timed": item.slow.current_gap_active})
         current = DiskSequence(cache=self.cache)
         if starts:
             current.append(parser.task_history_item(records, parsed, latest, starts, len(starts), rolled_back))
-        return _TaskHistoryView(self.closed.freeze(), current, len(starts), frozenset(rolled_back), datetime.now(timezone.utc))
+        metadata = tuple(self.closed_metadata)
+        return _TaskHistoryView(self.closed.freeze(), current, len(starts), frozenset(rolled_back), datetime.now(timezone.utc), metadata)
 
 
 class _TaskHistoryView(DiskSequence):
-    def __init__(self, closed, current, count, rolled_back, observed_at):
+    def __init__(self, closed, current, count, rolled_back, observed_at, metadata=()):
         self.closed = closed
         self.current = current
         self.count = count
         self.rolled_back = rolled_back
         self.observed_at = observed_at
+        self.metadata = metadata
+
+    def renderer_descriptor(self, index, *, include_clock=True):
+        if index < len(self.closed) and index < len(self.metadata):
+            item = dict(self.metadata[index])
+            timed = item.pop("timed", False)
+            revision = (id(self.closed._owner), index, self.count, index + 1 in self.rolled_back,
+                        self.observed_at.isoformat() if timed and include_clock else "")
+        else:
+            task = self.current[0]
+            item = {"index": task.index, "turnId": task.turn_id, "currentTask": task.prompt}
+            revision = (id(self.current), index)
+        return {**item, "count": self.count}, revision
 
     def __len__(self):
         return self.count

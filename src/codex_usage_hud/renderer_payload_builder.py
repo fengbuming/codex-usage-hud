@@ -136,6 +136,7 @@ def payload_from_snapshot(
     session_cleanup: dict[str, object] | None = None,
     connection_health: dict[str, object] | ConnectionHealth | None = None,
     request_rows_limit: int = renderer_request_projection.REQUEST_ROWS_PAGE_SIZE,
+    history_scope=None,
 ) -> RendererHudPayload:
     new_session = _is_new_session_snapshot(snapshot)
     pending_session = _is_pending_session_snapshot(snapshot)
@@ -143,7 +144,7 @@ def payload_from_snapshot(
     warnings_dismissed = (
         warning_dismissed_today(settings_path) if settings_path is not None else False
     )
-    top_details = _top_details(snapshot, session_cost)
+    top_details = _top_details(snapshot, session_cost, history_scope=history_scope)
     if warnings_dismissed:
         top_details["warnings"] = _format_notice(
             snapshot,
@@ -243,7 +244,8 @@ def payload_from_snapshot(
         ),
         top_details=top_details,
         top_progress=top_progress,
-        top_copies=_top_copy_texts(snapshot),
+        top_copies=(history_scope.externalize(_top_copy_texts(snapshot), text=True)
+                    if history_scope is not None else _top_copy_texts(snapshot)),
         request_rows=_request_rows(snapshot, limit=request_rows_limit),
         request_row_details=_request_row_details(snapshot, limit=request_rows_limit),
         request_rows_total=_request_rows_total(snapshot),
@@ -1352,7 +1354,7 @@ def _session_round_rows(snapshot: ParsedSession) -> Sequence[RequestRound]:
     return _task_rows(snapshot)
 
 
-def _top_heavy_rounds(snapshot: ParsedSession) -> list[dict[str, object]]:
+def _top_heavy_rounds(snapshot: ParsedSession, *, _with_rank=False, _allow_session_fallback=True) -> list[dict[str, object]]:
     fallback_prompt = str(getattr(snapshot, "task_prompt", "") or "").strip()
     fallback_turn_id = str(getattr(snapshot, "task_turn_id", "") or "").strip()
 
@@ -1365,7 +1367,7 @@ def _top_heavy_rounds(snapshot: ParsedSession) -> list[dict[str, object]]:
             for item in task.request_history:
                 found = True
                 yield item, metadata
-        if not found:
+        if not found and _allow_session_fallback:
             metadata = (max(1, int(snapshot.task_index or 1)), fallback_prompt, fallback_turn_id, False)
             for item in _session_round_rows(snapshot):
                 yield item, metadata
@@ -1437,6 +1439,8 @@ def _top_heavy_rounds(snapshot: ParsedSession) -> list[dict[str, object]]:
                 "locateTexts": locate_texts,
             }
         )
+        if _with_rank:
+            details[-1]["_historyRank"] = [_score_cost, total]
     return details
 
 
@@ -1474,7 +1478,7 @@ def _top_task_ordinal_parts(snapshot: ParsedSession) -> dict[str, str]:
     )
 
 
-def _top_session_parts(snapshot: ParsedSession) -> dict[str, str]:
+def _top_session_parts(snapshot: ParsedSession, *, history_scope=None) -> dict[str, str]:
     confirmed = snapshot.confirmed
     if snapshot.token_events > 0:
         average = confirmed.cumulative_total // max(1, snapshot.token_events)
@@ -1486,7 +1490,8 @@ def _top_session_parts(snapshot: ParsedSession) -> dict[str, str]:
         "sessionAverage": session_average,
         "sessionComposition": _top_session_composition(snapshot),
         "heavyRoundsSummary": "Top 3",
-        "heavyRounds": _top_heavy_rounds(snapshot),
+        "heavyRounds": (history_scope.heavy_rounds(snapshot, _top_heavy_rounds)
+                        if history_scope is not None else _top_heavy_rounds(snapshot)),
         "sessionInputTokens": _token_value_text(confirmed.cumulative_input),
         "sessionCachedTokens": _token_value_text(confirmed.cumulative_cached),
         "sessionOutputTokens": _token_value_text(confirmed.cumulative_output),
@@ -1657,8 +1662,8 @@ def _top_work_tools(snapshot: ParsedSession) -> list[dict[str, object]]:
     )
 
 
-def _top_details(snapshot: ParsedSession, session_cost: float | None) -> dict[str, object]:
-    session_parts = _top_session_parts(snapshot)
+def _top_details(snapshot: ParsedSession, session_cost: float | None, *, history_scope=None) -> dict[str, object]:
+    session_parts = _top_session_parts(snapshot, history_scope=history_scope)
     activity_labels = _top_activity_labels(snapshot)
     session_label = (
         "新会话"
@@ -1694,7 +1699,8 @@ def _top_details(snapshot: ParsedSession, session_cost: float | None) -> dict[st
         "slow": _top_slow_chip(snapshot),
         "gap": _top_gap_chip(snapshot),
     }
-    activity_tasks = _activity_tasks(snapshot)
+    activity_tasks = (history_scope.tasks(snapshot, _activity_task_payload)
+                      if history_scope is not None else _activity_tasks(snapshot))
     if activity_tasks:
         details["activityTasks"] = activity_tasks
         details["activityTaskIndex"] = int(snapshot.task_index or 0)

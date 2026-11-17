@@ -600,38 +600,46 @@ TEXT = r"""
       if (copyNode && root.contains(copyNode)) {
         event.preventDefault();
         event.stopPropagation();
-        void copyHudText(copyNode.dataset.copyText || "").then((ok) => {
+        const copySession = String(currentPayload()?.rendererSessionId || currentPayload()?.sessionId || "");
+        void (async () => {
+          let text;
+          try { text = await sessionViewDomain.copyNodeText(root, copyNode); }
+          catch (_) { flashCopyState(copyNode, false); return; }
+          if (text === null) return;
+          const ok = await copyHudText(text);
           flashCopyState(copyNode, ok);
-        });
-        if (copyNode.dataset.copyField === "heavy") {
-          const taskIndex = Number(copyNode.dataset.activityTaskIndex || 0);
-          const roundIndex = Number(copyNode.dataset.activityRoundIndex || 0);
-          sessionViewDomain.selectActivityTaskIndex(
-            root,
-            taskIndex,
-          );
-          sessionViewDomain.locateActivityTrailRound(root, taskIndex, roundIndex);
-          // 已回滚的轮次在 Codex 聊天里没有对应消息，materialize 扫描只会
-          // 白白拖动视口约 6 秒后失败，因此只复制并高亮 HUD 内轨迹。
-          if (copyNode.dataset.rolledBack !== "true") {
-            let locateTexts = [];
-            try {
-              const parsed = JSON.parse(copyNode.dataset.locateTexts || "[]");
-              if (Array.isArray(parsed)) {
-                locateTexts = parsed.filter((text) => typeof text === "string" && text.trim());
-              }
-            } catch (_) {
-              locateTexts = [];
-            }
-            void sessionViewDomain.scrollToActivityRound(
-              copyNode.dataset.copyText || "",
-              copyNode.dataset.activityTaskPrompt || "",
-              roundIndex,
-              copyNode.dataset.activityTaskTurnId || "",
-              locateTexts,
+          if (copySession !== String(currentPayload()?.rendererSessionId || currentPayload()?.sessionId || "")) return;
+          if (copyNode.dataset.copyField === "heavy") {
+            const taskIndex = Number(copyNode.dataset.activityTaskIndex || 0);
+            const roundIndex = Number(copyNode.dataset.activityRoundIndex || 0);
+            sessionViewDomain.selectActivityTaskIndex(
+              root,
+              taskIndex,
             );
+            await sessionViewDomain.locateActivityTrailRound(root, taskIndex, roundIndex);
+            if (copySession !== String(currentPayload()?.rendererSessionId || currentPayload()?.sessionId || "")) return;
+            // 已回滚的轮次在 Codex 聊天里没有对应消息，materialize 扫描只会
+            // 白白拖动视口约 6 秒后失败，因此只复制并高亮 HUD 内轨迹。
+            if (copyNode.dataset.rolledBack !== "true") {
+              let locateTexts = [];
+              try {
+                const parsed = JSON.parse(copyNode.dataset.locateTexts || "[]");
+                if (Array.isArray(parsed)) {
+                  locateTexts = parsed.filter((text) => typeof text === "string" && text.trim());
+                }
+              } catch (_) {
+                locateTexts = [];
+              }
+              void sessionViewDomain.scrollToActivityRound(
+                text,
+                copyNode.dataset.activityTaskPrompt || "",
+                roundIndex,
+                copyNode.dataset.activityTaskTurnId || "",
+                locateTexts,
+              );
+            }
           }
-        }
+        })();
         return;
       }
       const sessionCleanupRow = event.target?.closest?.(".codex-usage-hud-session-row");
@@ -1902,9 +1910,32 @@ TEXT = r"""
     }
   }
 
+  function hydrateRetainedHistory(payload, previous) {
+    const session = payload?.payloadDomains?.currentSession;
+    const details = session?.topDetails;
+    if (!Array.isArray(details?._retainHistoryFields)) return payload;
+    const identity = [String(session.sessionId || ""), String(session.rendererSessionId || ""),
+      !!session.newSession, !!session.pendingSession];
+    const priorIdentity = [String(previous?.sessionId || ""), String(previous?.rendererSessionId || ""),
+      !!previous?.newSession, !!previous?.pendingSession];
+    if (JSON.stringify(identity) !== JSON.stringify(details._historySession)
+        || JSON.stringify(identity) !== JSON.stringify(priorIdentity)) throw new Error("HUD history baseline changed");
+    const next = { ...details };
+    for (const field of details._retainHistoryFields) {
+      if (!["activityTasks", "heavyRounds", "activityTrail", "workTools"].includes(field)
+          || !(field in (previous.topDetails || {}))) throw new Error("HUD history baseline missing");
+      next[field] = previous.topDetails[field];
+    }
+    delete next._retainHistoryFields;
+    delete next._historySession;
+    return { ...payload, topDetails: next, payloadDomains: { ...payload.payloadDomains,
+      currentSession: { ...session, topDetails: next } } };
+  }
+
   window.__codexUsageHudUpdate = (payload) => {
     const previousState = ctx.state.read();
     const previousPayload = currentPayload() || {};
+    payload = hydrateRetainedHistory(payload, previousPayload);
     const nextPayload = { ...previousPayload, ...(payload || {}) };
     const domains = normalizePayloadDomains(nextPayload);
     const hasSessionPayload = "currentSession" in domains || "sessionSwitch" in domains;

@@ -1,0 +1,64 @@
+{
+  "method": "Fixed copies; no live process or provider calls; untraced timings and separate traced allocation peaks",
+  "results": [
+    {
+      "file": "0.jsonl",
+      "source_bytes": 8712890,
+      "tasks": 11,
+      "rounds": 230,
+      "baseline_bytes": 649006,
+      "first_on_demand_bytes": 140154,
+      "unchanged_history_update_bytes": 35792,
+      "median_build_and_serialize_ms": {
+        "baseline": 58.27,
+        "on_demand": 16.24
+      },
+      "traced_peak_bytes": {
+        "baseline": 5783731,
+        "on_demand": 2611481
+      },
+      "complete_payload_sha256": "c6d04455772a3467c06876b9c97beb7112487b82d02b1f279399ae69e4dff26c",
+      "historical_payload_parity": true,
+      "artifact_count": 13
+    },
+    {
+      "file": "1.jsonl",
+      "source_bytes": 7133638,
+      "tasks": 14,
+      "rounds": 212,
+      "baseline_bytes": 490049,
+      "first_on_demand_bytes": 53909,
+      "unchanged_history_update_bytes": 24007,
+      "median_build_and_serialize_ms": {
+        "baseline": 41.67,
+        "on_demand": 7.82
+      },
+      "traced_peak_bytes": {
+        "baseline": 4794184,
+        "on_demand": 3472923
+      },
+      "complete_payload_sha256": "ce2f9d965b19fb109a44b804972c3ecb64a4b96c21344b35e4f12d73e5077d34",
+      "historical_payload_parity": true,
+      "artifact_count": 14
+    }
+  ],
+  "date": "2026-11-12",
+  "timezone": "Asia/Shanghai",
+  "baseline_commit": "4717c49a69d5b9d3f351adfc0c38a6e221bcacdc",
+  "protected_bubble_sources_unchanged": 23,
+  "proxy_sources_unchanged": true,
+  "live_reload": false,
+  "goal_total_100MB_established": false,
+  "validation": [
+    "225 focused tests plus 3 subtests passed",
+    "New store, authenticated bridge, asynchronous history/copy and acknowledged transport delta tests passed",
+    "Affected renderer/client/identity/contract/settings/parser tests passed",
+    "Changed Python compilation, Ruff, renderer contract/resource update/check and diff checks passed"
+  ],
+  "limitations": [
+    "Offline fixed copies only; no live HUD reload, CDP acceptance or provider calls",
+    "Measurements describe push payload and Python transient allocations, not total process commit",
+    "On-demand history/copy fetch traffic is excluded from routine payload size and occurs only on user interaction",
+    "No packaging, complete repository suite or macOS acceptance"
+  ]
+}

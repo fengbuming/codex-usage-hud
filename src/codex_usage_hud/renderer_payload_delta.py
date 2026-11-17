@@ -27,6 +27,33 @@ class RendererPayloadDeltaCache:
             if name in payload:
                 reduced[name] = value
 
+        session = domains.get("currentSession")
+        details = session.get("topDetails") if isinstance(session, Mapping) else None
+        if isinstance(details, Mapping):
+            identity = (str(session.get("sessionId") or ""), str(session.get("rendererSessionId") or ""),
+                        bool(session.get("newSession")), bool(session.get("pendingSession")))
+            pending["history.identity"] = identity
+            same = self._components.get("history.identity") == identity and "currentSession" in baseline_domains
+            fields = ("activityTasks", "heavyRounds", "activityTrail", "workTools")
+            next_details = dict(details)
+            retained = []
+            for field in fields:
+                key = "history." + field
+                if field not in details:
+                    pending[key] = None
+                    continue
+                hashed = digest(details[field])
+                pending[key] = hashed
+                if same and self._components.get(key) == hashed:
+                    next_details.pop(field)
+                    retained.append(field)
+            if retained:
+                next_details["_retainHistoryFields"] = retained
+                next_details["_historySession"] = list(identity)
+            reduced_domains["currentSession"] = {**session, "topDetails": next_details}
+            if "topDetails" in payload:
+                reduced["topDetails"] = next_details
+
         cleanup_domain = domains.get("sessionCleanup")
         cleanup = cleanup_domain.get("sessionCleanup") if isinstance(cleanup_domain, Mapping) else None
         if isinstance(cleanup, Mapping):

@@ -39,9 +39,11 @@ class SettingsBridgeServer:
         session_index_status_callback: Callable[[], dict[str, object]] | None = None,
         session_index_control_callback: Callable[[dict[str, Any]], dict[str, object]] | None = None,
         manage_provider_proxy: bool = False,
+        renderer_history_callback: Callable[[str], dict[str, object] | None] | None = None,
     ) -> None:
         self.store = store
         self.manage_provider_proxy = manage_provider_proxy
+        self.renderer_history_callback = renderer_history_callback
         self.host = host
         self.port = max(0, int(port))
         self.restart_callback = restart_callback
@@ -107,6 +109,11 @@ class SettingsBridgeServer:
             f"{quote(self.background_usage_access_token, safe='')}"
         )
 
+    @property
+    def renderer_history_url(self) -> str:
+        return (f"{self.url}/renderer-history?access_token={quote(self.background_usage_access_token, safe='')}"
+                if self.url else "")
+
     def close(self) -> None:
         from .provider_proxy import provider_proxy_relay
 
@@ -148,6 +155,7 @@ class SettingsBridgeServer:
         session_index_status_callback = self.session_index_status_callback
         session_index_control_callback = self.session_index_control_callback
         background_usage_access_token = self.background_usage_access_token
+        renderer_history_callback = self.renderer_history_callback
 
         class Handler(BaseHTTPRequestHandler):
             server_version = "codex-usage-hud-settings"
@@ -161,6 +169,20 @@ class SettingsBridgeServer:
 
             def do_GET(self) -> None:
                 parsed = urlparse(self.path)
+                if parsed.path == "/renderer-history":
+                    if not self._background_usage_authorized(parsed):
+                        return
+                    if renderer_history_callback is None:
+                        self._send_json({"error": "history unavailable"}, 503)
+                        return
+                    token = parse_qs(parsed.query).get("ref", [""])[0]
+                    try:
+                        value = renderer_history_callback(token)
+                    except Exception:
+                        self._send_json({"error": "history unavailable"}, 503)
+                        return
+                    self._send_json(value if value is not None else {"error": "history expired"}, 200 if value is not None else 404)
+                    return
                 if parsed.path == "/health":
                     health = {"status": "ok", "pid": os.getpid()}
                     if callable(renderer_ready_callback):
@@ -595,6 +617,7 @@ class SettingsBridgeServer:
                 data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
                 self.send_response(status_code)
                 self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Cache-Control", "no-store")
                 self.send_header("Content-Length", str(len(data)))
                 self.send_header("Access-Control-Allow-Origin", "*")
                 self.send_header("Access-Control-Allow-Methods", "GET,POST,OPTIONS")

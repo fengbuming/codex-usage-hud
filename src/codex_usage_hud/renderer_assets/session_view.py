@@ -21,6 +21,94 @@ TEXT = r"""
   let currentSpeedValue = null;
   let currentSpeedNodes = [];
 
+  const historyTaskCache = new Map();
+  const historyRequests = new Map();
+  const historyFailures = new Set();
+  let historySession = "";
+  function historyReference(value) {
+    return value && typeof value === "object" && typeof value._hudHistoryRef === "string"
+      && typeof value.url === "string" ? value : null;
+  }
+
+  function historySessionKey(payload) {
+    return String(payload?.rendererSessionId || payload?.sessionId || "");
+  }
+
+  function syncHistorySession(payload) {
+    const key = historySessionKey(payload);
+    if (key === historySession) return;
+    historySession = key;
+    historyTaskCache.clear();
+    historyFailures.clear();
+    for (const request of historyRequests.values()) request.controller.abort();
+    historyRequests.clear();
+  }
+
+  async function readHistoryReference(reference) {
+    const ref = historyReference(reference);
+    if (!ref) return reference;
+    const cached = ref.kind === "task" ? historyTaskCache.get(ref._hudHistoryRef) : null;
+    if (cached) {
+      historyTaskCache.delete(ref._hudHistoryRef);
+      historyTaskCache.set(ref._hudHistoryRef, cached);
+      return cached;
+    }
+    const existing = historyRequests.get(ref._hudHistoryRef);
+    if (existing) return existing.promise;
+    const session = historySession;
+    const controller = new AbortController();
+    const promise = (async () => {
+      const response = await fetch(ref.url, { cache: "no-store", signal: controller.signal });
+      if (!response.ok) throw new Error("历史详情暂时不可用，请重试");
+      const body = await response.json();
+      if (body.ref !== ref._hudHistoryRef || body.kind !== ref.kind) throw new Error("历史详情已更新，请重试");
+      if (controller.signal.aborted || historySession !== session || !ctx.lifecycle.active()) throw new Error("会话已切换");
+      if (ref.kind === "task") {
+        historyTaskCache.set(ref._hudHistoryRef, body.value);
+        while (historyTaskCache.size > 3) historyTaskCache.delete(historyTaskCache.keys().next().value);
+      }
+      return body.value;
+    })();
+    historyRequests.set(ref._hudHistoryRef, { controller, promise });
+    try { return await promise; }
+    finally { if (historyRequests.get(ref._hudHistoryRef)?.promise === promise) historyRequests.delete(ref._hudHistoryRef); }
+  }
+
+  function selectedHistoryTask(root, payload, selected) {
+    const ref = historyReference(selected?.detailRef);
+    if (!ref) return selected?.current ? null : selected;
+    const cached = historyTaskCache.get(ref._hudHistoryRef);
+    if (cached) return cached;
+    if (!historyRequests.has(ref._hudHistoryRef) && !historyFailures.has(ref._hudHistoryRef)) {
+      const session = historySessionKey(payload);
+      const index = Number(selected.index);
+      void readHistoryReference(ref).then(() => {
+        if (root.isConnected && historySessionKey(currentPayload()) === session
+            && Number(root.dataset.activityTaskIndex) === index) renderTopDetails(root, currentPayload());
+      }).catch(() => {
+        if (historySessionKey(currentPayload()) !== session || !ctx.lifecycle.active()) return;
+        historyFailures.add(ref._hudHistoryRef);
+        while (historyFailures.size > 8) historyFailures.delete(historyFailures.values().next().value);
+        if (root.isConnected && Number(root.dataset.activityTaskIndex) === index) renderTopDetails(root, currentPayload());
+      });
+    }
+    return { ...selected, executing: historyFailures.has(ref._hudHistoryRef)
+        ? "历史暂时不可用，请切换需求后重试" : "正在读取历史…", activityTrail: [], workTools: [], copies: {},
+      workOutput: "", activityState: "", activityElapsed: "", activityGap: "" };
+  }
+
+  async function copyNodeText(root, node) {
+    syncHistorySession(currentPayload());
+    const session = historySession;
+    let ref = null;
+    try { ref = JSON.parse(node.dataset.copyRef || "null"); } catch (_) {}
+    const text = ref ? await readHistoryReference(ref) : (node.dataset.copyText || "");
+    // A regular HUD update may replace the clicked DOM row while the local
+    // read is in flight. The captured copy intent remains valid in this chat.
+    if (historySession !== session || historySessionKey(currentPayload()) !== session) return null;
+    return String(text || "");
+  }
+
   function speedTitleThreshold(index) {
     return speedTitleSteps[Math.max(1, index) - 1][2];
   }
@@ -460,8 +548,11 @@ TEXT = r"""
 
   function configureCopy(root, field, text, title, copyField) {
     root.querySelectorAll(`[data-field="${field}"]`).forEach((node) => {
-      const value = String(text || "");
-      if (value) {
+      const ref = historyReference(text);
+      const value = ref ? "" : String(text || "");
+      if (ref) node.dataset.copyRef = JSON.stringify(ref);
+      else delete node.dataset.copyRef;
+      if (value || ref) {
         node.dataset.copyable = "true";
         node.dataset.copyText = value;
         node.dataset.copyTitle = title;
@@ -702,10 +793,12 @@ TEXT = r"""
       const rolledBack = item.rolledBack === true;
       const tooltip = String(item.tooltip || [item.title, item.detail].filter(Boolean).join("  "));
       if (tooltip) row.title = tooltip;
-      const copyText = String(item.copyText || "");
-      if (copyText) {
+      const ref = historyReference(item.copyText);
+      const copyText = ref ? "" : String(item.copyText || "");
+      if (copyText || ref) {
         row.dataset.copyable = "true";
         row.dataset.copyText = copyText;
+        if (ref) row.dataset.copyRef = JSON.stringify(ref);
         row.dataset.copyTitle = rolledBack
           ? `点击复制内容（该轮已回滚，不在聊天中）\n${tooltip}`
           : (tooltip
@@ -946,6 +1039,8 @@ TEXT = r"""
     const next = clamp(Math.round(current) + Number(delta || 0), 1, tasks.length);
     root.dataset.activityTaskIndex = String(next);
     root.dataset.activityTaskPinned = "true";
+    const ref = tasks.find((item) => Number(item.index) === next)?.detailRef;
+    if (historyReference(ref)) historyFailures.delete(ref._hudHistoryRef);
     renderTopDetails(root, payload);
     return true;
   }
@@ -958,11 +1053,13 @@ TEXT = r"""
     const next = clamp(Math.round(Number(index || 0)), 1, tasks.length);
     root.dataset.activityTaskIndex = String(next);
     root.dataset.activityTaskPinned = "true";
+    const ref = tasks.find((item) => Number(item.index) === next)?.detailRef;
+    if (historyReference(ref)) historyFailures.delete(ref._hudHistoryRef);
     renderTopDetails(root, payload);
     return true;
   }
 
-  function locateActivityTrailRound(root, taskIndex, roundIndex) {
+  async function locateActivityTrailRound(root, taskIndex, roundIndex) {
     const normalizedTaskIndex = Math.round(Number(taskIndex || 0));
     const normalizedRoundIndex = Math.round(Number(roundIndex || 0));
     if (normalizedRoundIndex <= 0) return false;
@@ -975,7 +1072,13 @@ TEXT = r"""
     const selected = tasks.find(
       (item) => Number(item.index || 0) === Number(root.dataset.activityTaskIndex || normalizedTaskIndex),
     );
-    const details = selected ? { ...rawDetails, ...selected } : rawDetails;
+    let resolved = selected?.current ? null : selected;
+    if (historyReference(selected?.detailRef)) {
+      const session = historySessionKey(payload);
+      try { resolved = await readHistoryReference(selected.detailRef); } catch (_) { return false; }
+      if (historySessionKey(currentPayload()) !== session || Number(root.dataset.activityTaskIndex) !== normalizedTaskIndex) return false;
+    }
+    const details = resolved ? { ...rawDetails, ...resolved } : rawDetails;
     const items = Array.isArray(details?.activityTrail)
       ? details.activityTrail.filter((item) => item && (item.title || item.detail || item.time))
       : [];
@@ -1957,9 +2060,11 @@ TEXT = r"""
   }
 
   function renderTopDetails(root, payload) {
+    syncHistorySession(payload);
     const rawDetails = payload?.topDetails || {};
     const tasks = activityTaskItems(rawDetails);
-    const selected = activityTaskSelection(root, payload, rawDetails, tasks);
+    const descriptor = activityTaskSelection(root, payload, rawDetails, tasks);
+    const selected = selectedHistoryTask(root, payload, descriptor);
     const details = selected ? { ...rawDetails, ...selected } : rawDetails;
     const copies = selected && selected.copies && typeof selected.copies === "object"
       ? selected.copies
@@ -1995,10 +2100,10 @@ TEXT = r"""
       topActivityLast: details.activityLast || "",
       topSlow: details.slow || "",
       topGap: details.gap || "",
-      topActivityTaskOrdinal: selected?.taskOrdinal || "",
+      topActivityTaskOrdinal: selected?.taskOrdinal || descriptor?.taskOrdinal || "",
     };
     for (const [field, value] of Object.entries(mapping)) setText(root, field, value);
-    renderActivityTaskNav(root, rawDetails, tasks, selected);
+    renderActivityTaskNav(root, rawDetails, tasks, descriptor);
     setFieldTitle(root, "topActivityLast", details.activityLastTooltip || details.activityLast || "");
     setFieldTitle(root, "topActivityTaskOrdinal", selected?.taskOrdinal || "");
     renderHeavyRounds(root, details);
@@ -2730,6 +2835,11 @@ TEXT = r"""
         node.querySelector('[data-field="outputSpeedValue"]')?.replaceChildren();
       });
       currentSpeedNodes = [];
+      for (const request of historyRequests.values()) request.controller.abort();
+      historyRequests.clear();
+      historyTaskCache.clear();
+      historyFailures.clear();
+      historySession = "";
       ctx.lifecycle.clearInterval(window[runningTimerName] || 0);
       window[runningTimerName] = 0;
       return wasInstalled;
@@ -2742,6 +2852,7 @@ TEXT = r"""
       cancelNumericAnimation,
       configureCopy,
       copyHudText,
+      copyNodeText,
       flashCopyState,
       refreshAllMarquees,
       refreshMarquee,
