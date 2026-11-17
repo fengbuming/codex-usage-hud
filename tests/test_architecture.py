@@ -385,6 +385,68 @@ def test_cli_facade_import_does_not_eagerly_load_qt_hud() -> None:
     assert "codex_usage_hud.ui.work_overlay_qt=False" in result.stdout
 
 
+def test_runtime_compat_import_defers_runtime_owners() -> None:
+    env = os.environ.copy()
+    env["PYTHONPATH"] = (
+        str(ROOT / "src")
+        if not env.get("PYTHONPATH")
+        else str(ROOT / "src") + os.pathsep + env["PYTHONPATH"]
+    )
+    script = (
+        "import sys\n"
+        "import codex_usage_hud.runtime_compat\n"
+        "names = [\n"
+        "    'codex_usage_hud.active_work',\n"
+        "    'codex_usage_hud.codex_app_runtime',\n"
+        "    'codex_usage_hud.desktop_overlay_setup',\n"
+        "    'codex_usage_hud.runtime_context',\n"
+        "    'codex_usage_hud.runtime_snapshot_service',\n"
+        "]\n"
+        "print('\\n'.join(f'{name}={name in sys.modules}' for name in names))\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        timeout=15,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert all(f"codex_usage_hud.{name}=False" in result.stdout for name in (
+        "active_work",
+        "codex_app_runtime",
+        "desktop_overlay_setup",
+        "runtime_context",
+        "runtime_snapshot_service",
+    ))
+
+
+def test_runtime_orchestration_defers_renderer_runtime_until_session_start() -> None:
+    env = os.environ.copy()
+    env["PYTHONPATH"] = (
+        str(ROOT / "src")
+        if not env.get("PYTHONPATH")
+        else str(ROOT / "src") + os.pathsep + env["PYTHONPATH"]
+    )
+    script = (
+        "import sys\n"
+        "import codex_usage_hud.runtime_orchestration\n"
+        "assert 'codex_usage_hud.renderer_runtime' not in sys.modules\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        timeout=15,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
 def test_work_overlay_facade_is_small_and_lazy() -> None:
     facade_path = SRC / "ui/work_overlay_qt.py"
     source = facade_path.read_text(encoding="utf-8")

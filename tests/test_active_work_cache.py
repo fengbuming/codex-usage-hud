@@ -125,3 +125,24 @@ def test_work_cache_is_bounded_and_does_not_cache_racing_writes(tmp_path: Path) 
     assert racing.calls == 2
     cache.close()
     assert not cache._entries
+
+
+def test_work_cache_enforces_retained_byte_budget(tmp_path: Path) -> None:
+    class LargeParser(Parser):
+        def parse_file(self, path: Path) -> ParsedSession:
+            self.calls += 1
+            return ParsedSession(task_prompt=path.read_text(encoding="utf-8"))
+
+    cache = ActiveWorkSnapshotCache(max_entries=16, max_bytes=8 * 1024)
+    parser = LargeParser()
+    paths = [tmp_path / f"{index}.jsonl" for index in range(4)]
+    for path in paths:
+        path.write_text("x" * 3000, encoding="utf-8")
+        assert len(cache.parse(parser, path).task_prompt) == 3000
+        assert cache._retained_bytes <= cache._max_bytes
+
+    assert len(cache._entries) < len(paths)
+    assert cache._retained_bytes <= cache._max_bytes
+
+    cache.close()
+    assert cache._retained_bytes == 0

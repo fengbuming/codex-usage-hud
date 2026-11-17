@@ -17,7 +17,6 @@ from . import codex_app_runtime as _codex_app_runtime_owner
 from . import daemon_runtime as _daemon_runtime_owner
 from . import instance_lock
 from . import loading_feedback
-from . import renderer_runtime
 from .renderer_session_ports import RendererSessionPorts
 from . import renderer_startup as _renderer_startup_owner
 from . import runtime_compat as _runtime_compat
@@ -33,6 +32,7 @@ from .usage_cache import UsageSummaryCache  # noqa: F401 - public CLI facade exp
 
 
 _LOGGER = logging.getLogger("codex_usage_hud.runtime_orchestration")
+HudAlreadyRunningError = instance_lock.HudAlreadyRunningError
 ACTIVE_WORK_ITEM_LIMIT = DEFAULT_WORK_OVERLAY_MAX_ITEMS
 WORK_OVERLAY_STALE_SECONDS = 20.0
 WORK_OVERLAY_ALPHA = 0.88
@@ -222,6 +222,8 @@ def run_renderer_hud_session(
     shutdown_coordinator: object | None = None,
     services: RuntimeServices | None = None,
 ) -> int:
+    from . import renderer_runtime
+
     return renderer_runtime.run_renderer_hud_session(
         args,
         lock_already_held=lock_already_held,
