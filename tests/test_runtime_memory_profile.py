@@ -17,7 +17,10 @@ from codex_usage_hud.runtime_memory_profile import capture_profile_once, start_i
 
 assert not start_if_enabled({})
 assert not capture_profile_once(output_path=Path(sys.argv[1]))
-assert start_if_enabled({'CODEX_USAGE_HUD_MEMORY_PROFILE': '1'})
+assert start_if_enabled(
+    {'CODEX_USAGE_HUD_MEMORY_PROFILE': '1'},
+    stage='renderer-client-init',
+)
 retained = [bytearray(4096) for _ in range(128)]
 assert capture_profile_once(reason='test', output_path=Path(sys.argv[1]))
 assert not capture_profile_once(reason='second', output_path=Path(sys.argv[1]))
@@ -32,6 +35,7 @@ assert len(retained) == 128
     )
     report = json.loads(output.read_text(encoding="utf-8"))
     assert report["reason"] == "test"
+    assert report["profiling"]["trace_started_stage"] == "renderer-client-init"
     assert report["profiling"]["current_traced_bytes"] > 128 * 4096
     assert report["profiling"]["peak_traced_bytes"] >= report["profiling"]["current_traced_bytes"]
     assert report["top_allocation_files"]

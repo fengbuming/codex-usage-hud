@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from unittest.mock import MagicMock
+
 import pytest
 
 from codex_usage_hud.core.parser import ParsedSession
@@ -21,6 +23,25 @@ def test_renderer_domains_exports_the_payload_builder_owner() -> None:
 def test_renderer_domains_rejects_unknown_dynamic_owner_name() -> None:
     with pytest.raises(AttributeError):
         getattr(renderer_domains, "_unsupported_payload_builder_symbol")
+
+
+def test_successful_session_domain_update_triggers_memory_profile(monkeypatch) -> None:
+    client = renderer_client.RendererHudClient(enabled=True)
+    client._warming = False  # noqa: SLF001
+    capture = MagicMock()
+    client._memory_profile_capture = capture  # noqa: SLF001
+    monkeypatch.setattr(
+        client,
+        "_update_payload_once",
+        lambda _payload, *, startup_retry=False: True,
+    )
+
+    assert client.update_payload({"payloadDomains": {"settings": {"settings": {}}}})
+    capture.assert_not_called()
+    assert client.update_payload(
+        {"payloadDomains": {"sessionSwitch": {"sessionId": "test-session"}}}
+    )
+    capture.assert_called_once_with()
 
 
 def test_client_resolves_transport_from_its_owner(monkeypatch) -> None:

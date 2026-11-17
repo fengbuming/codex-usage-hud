@@ -95,6 +95,20 @@ def renderer_enabled_from_env(default: bool = True) -> bool:
     return normalized not in {"0", "false", "no", "off"}
 
 
+def _payload_contains_session(payload: Mapping[str, object]) -> bool:
+    if payload.get("sessionId") or payload.get("rendererSessionId"):
+        return True
+    domains = payload.get("payloadDomains")
+    if not isinstance(domains, Mapping):
+        return False
+    return any(
+        isinstance(domain, Mapping)
+        and (domain.get("sessionId") or domain.get("rendererSessionId"))
+        for name, domain in domains.items()
+        if name in {"currentSession", "sessionSwitch"}
+    )
+
+
 class RendererHudClient:
     """Install and update the in-renderer HUD through a local CDP target."""
 
@@ -142,8 +156,12 @@ class RendererHudClient:
             "yes",
             "on",
         }:
-            from .runtime_memory_profile import capture_profile_once
+            from .runtime_memory_profile import (
+                capture_profile_once,
+                start_if_enabled,
+            )
 
+            start_if_enabled(stage="renderer-client-init")
             self._memory_profile_capture = capture_profile_once
         self._target_discovery = _RendererTargetDiscovery(
             port=self.port,
@@ -799,11 +817,6 @@ class RendererHudClient:
                 history_scope.acknowledge()
             if support_images:
                 self._support_images_sent = True
-            if payload.get("sessionId") and self._memory_profile_capture is not None:
-                try:
-                    self._memory_profile_capture()
-                except Exception:
-                    _LOGGER.warning("renderer_memory_profile_capture_failed", exc_info=True)
             return True
         return False
 
@@ -842,17 +855,32 @@ class RendererHudClient:
         if not lock.acquire(blocking=False):
             self._defer_update("busy", 0.0)
             return False
+        update_ok = False
         try:
             self.record_renderer_metric("payload_updates")
             if self._split_next_full:
                 self._split_next_full = False
-                return self._update_payload_split(
+                update_ok = self._update_payload_split(
                     payload,
                     startup_retry=startup_retry,
                 )
-            return self._update_payload_once(payload, startup_retry=startup_retry)
+            else:
+                update_ok = self._update_payload_once(
+                    payload,
+                    startup_retry=startup_retry,
+                )
         finally:
             lock.release()
+        if (
+            update_ok
+            and _payload_contains_session(payload)
+            and self._memory_profile_capture is not None
+        ):
+            try:
+                self._memory_profile_capture()
+            except Exception:
+                _LOGGER.warning("renderer_memory_profile_capture_failed", exc_info=True)
+        return update_ok
 
     def _update_payload_once(
         self,

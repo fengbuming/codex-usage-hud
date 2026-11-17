@@ -20,11 +20,16 @@ MEMORY_PROFILE_FILENAME = "hud_memory_profile.json"
 _active = False
 _captured = False
 _owns_tracing = False
+_trace_started_stage = ""
 _LOGGER = logging.getLogger("codex_usage_hud.memory_profile")
 
 
-def start_if_enabled(environ: Mapping[str, str] | None = None) -> bool:
-    global _active, _owns_tracing
+def start_if_enabled(
+    environ: Mapping[str, str] | None = None,
+    *,
+    stage: str = "process-entrypoint",
+) -> bool:
+    global _active, _owns_tracing, _trace_started_stage
 
     values = os.environ if environ is None else environ
     enabled = str(values.get(MEMORY_PROFILE_ENV, "")).strip().lower()
@@ -35,6 +40,7 @@ def start_if_enabled(environ: Mapping[str, str] | None = None) -> bool:
     _owns_tracing = not tracemalloc.is_tracing()
     if _owns_tracing:
         tracemalloc.start(1)
+    _trace_started_stage = str(stage)
     _active = True
     return True
 
@@ -86,6 +92,7 @@ def capture_profile_once(
             "profiling": {
                 "tracemalloc_frames": 1,
                 "tracemalloc_started_here": _owns_tracing,
+                "trace_started_stage": _trace_started_stage,
                 "current_traced_bytes": current_bytes,
                 "peak_traced_bytes": peak_bytes,
                 "private_minus_traced_bytes": (
