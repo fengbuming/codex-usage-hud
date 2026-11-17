@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime
 import json
 import logging
+import os
 import time
 from pathlib import Path
 from typing import Any
@@ -26,6 +27,19 @@ from . import session_snapshots
 VISIBLE_APP_ERROR_HOLD_SECONDS = 60.0
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _record_memory_profile_stage(stage: str) -> None:
+    if os.environ.get("CODEX_USAGE_HUD_MEMORY_PROFILE", "").strip().lower() not in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }:
+        return
+    from .runtime_memory_profile import record_stage
+
+    record_stage(stage)
 
 
 @dataclass(frozen=True, slots=True)
@@ -476,6 +490,7 @@ def build_snapshot(
         return int(time.time() * 1000)
 
     build_started_at_ms = now_ms()
+    _record_memory_profile_stage("snapshot-builder-started")
     context.reload_user_config()
     tracker = context.active_session_tracker
     selection_seq = int(getattr(tracker, "selection_seq", 0) or 0)
@@ -489,6 +504,7 @@ def build_snapshot(
     ports.record_active_session_error(context, selection_source, session_path)
     snapshot = selected.snapshot
     session_parsed_at_ms = now_ms()
+    _record_memory_profile_stage("snapshot-session-selected")
     _enrich_tracker(
         context,
         snapshot,
@@ -524,6 +540,7 @@ def build_snapshot(
     # Renderers must not show the deferred placeholder zeros as measured usage.
     snapshot.budget_ready = bool(budget_ready)
     usage_summarized_at_ms = now_ms()
+    _record_memory_profile_stage("snapshot-budget-complete")
     # Active-work discovery has a small bounded candidate set and must not be
     # coupled to the cold budget scan. Otherwise a HUD restart leaves every
     # already-running CLI conversation without a bubble until budgets warm.
@@ -536,6 +553,7 @@ def build_snapshot(
             snapshot.active_work_items = ports.active_work_items(
                 context, snapshot, session_path, scan_candidates=False
             )
+    _record_memory_profile_stage("snapshot-active-work-complete")
     apply_pre_send_and_activity(context, snapshot)
     snapshot.follow_timing = {
         **dict(snapshot.follow_timing or {}),
@@ -548,6 +566,7 @@ def build_snapshot(
         "runtimeEnrichedAt": now_ms(),
     }
     update_session_cleanup_activity(context, snapshot)
+    _record_memory_profile_stage("snapshot-builder-complete")
     return snapshot
 
 

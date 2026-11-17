@@ -8,6 +8,7 @@ from dataclasses import replace
 from datetime import datetime
 import json
 import logging
+import os
 from pathlib import Path
 import re
 import threading
@@ -55,6 +56,19 @@ ACTIVE_WORK_MODEL_STARTUP_STALE_SECONDS = 90.0
 # here for that layout decision while still bounding the state-file payload.
 ACTIVE_WORK_LAST_OUTPUT_MAX_CHARS = 4096
 FINAL_ANSWER_COMPLETION_GRACE_SECONDS = 1.0
+
+
+def _record_memory_profile_stage(stage: str) -> None:
+    if os.environ.get("CODEX_USAGE_HUD_MEMORY_PROFILE", "").strip().lower() not in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }:
+        return
+    from .runtime_memory_profile import record_stage
+
+    record_stage(stage)
 
 
 def _iso_or_empty(value: datetime | None) -> str:
@@ -1228,18 +1242,26 @@ def active_work_items_for_snapshot(
                 ACTIVE_WORK_CANDIDATE_LIMIT, project=_snapshot_for_active_work_cache,
             )
             context.active_work_snapshot_cache = snapshot_cache
-        for path in _recent_session_files(
+        recent_paths = _recent_session_files(
             context.sessions_root,
             current_path=session_path,
             limit=ACTIVE_WORK_CANDIDATE_LIMIT,
             priority_paths=priority_paths,
-        ):
+        )
+        _record_memory_profile_stage("active-work-candidates-enumerated")
+        for candidate_index, path in enumerate(recent_paths, 1):
             if _session_path_key(path) == current_key:
                 continue
             try:
                 parsed = snapshot_cache.parse(context.parser, path)
             except Exception:
+                _record_memory_profile_stage(
+                    f"active-work-candidate-{candidate_index}-failed"
+                )
                 continue
+            _record_memory_profile_stage(
+                f"active-work-candidate-{candidate_index}"
+            )
             if parsed.session_id == snapshot.session_id and parsed.session_id not in {"", "n/a"}:
                 if _work_snapshot_revision(parsed) > _work_snapshot_revision(snapshot):
                     snapshot = replace(

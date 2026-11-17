@@ -16,6 +16,7 @@ from .calculator import UsageCalculator, estimate_tokens
 from .pre_send_estimator import BaseEstimate
 from .activity_monitor import ReadingActivity
 from .rollout_io import open_rollout_text
+from ..disk_sequence import DecodedHistoryCache, DiskRecordSequence
 
 DEFAULT_MODEL = "gpt-5.5"
 MAX_REQUEST_HISTORY = 500
@@ -481,6 +482,48 @@ def _command_duration_text(duration: Any) -> str:
     return f"{hours}h{minutes:02d}m{rest:02d}s"
 
 
+def _tool_output_preview(value: Any) -> str:
+    """Extract readable tool output without stringifying image payloads."""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, Mapping):
+        parts = [
+            _tool_output_preview(value[key])
+            for key in ("text", "message", "content", "output", "stdout", "stderr")
+            if key in value
+        ]
+        text = " ".join(part for part in parts if part)
+        has_image = any(
+            key in value for key in ("image_url", "data_url", "image_data")
+        ) or "image" in str(value.get("type") or "").casefold()
+        if has_image:
+            return f"{text} [图片输出]".strip()
+        return text
+    if isinstance(value, Sequence) and not isinstance(
+        value, (str, bytes, bytearray)
+    ):
+        return " ".join(
+            text for item in value if (text := _tool_output_preview(item))
+        )
+    if isinstance(value, (bool, int, float)):
+        return str(value)
+    return ""
+
+
+def _strip_work_image_payloads(value: Any) -> Any:
+    """Drop inline image bytes from the active-work-only parse projection."""
+    if isinstance(value, Mapping):
+        kind = str(value.get("type") or "").casefold()
+        if "image" in kind or any(
+            key in value for key in ("image_url", "data_url", "image_data")
+        ):
+            return {"type": "text", "text": "[图片输出]"}
+        return {key: _strip_work_image_payloads(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_strip_work_image_payloads(item) for item in value]
+    return value
+
+
 def _activity_from_record(record: Mapping[str, Any]) -> "Activity | None":
     payload = record.get("payload") or {}
     if not isinstance(payload, Mapping):
@@ -504,7 +547,7 @@ def _activity_from_record(record: Mapping[str, Any]) -> "Activity | None":
         "custom_tool_call_output",
     }:
         call_id = str(payload.get("call_id") or "").strip()
-        output = compact_text(payload.get("output"), 140)
+        output = compact_text(_tool_output_preview(payload.get("output")), 140)
         return Activity("tool output", f"{call_id} {output}".strip(), timestamp)
     if record_type == "event_msg" and payload_type in {
         "item_started",
@@ -1237,7 +1280,54 @@ class JsonlSessionParser:
 
     def parse_work_file(self, path: Path) -> ParsedSession:
         """Parse all bubble state without constructing unused historical UI rows."""
-        return self.parse_file(path, include_session_history=False)
+        snapshot = ParsedSession(session_path=path)
+        if not path.exists():
+            snapshot.status = "missing"
+            snapshot.error = f"Session file not found: {path}"
+            return snapshot
+
+        records = DiskRecordSequence(cache=DecodedHistoryCache(512 * 1024))
+        try:
+            with open_rollout_text(path) as handle:
+                for line_number, line in enumerate(handle, 1):
+                    text = line.strip()
+                    if not text:
+                        continue
+                    try:
+                        record = json.loads(text)
+                    except json.JSONDecodeError:
+                        continue
+                    if not isinstance(record, dict):
+                        continue
+                    record["_line"] = line_number
+                    record["_dt"] = parse_timestamp(record.get("timestamp"))
+                    payload = record.get("payload")
+                    if (
+                        record.get("type") == "response_item"
+                        and isinstance(payload, Mapping)
+                        and payload.get("type") in {
+                            "function_call_output",
+                            "custom_tool_call_output",
+                        }
+                    ):
+                        record["payload"] = {
+                            **payload,
+                            "output": _strip_work_image_payloads(
+                                payload.get("output")
+                            ),
+                        }
+                    records.append(record)
+            try:
+                snapshot.last_file_mtime = path.stat().st_mtime
+            except OSError:
+                snapshot.last_file_mtime = None
+            return self.parse_records(
+                records, path, snapshot=snapshot, include_session_history=False
+            )
+        except OSError as exc:
+            snapshot.status = "missing"
+            snapshot.error = f"Session file unavailable: {exc}"
+            return snapshot
 
     def parse_file_incremental(
         self,
@@ -2714,7 +2804,7 @@ class JsonlSessionParser:
                 record_type == "response_item"
                 and payload_type == "function_call_output"
             ):
-                value = estimate_tokens(payload.get("output"))
+                value = estimate_tokens(_tool_output_preview(payload.get("output")))
                 estimate.tool_tokens += value
                 if value:
                     sources.append(f"tool-output~{value}")
@@ -2761,13 +2851,13 @@ class JsonlSessionParser:
             text = tool_call_detail(payload)
             return ("output", "工具调用", text) if text else None
         if record_type == "response_item" and payload_type == "function_call_output":
-            text = str(payload.get("output") or "").strip()
+            text = _tool_output_preview(payload.get("output")).strip()
             return ("input", "工具返回", text) if text else None
         if (
             record_type == "response_item"
             and payload_type == "custom_tool_call_output"
         ):
-            text = str(payload.get("output") or "").strip()
+            text = _tool_output_preview(payload.get("output")).strip()
             return ("input", "工具返回", text) if text else None
         if record_type == "response_item" and payload_type == "reasoning":
             text = reasoning_text(payload).strip()
@@ -3431,7 +3521,9 @@ class JsonlSessionParser:
                         # raw tool-output string is only a fallback for
                         # sessions that never emit the completed item.
                         steps[index].output = compact_text(
-                            payload.get("output") or payload.get("result") or "",
+                            _tool_output_preview(
+                                payload.get("output") or payload.get("result") or ""
+                            ),
                             220,
                         )
                     close_open_step(index)

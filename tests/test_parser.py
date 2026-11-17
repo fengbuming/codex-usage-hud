@@ -23,6 +23,7 @@ from codex_usage_hud.core.parser import (
     JsonlTailState,
     RequestTokens,
     SseRequestStateMachine,
+    _activity_from_record,
     active_output_tail,
     command_execution_text,
     extract_log_field,
@@ -2128,6 +2129,63 @@ class ActivityExecutionFeedTests(unittest.TestCase):
             item["_dt"] = parse_timestamp(item["timestamp"])
         return records
 
+    def test_tool_output_preview_skips_embedded_image_data(self) -> None:
+        class ImagePayload(dict):
+            def __str__(self) -> str:
+                raise AssertionError("structured image payload must not be stringified")
+
+        item = record(
+            "2026-05-28T00:00:04Z",
+            "response_item",
+            {
+                "type": "custom_tool_call_output",
+                "call_id": "image-call",
+                "output": [
+                    {"type": "text", "text": "Rendered screenshot"},
+                    ImagePayload(
+                        type="image",
+                        image_url="data:image/png;base64," + ("A" * 2_000_000),
+                    ),
+                ],
+            },
+        )
+        item["_dt"] = parse_timestamp(item["timestamp"])
+
+        activity = _activity_from_record(item)
+
+        self.assertEqual(activity.detail, "image-call Rendered screenshot [图片输出]")
+
+    def test_work_file_parse_discards_inline_image_payloads(self) -> None:
+        image_data = "A" * 2_000_000
+        payload = {
+            "type": "custom_tool_call_output",
+            "call_id": "image-call",
+            "output": [
+                {"type": "text", "text": "Rendered screenshot"},
+                {"type": "image", "image_url": f"data:image/png;base64,{image_data}"},
+            ],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "work.jsonl"
+            path.write_text(
+                "\n".join(
+                    json.dumps(item)
+                    for item in (
+                        record("2026-05-28T00:00:00Z", "session_meta", {"id": "work"}),
+                        record("2026-05-28T00:00:01Z", "response_item", payload),
+                    )
+                ) + "\n",
+                encoding="utf-8",
+            )
+
+            parsed = JsonlSessionParser().parse_work_file(path)
+
+        self.assertEqual(parsed.session_id, "work")
+        self.assertEqual(
+            parsed.activity.detail,
+            "image-call Rendered screenshot [图片输出]",
+        )
+        self.assertNotIn(image_data, parsed.activity.detail)
     def test_command_execution_text_prefers_parsed_cmd(self) -> None:
         item = {
             "type": "CommandExecution",

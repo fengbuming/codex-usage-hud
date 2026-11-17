@@ -64,6 +64,21 @@ LAYOUT_BINDING_NAME = "codexUsageHudLayout"
 THEME_BINDING_NAME = "codexUsageHudTheme"
 RENDERER_HUD_ENV = "CODEX_USAGE_HUD_RENDERER"
 _LOGGER = logging.getLogger("codex_usage_hud.ui.renderer_hud")
+
+
+def _record_memory_profile_stage(stage: str) -> None:
+    if os.environ.get("CODEX_USAGE_HUD_MEMORY_PROFILE", "").strip().lower() not in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }:
+        return
+    from .runtime_memory_profile import record_stage
+
+    record_stage(stage)
+
+
 REMOVE_RENDERER_HUD_SCRIPT = (
     "(() => {"
     "let existed = false;"
@@ -767,6 +782,7 @@ class RendererHudClient:
             self._theme_snapshot = theme_snapshot
         theme_probe_ms = (time.perf_counter() - theme_started) * 1000.0
         history_scope = (self.history_store.begin(snapshot) if self.history_store.url else None)
+        _record_memory_profile_stage("renderer-history-scope-started")
         payload = payload_from_snapshot(
             snapshot,
             settings=settings,
@@ -796,8 +812,10 @@ class RendererHudClient:
             request_rows_limit=request_rows_limit,
             history_scope=history_scope,
         ).to_json()
+        _record_memory_profile_stage("renderer-payload-built")
         if history_scope is not None:
             history_scope.finish()
+        _record_memory_profile_stage("renderer-history-scope-finished")
         update_ok = (
             self.update_payload(payload, startup_retry=True)
             if startup_retry
@@ -877,6 +895,7 @@ class RendererHudClient:
             and self._memory_profile_capture is not None
         ):
             try:
+                _record_memory_profile_stage("renderer-update-accepted")
                 self._memory_profile_capture()
             except Exception:
                 _LOGGER.warning("renderer_memory_profile_capture_failed", exc_info=True)
@@ -1568,6 +1587,7 @@ class RendererHudClient:
         self._support_images_sent = False
 
     def _send_update(self, websocket_url: str, payload: dict[str, object]) -> bool:
+        _record_memory_profile_stage("renderer-payload-serialization-started")
         payload_json = json.dumps(payload, ensure_ascii=False)
         expression = (
             "(() => {"
@@ -1577,6 +1597,7 @@ class RendererHudClient:
             "return { ok: !!ok, applyMs: performance.now() - started };"
             "})()"
         )
+        _record_memory_profile_stage("renderer-payload-serialization-complete")
         started = time.perf_counter()
         transport = "ephemeral"
         persistent_ms: float | None = None

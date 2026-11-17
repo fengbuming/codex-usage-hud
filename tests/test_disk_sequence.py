@@ -84,11 +84,20 @@ def test_selected_disk_records_preserve_append_partial_truncate_and_replacement(
     assert replaced.records[0]['payload']['type'] == 'task_started'
 
 
-def test_desktop_work_parser_keeps_its_existing_storage(tmp_path, monkeypatch):
+def test_desktop_work_parser_uses_bounded_disk_storage(tmp_path, monkeypatch):
     path = tmp_path / 'work.jsonl'
     path.write_text('{"type":"session_meta","payload":{"id":"work"}}\n', encoding='utf-8')
-    monkeypatch.setattr('codex_usage_hud.disk_sequence.tempfile.TemporaryFile', lambda **kw: pytest.fail('Desktop bubble parser must not use disk history'))
-    assert JsonlSessionParser().parse_work_file(path).session_id == 'work'
+    created = []
+    original = __import__('tempfile').TemporaryFile
+
+    def temporary_file(**kwargs):
+        created.append(kwargs)
+        return original(**kwargs)
+
+    monkeypatch.setattr('codex_usage_hud.disk_sequence.tempfile.TemporaryFile', temporary_file)
+    parsed = JsonlSessionParser().parse_work_file(path)
+    assert parsed.session_id == 'work'
+    assert created
 
 
 def test_usage_budget_counts_objects_instead_of_source_file_size(tmp_path):
