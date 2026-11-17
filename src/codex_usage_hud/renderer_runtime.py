@@ -10,6 +10,7 @@ import argparse
 from collections.abc import Callable
 from contextlib import nullcontext
 import logging
+import os
 import sys
 import time
 from functools import partial
@@ -404,6 +405,15 @@ def run_renderer_hud_session(args: argparse.Namespace, *, lock_already_held: boo
             )
             resources = base.resources
             context = base.context
+            if os.environ.get("CODEX_USAGE_HUD_MEMORY_PROFILE", "").strip().lower() in {
+                "1",
+                "true",
+                "yes",
+                "on",
+            }:
+                from .runtime_memory_profile import record_stage
+
+                record_stage("renderer-context-ready")
             display_mode = base.display_mode
             work_overlay = base.work_overlay
 

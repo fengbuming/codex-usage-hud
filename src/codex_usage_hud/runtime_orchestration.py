@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import re
 import sys
 import time
@@ -404,6 +405,15 @@ def run_tk_hud_session(args: argparse.Namespace, **kwargs: object) -> int:
 
 
 def run_daemon(args: argparse.Namespace) -> int:
+    if os.environ.get("CODEX_USAGE_HUD_MEMORY_PROFILE", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }:
+        from .runtime_memory_profile import start_if_enabled
+
+        start_if_enabled(stage="daemon-runtime-entry")
     # Provider routes are intentionally owned by a detached relay.  Warm the
     # relay before the HUD enters its main loop so a stale loopback route from
     # a previous HUD session is usable immediately, and remains usable after

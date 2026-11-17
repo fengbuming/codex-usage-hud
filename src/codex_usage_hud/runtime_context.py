@@ -6,6 +6,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 import logging
+import os
 from pathlib import Path
 import argparse
 
@@ -65,6 +66,19 @@ DELETED_SESSION_USAGE_FILENAME = "deleted_session_usage.json"
 USAGE_SUMMARY_DATABASE_FILENAME = "usage-summary.sqlite3"
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _record_memory_profile_stage(stage: str) -> None:
+    if os.environ.get("CODEX_USAGE_HUD_MEMORY_PROFILE", "").strip().lower() not in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }:
+        return
+    from .runtime_memory_profile import record_stage
+
+    record_stage(stage)
 
 # Cold-start interactive-window guard for the warm job's finalize thread.
 # Its work (117 MB snapshot unpickle ~3 s + doc-table scan ~8.5 s on a 2.89 GB
@@ -308,6 +322,7 @@ def _initialize_runtime_context_resources(context: RuntimeContext) -> None:
         def _prime_session_index() -> None:
             try:
                 snapshot = context.session_cleanup_manager.scan()
+                _record_memory_profile_stage("session-cleanup-scan-complete")
                 publisher = getattr(context.session_cleanup_worker, "_publish", None)
                 if callable(publisher):
                     publisher(snapshot)
@@ -317,9 +332,12 @@ def _initialize_runtime_context_resources(context: RuntimeContext) -> None:
                 if callable(watcher_start):
                     watcher_start()
                 warm_job.start(_session_index_startup_range(context))
+                _record_memory_profile_stage("session-index-warm-started")
             except Exception as exc:
+                _record_memory_profile_stage("session-index-prime-failed")
                 _LOGGER.exception("session_index_warm_start_failed error=%s", exc)
 
+        _record_memory_profile_stage("session-index-prime-thread-started")
         threading.Thread(
             target=_prime_session_index,
             name="codex-usage-hud-session-index-prime",
@@ -377,6 +395,15 @@ def _build_session_index_warm_job(context: RuntimeContext) -> object:
     def publish_progress(snapshot: object) -> None:
         payload = _session_index_snapshot_payload(snapshot)
         context.session_index_payload = payload
+        if (
+            payload["totalCount"] > 0
+            and payload["builtCount"] >= payload["totalCount"]
+            and not bool(
+                getattr(context, "_memory_profile_session_index_complete", False)
+            )
+        ):
+            setattr(context, "_memory_profile_session_index_complete", True)
+            _record_memory_profile_stage("session-index-coverage-complete")
         # Coverage can be complete before the delayed resident-memory load.
         # Refresh the submitted query on progress (including that final load),
         # even while detached, so reopening cannot inherit a stale empty result.

@@ -11,6 +11,7 @@ from pathlib import Path
 import sys
 import tempfile
 import threading
+import time
 import tracemalloc
 from typing import Mapping
 
@@ -21,6 +22,10 @@ _active = False
 _captured = False
 _owns_tracing = False
 _trace_started_stage = ""
+_trace_started_at = 0.0
+_last_stage_current_bytes = 0
+_global_peak_bytes = 0
+_stage_samples: list[dict[str, object]] = []
 _LOGGER = logging.getLogger("codex_usage_hud.memory_profile")
 
 
@@ -29,19 +34,64 @@ def start_if_enabled(
     *,
     stage: str = "process-entrypoint",
 ) -> bool:
-    global _active, _owns_tracing, _trace_started_stage
+    global _active, _owns_tracing, _trace_started_at, _trace_started_stage
+    global _last_stage_current_bytes, _global_peak_bytes
 
     values = os.environ if environ is None else environ
     enabled = str(values.get(MEMORY_PROFILE_ENV, "")).strip().lower()
     if enabled not in {"1", "true", "yes", "on"} or _captured:
         return False
     if _active:
+        record_stage(stage)
         return True
     _owns_tracing = not tracemalloc.is_tracing()
     if _owns_tracing:
         tracemalloc.start(1)
     _trace_started_stage = str(stage)
+    _trace_started_at = time.perf_counter()
+    _last_stage_current_bytes, _global_peak_bytes = tracemalloc.get_traced_memory()
+    _stage_samples.clear()
     _active = True
+    record_stage(stage)
+    return True
+
+
+def record_stage(stage: str) -> bool:
+    global _last_stage_current_bytes, _global_peak_bytes
+
+    if not _active or _captured:
+        return False
+    current_bytes, interval_peak_bytes = tracemalloc.get_traced_memory()
+    _global_peak_bytes = max(_global_peak_bytes, interval_peak_bytes)
+    try:
+        process = _process_memory()
+    except Exception as exc:
+        process = {
+            "source": "unavailable",
+            "error_type": type(exc).__name__,
+            "private_bytes": None,
+            "working_set_bytes": None,
+            "peak_working_set_bytes": None,
+        }
+    _stage_samples.append(
+        {
+            "stage": str(stage),
+            "elapsed_ms": round((time.perf_counter() - _trace_started_at) * 1000, 1),
+            "current_traced_bytes": current_bytes,
+            "interval_peak_bytes": interval_peak_bytes,
+            "interval_peak_growth_bytes": (
+                max(0, interval_peak_bytes - _last_stage_current_bytes)
+                if _owns_tracing
+                else None
+            ),
+            "total_peak_traced_bytes": _global_peak_bytes,
+            "private_bytes": process.get("private_bytes"),
+            "working_set_bytes": process.get("working_set_bytes"),
+        }
+    )
+    _last_stage_current_bytes = current_bytes
+    if _owns_tracing:
+        tracemalloc.reset_peak()
     return True
 
 
@@ -50,13 +100,15 @@ def capture_profile_once(
     reason: str = "first-session-renderer-update",
     output_path: Path | str | None = None,
 ) -> bool:
-    global _active, _captured
+    global _active, _captured, _global_peak_bytes
 
     if not _active or _captured:
         return False
+    record_stage(reason)
     _captured = True
     try:
-        current_bytes, peak_bytes = tracemalloc.get_traced_memory()
+        current_bytes, _interval_peak_bytes = tracemalloc.get_traced_memory()
+        _global_peak_bytes = max(_global_peak_bytes, current_bytes)
         snapshot = tracemalloc.take_snapshot()
         top_lines = []
         by_file: dict[str, list[int]] = defaultdict(lambda: [0, 0])
@@ -94,7 +146,7 @@ def capture_profile_once(
                 "tracemalloc_started_here": _owns_tracing,
                 "trace_started_stage": _trace_started_stage,
                 "current_traced_bytes": current_bytes,
-                "peak_traced_bytes": peak_bytes,
+                "peak_traced_bytes": _global_peak_bytes,
                 "private_minus_traced_bytes": (
                     private_bytes - current_bytes
                     if isinstance(private_bytes, int)
@@ -106,6 +158,7 @@ def capture_profile_once(
                 "loaded_modules": len(sys.modules),
                 "active_threads": threading.active_count(),
             },
+            "stage_samples": list(_stage_samples),
             "top_allocation_lines": top_lines,
             "top_allocation_files": [
                 {"source": name, "bytes": values[0], "allocations": values[1]}
