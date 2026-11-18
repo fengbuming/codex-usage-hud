@@ -1981,7 +1981,7 @@ def handle_general_command(
                         else "已强制启用 Fast：HUD 请求代理会为所有会话的 Responses 请求附加 Fast 档位。"
                     )
                 else:
-                    message = "已关闭 Fast 强制设置，恢复各会话原有服务档位。"
+                    message = "已关闭 Fast：HUD 请求代理会为所有会话使用普通服务档位，覆盖旧聊天和 Codex 配置中的 Fast 偏好。"
                 status = runtime_settings.settings_status(
                     message,
                     restart_visible=bool(gateway_result and gateway_result.get("requiresConfigReload")),

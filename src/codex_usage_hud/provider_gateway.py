@@ -152,7 +152,7 @@ def set_fast_request(thread_id: str, enabled: bool, *, config_path: Path | None 
 
 
 def set_fast_requests_forced(enabled: bool, *, config_path: Path | None = None) -> dict:
-    """Set the gateway-wide Fast tier override used for every conversation."""
+    """Explicitly select Fast or standard requests for every conversation."""
     from .codex_provider_config import default_codex_config_path
 
     path = config_path or default_codex_config_path()
@@ -354,6 +354,9 @@ def resolve_route(path: Path, headers: Mapping, *, generation: bool) -> dict:
     return {**route, "provider": provider, "thread_id": thread_id,
             "service_tier_override": (
                 "fast" if force_fast and force_fast[0] == "1"
+                # Explicitly switching Fast off must also suppress persisted
+                # chat defaults and native config/session Fast preferences.
+                else "default" if force_fast and force_fast[0] == "0"
                 else tier_row[0] if tier_row else None
             ),
             "image_generation": {},

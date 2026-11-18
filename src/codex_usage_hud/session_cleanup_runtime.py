@@ -538,8 +538,13 @@ class SessionCleanupWorker:
                 # event between these two operations and delete SQLite just
                 # before this worker opens it again.
                 self._index_idle.clear()
+            index = manager._search_index
+            begin_maintenance = getattr(index, "begin_maintenance", None)
+            end_maintenance = getattr(index, "end_maintenance", None)
+            if callable(begin_maintenance):
+                begin_maintenance()
             try:
-                loaded = manager._search_index.load()
+                loaded = index.load()
                 if not self._search_index_job_current(job):
                     continue
                 self._publish(
@@ -564,7 +569,7 @@ class SessionCleanupWorker:
                         )
                     )
 
-                manager._search_index.sync_batches(
+                index.sync_batches(
                     job.entries,
                     total=len(job.entries),
                     batch_size=64,
@@ -577,7 +582,7 @@ class SessionCleanupWorker:
                     manager._search_index.remove_missing(
                         entry[0] for entry in job.entries
                     )
-                indexed = manager._search_index.count()
+                indexed = index.count()
                 self._publish(
                     manager.update_search_index(
                         job.revision,
@@ -608,6 +613,8 @@ class SessionCleanupWorker:
                     )
                 )
             finally:
+                if callable(end_maintenance):
+                    end_maintenance()
                 self._index_idle.set()
 
     def _latest_queued_search(self, command: dict[str, object]) -> dict[str, object]:

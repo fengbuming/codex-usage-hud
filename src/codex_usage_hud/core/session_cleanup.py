@@ -881,7 +881,7 @@ class SessionCleanupManager:
             result = self._search_index.search(
                 query,
                 session_ids=by_session,
-                load=False,
+                load=True,
             )
         details: dict[str, dict[str, object]] = {}
         order: list[str] = []

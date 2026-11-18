@@ -31,7 +31,7 @@ from .core.deleted_usage import DeletedUsageLedger
 from .core.rest_reminder import RestReminderPresenter
 from .core.runtime_errors import RuntimeErrorRegistry
 from .core.runtime_events import RuntimeEventBus
-from .core.session_search import DEFAULT_RANGE, wider_range_key
+from .core.session_search import DEFAULT_RANGE
 from .platforms import ActiveSessionTracker, SessionPathResolver, get_current_platform
 from .platforms.base import BasePlatform
 from .provider_registry import ProviderRegistry, discover_provider_registry
@@ -86,7 +86,7 @@ def _record_memory_profile_stage(stage: str) -> None:
 # payload behind the "step 4" bubble by 10-20 s and left zeroed panels. The
 # finalize thread waits this many seconds before starting so the interactive
 # startup finishes first (PRD §11: yield while the UI is busy).
-_SESSION_INDEX_PRELOAD_GRACE_SECONDS = 20.0
+_SESSION_INDEX_FINALIZE_GRACE_SECONDS = 20.0
 
 
 @dataclass
@@ -313,7 +313,6 @@ def _initialize_runtime_context_resources(context: RuntimeContext) -> None:
         context.session_index_payload = dict(
             context.session_index_warm_job.status()
         )
-        warm_job = context.session_index_warm_job
         # The warm job needs the manager's candidate inventory.  Build that
         # inventory in the background at startup so first-use indexing does
         # not wait for the user to open session management and click Scan.
@@ -331,8 +330,8 @@ def _initialize_runtime_context_resources(context: RuntimeContext) -> None:
                 watcher_start = getattr(context.session_cleanup_worker, "_start_search_watcher", None)
                 if callable(watcher_start):
                     watcher_start()
-                warm_job.start(_session_index_startup_range(context))
-                _record_memory_profile_stage("session-index-warm-started")
+                # Keep the durable index idle until an explicit index control,
+                # scan, or filesystem change requests maintenance.
             except Exception as exc:
                 _record_memory_profile_stage("session-index-prime-failed")
                 _LOGGER.exception("session_index_warm_start_failed error=%s", exc)
@@ -351,36 +350,6 @@ def _session_index_warm_job_available(manager: object) -> bool:
         and hasattr(manager, "search_index_entries")
         and hasattr(manager, "_search_index")
     )
-
-
-def _session_index_default_range(context: RuntimeContext) -> str:
-    config = getattr(context, "user_config", None)
-    raw = getattr(config, "session_search_range", "") if config is not None else ""
-    candidate = str(raw or "").strip().casefold()
-    return candidate if candidate in {"1m", "3m", "6m", "1y", "all"} else "1m"
-
-
-def _session_index_startup_range(context: RuntimeContext) -> str:
-    """Resolve the startup warm range: persisted boundary vs configured default.
-
-    The warm job has been constructed but not started, so its status reflects
-    the persisted state file. The wider of the two wins: a user extension must
-    survive restarts (PRD §5.1 remembers it as the new coverage boundary), and
-    a wider configured default still applies on top. Without this, restarting
-    the HUD re-ran the configured default, overwrote the persisted extension
-    and trimmed the already-built index back down to one month.
-    """
-    configured = _session_index_default_range(context)
-    status_fn = getattr(
-        getattr(context, "session_index_warm_job", None), "status", None
-    )
-    persisted = ""
-    if callable(status_fn):
-        try:
-            persisted = str(status_fn().get("selectedRange") or "")
-        except Exception:
-            persisted = ""
-    return wider_range_key(configured, persisted)
 
 
 def _build_session_index_warm_job(context: RuntimeContext) -> object:
@@ -404,9 +373,8 @@ def _build_session_index_warm_job(context: RuntimeContext) -> object:
         ):
             setattr(context, "_memory_profile_session_index_complete", True)
             _record_memory_profile_stage("session-index-coverage-complete")
-        # Coverage can be complete before the delayed resident-memory load.
-        # Refresh the submitted query on progress (including that final load),
-        # even while detached, so reopening cannot inherit a stale empty result.
+        # Refresh the submitted query as indexed batches arrive, even while
+        # detached, so reopening cannot inherit a stale empty result.
         worker = getattr(context, "session_cleanup_worker", None)
         refresh = getattr(worker, "refresh_warm_search", None)
         if callable(refresh) and payload["enabled"]:
@@ -442,7 +410,7 @@ def _build_session_index_warm_job(context: RuntimeContext) -> object:
         manager,
         state_path=state_path,
         progress_callback=publish_progress,
-        preload_grace_seconds=_SESSION_INDEX_PRELOAD_GRACE_SECONDS,
+        finalize_grace_seconds=_SESSION_INDEX_FINALIZE_GRACE_SECONDS,
         before_clear=prepare_search_index_clear,
         after_clear=finish_search_index_clear,
     )

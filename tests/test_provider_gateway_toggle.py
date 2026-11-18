@@ -267,6 +267,25 @@ def test_enabling_force_fast_activates_gateway_and_persists_global_override(setu
     )
     assert route["service_tier_override"] == "fast"
 
+    settings = store.load().to_dict()
+    settings["force_fast_requests"] = False
+    status = _handle_renderer_settings_command(
+        {"action": "save", "settings": settings, "requestId": "force-fast-off"},
+        context,
+        Event(),
+        Event(),
+    )
+    assert status["kind"] == ""
+    assert status["forceFastRequests"] == {"enabled": False}
+    assert store.load().force_fast_requests is False
+    assert store.load().provider_gateway_enabled is True
+    route = gateway.resolve_route(
+        path,
+        {"session_id": "10000000-0000-4000-8000-000000000001"},
+        generation=True,
+    )
+    assert route["service_tier_override"] == "default"
+
 
 def test_default_switch_only_updates_gateway_route_without_reloading_hud(setup):
     from codex_usage_hud.core.parser import ParsedSession

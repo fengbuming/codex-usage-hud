@@ -12,6 +12,7 @@ from codex_usage_hud import codex_provider_config as config
 from codex_usage_hud import provider_gateway as gateway
 from codex_usage_hud.provider_gateway_auth import GATEWAY_AUTH_HEADER, GATEWAY_PATH_ID
 from codex_usage_hud.provider_proxy import ProviderProxyRelay
+from codex_usage_hud.request_body import body_field
 
 A = "10000000-0000-4000-8000-000000000001"
 B = "10000000-0000-4000-8000-000000000002"
@@ -73,9 +74,11 @@ def test_new_chat_default_is_bound_once_and_never_changes_existing_chats(home):
     assert route(home, C)["service_tier_override"] == "default"
 
 
-def test_forced_fast_overrides_every_chat_until_disabled(home):
+def test_explicit_global_fast_choice_overrides_every_chat_and_new_chat_default(home):
     route(home, A)
     gateway.set_fast_request(A, False)
+    gateway.set_fast_request(B, True)
+    gateway.set_fast_request("", True)
     gateway.set_fast_requests_forced(True)
     assert route(home, A)["service_tier_override"] == "fast"
     assert route(home, B)["service_tier_override"] == "fast"
@@ -83,7 +86,13 @@ def test_forced_fast_overrides_every_chat_until_disabled(home):
 
     gateway.set_fast_requests_forced(False)
     assert route(home, A)["service_tier_override"] == "default"
-    assert route(home, B)["service_tier_override"] is None
+    assert route(home, B)["service_tier_override"] == "default"
+    assert route(home, C)["service_tier_override"] == "default"
+    # Preferences stay intact, but cannot re-enable Fast while globally off.
+    assert gateway.fast_request_preferences()[B] == "fast"
+    gateway.set_fast_requests_forced(True)
+    assert route(home, A)["service_tier_override"] == "fast"
+    assert route(home, B)["service_tier_override"] == "fast"
 
 
 def test_historical_chat_does_not_inherit_new_chat_default(home):
@@ -102,10 +111,13 @@ def test_invalid_setting_does_not_save(home, session, enabled):
 
 
 @pytest.mark.parametrize("endpoint,tier", [("responses", "fast"), ("responses", "default"), ("responses/compact", None)])
-def test_relay_sends_choice_only_to_responses_and_preserves_upstream_reply(home, endpoint, tier):
+@pytest.mark.parametrize("global_fast_off", [False, True])
+def test_relay_sends_choice_only_to_responses_and_preserves_upstream_reply(home, endpoint, tier, global_fast_off):
     relay = ProviderProxyRelay()
     relay.routes[GATEWAY_PATH_ID] = {"gateway_config": str(home), "token": "test-token"}
     gateway.set_fast_request(A, tier != "default")
+    if global_fast_off:
+        gateway.set_fast_requests_forced(False)
     body = b'{"model":"custom-model","input":[],"service_tier":"priority"}'
     handler = object.__new__(relay._handler_type())
     handler.command, handler.path = "POST", f"/{GATEWAY_PATH_ID}/v1/{endpoint}"
@@ -113,7 +125,12 @@ def test_relay_sends_choice_only_to_responses_and_preserves_upstream_reply(home,
     handler.headers = {"session_id": A, GATEWAY_AUTH_HEADER: "test-token", "Content-Length": str(len(body))}
     handler.send_response_only, handler.send_header, handler.end_headers = MagicMock(), MagicMock(), MagicMock()
     upstream_reply = b'{"service_tier":"default","id":"actual-upstream-response"}'
+    sent_tiers = []
     with patch("http.client.HTTPSConnection") as connection:
+        # The relay closes temporary request files when forwarding completes.
+        connection.return_value.request.side_effect = lambda *args, **kwargs: sent_tiers.append(
+            body_field(kwargs["body"], "service_tier")
+        )
         response = connection.return_value.getresponse.return_value
         response.status, response.headers = 200, {}
         response.getheaders.return_value, response.getheader.return_value = [], ""
@@ -121,7 +138,8 @@ def test_relay_sends_choice_only_to_responses_and_preserves_upstream_reply(home,
         handler._forward()
     sent = connection.return_value.request.call_args
     assert sent is not None
-    assert json.loads(sent.kwargs["body"])["service_tier"] == (tier or "priority")
+    expected = "default" if global_fast_off and endpoint == "responses" else (tier or "priority")
+    assert sent_tiers == [expected]
     assert handler.wfile.getvalue() == upstream_reply
 
 

@@ -417,42 +417,39 @@ def test_warm_job_phase_transitions_scanning_to_indexing(tmp_path: Path) -> None
         job.close()
 
 
-def test_warm_job_preloads_resident_snapshot_after_finish(tmp_path: Path) -> None:
-    # The warm job must pull the resident-snapshot deserialisation off the
-    # interactive path by calling ``load()`` in the background worker once the
-    # range is done (PRD §14.1 "seconds to first result").
+def test_warm_job_does_not_preload_resident_snapshot_after_finish(tmp_path: Path) -> None:
+    # Build completion leaves the catalog cold until a search explicitly uses it.
     entries = _make_entries(tmp_path, {"a": 5, "b": 10, "c": 20})
     index = _FakeSearchIndex(entries)
     job = SessionIndexWarmJob(index, state_path=tmp_path / "warm.json")
     try:
         assert job.start("1m") is True
         assert _wait_until(lambda: job.status()["jobState"] == "idle")
-        assert _wait_until(lambda: index.load_calls >= 1)
+        assert _wait_until(lambda: index.write_calls == [True])
+        assert index.load_calls == 0
         assert job.status()["coverage"] == "range_done(1m)"
     finally:
         job.close()
 
 
-def test_warm_job_preload_failure_never_fails_the_job(tmp_path: Path) -> None:
-    # A failing ``load()`` (e.g. corrupt snapshot) is best-effort: it must not
-    # flip the job into ``error`` or lose the completed coverage (PRD §12).
+def test_warm_job_completion_does_not_load_the_resident_catalog(tmp_path: Path) -> None:
     entries = _make_entries(tmp_path, {"a": 5})
     index = _FakeSearchIndex(entries, load_side_effect=RuntimeError("boom"))
     job = SessionIndexWarmJob(index, state_path=tmp_path / "warm.json")
     try:
         assert job.start("1m") is True
         assert _wait_until(lambda: job.status()["jobState"] == "idle")
-        assert _wait_until(lambda: index.load_calls >= 1)
         status = job.status()
         assert status["coverage"] == "range_done(1m)"
         assert status["jobState"] == "idle"
         assert status["error"] == ""
+        assert index.load_calls == 0
     finally:
         job.close()
 
 
-def test_finalize_defers_preload_past_grace_window(tmp_path: Path) -> None:
-    # The finalize thread's snapshot unpickle is GIL-heavy; with a grace
+def test_finalize_defers_snapshot_write_past_grace_window(tmp_path: Path) -> None:
+    # Snapshot serialization is GIL-heavy; with a grace
     # window configured it must not start (and starve the interactive
     # startup payload) until the window has elapsed.
     entries = _make_entries(tmp_path, {"a": 5})
@@ -460,25 +457,26 @@ def test_finalize_defers_preload_past_grace_window(tmp_path: Path) -> None:
     job = SessionIndexWarmJob(
         index,
         state_path=tmp_path / "warm.json",
-        preload_grace_seconds=0.6,
+        finalize_grace_seconds=0.6,
     )
     try:
         assert job.start("1m") is True
         assert _wait_until(lambda: job.status()["jobState"] == "idle")
         time.sleep(0.25)
         assert index.load_calls == 0
-        assert _wait_until(lambda: index.load_calls >= 1, timeout=4.0)
+        assert index.write_calls == []
+        assert _wait_until(lambda: index.write_calls == [True], timeout=4.0)
     finally:
         job.close()
 
 
-def test_finalize_skips_preload_when_closed_during_grace(tmp_path: Path) -> None:
+def test_finalize_skips_snapshot_write_when_closed_during_grace(tmp_path: Path) -> None:
     entries = _make_entries(tmp_path, {"a": 5})
     index = _FakeSearchIndex(entries)
     job = SessionIndexWarmJob(
         index,
         state_path=tmp_path / "warm.json",
-        preload_grace_seconds=0.6,
+        finalize_grace_seconds=0.6,
     )
     try:
         assert job.start("1m") is True
@@ -490,84 +488,41 @@ def test_finalize_skips_preload_when_closed_during_grace(tmp_path: Path) -> None
         job.close()
 
 
-def test_finalize_rewrites_snapshot_after_load_repair(tmp_path: Path) -> None:
-    # When the load reconciled stale/missing documents from SQLite rows, the
-    # finalize thread must rewrite the pickle so the repair is not repeated
-    # on every restart.
-    class RepairingIndex(_FakeSearchIndex):
-        def load(self) -> dict[str, object]:
-            self.load_calls += 1
-            return {"indexed": 3, "memoryLoaded": True, "reconciled": 3}
-
+def test_finalize_writes_built_snapshot_without_preloading_catalog(tmp_path: Path) -> None:
     entries = _make_entries(tmp_path, {"a": 5})
-    index = RepairingIndex(entries)
+    index = _FakeSearchIndex(entries)
     job = SessionIndexWarmJob(index, state_path=tmp_path / "warm.json")
     try:
         assert job.start("1m") is True
-        assert _wait_until(lambda: index.load_calls >= 1)
         assert _wait_until(lambda: index.write_calls.count(True) >= 1)
+        assert index.load_calls == 0
         assert index.ensure_scan_index_calls >= 1
     finally:
         job.close()
 
 
-def test_finalize_skips_snapshot_write_without_repair(tmp_path: Path) -> None:
-    # A clean load (nothing reconciled) after a no-op pass must not rewrite
-    # the ~100 MB pickle. Pre-committing the only candidate makes the warm
-    # job take the empty-bucket path: no build mutates the index, so
-    # ``pending_write`` stays False and the finalize thread only loads.
+def test_finalize_skips_snapshot_write_for_noop_pass(tmp_path: Path) -> None:
+    # Pre-committing the only candidate makes the warm job take the empty
+    # bucket path: no build mutates the index, so no snapshot write is needed.
     entries = _make_entries(tmp_path, {"a": 5})
     index = _FakeSearchIndex(entries)
     index._committed = ["a"]
     job = SessionIndexWarmJob(
         index,
         state_path=tmp_path / "warm.json",
-        preload_grace_seconds=0.6,
+        finalize_grace_seconds=0.6,
     )
     try:
         assert job.start("1m") is True
-        assert _wait_until(lambda: index.load_calls >= 1)
-        time.sleep(0.1)
+        assert _wait_until(lambda: index.ensure_scan_index_calls >= 1)
+        assert index.load_calls == 0
         assert index.write_calls == []
     finally:
         job.close()
 
 
-def test_finalize_rewrites_snapshot_on_reconcile_without_build(tmp_path: Path) -> None:
-    # The reconcile-driven convergence write must fire even when no build
-    # mutated the index (``pending_write`` is False): a stale/missing snapshot
-    # that ``load`` had to rebuild from SQLite rows is repaired once, then the
-    # pickle is rewritten so the rebuild cost is not paid on every restart.
-    class ReconcilingNoBuild(_FakeSearchIndex):
-        def load(self) -> dict[str, object]:
-            self.load_calls += 1
-            return {
-                "indexed": 3,
-                "indexAvailable": True,
-                "memoryLoaded": True,
-                "reconciled": 3,
-            }
-
-    entries = _make_entries(tmp_path, {"a": 5})
-    index = ReconcilingNoBuild(entries)
-    index._committed = ["a"]  # no-op pass -> pending_write stays False
-    job = SessionIndexWarmJob(
-        index,
-        state_path=tmp_path / "warm.json",
-        preload_grace_seconds=0.6,
-    )
-    try:
-        assert job.start("1m") is True
-        assert _wait_until(lambda: index.load_calls >= 1)
-        assert _wait_until(lambda: index.write_calls.count(True) >= 1)
-        assert index.ensure_scan_index_calls >= 1
-    finally:
-        job.close()
-
-
-def test_warm_job_skips_preload_without_load_capability(tmp_path: Path) -> None:
-    # A surface without ``load`` (e.g. a partial manager that only exposes
-    # search_index_entries/sync_batches) must not crash the warm job.
+def test_warm_job_does_not_require_load_capability(tmp_path: Path) -> None:
+    # A partial manager exposing only search_index_entries/sync_batches works.
     class NoLoadIndex:
         def __init__(self, entries: list) -> None:
             self._entries = list(entries)

@@ -215,6 +215,7 @@ class OnDemandSessionSearchIndex(SessionSearchIndex):
         self._idle_generation = 0
         self._retain_queries = False
         self._bulk_masks = None
+        self._maintenance_depth = 0
 
     def _query_path(self):
         return self.path.with_name(self.path.name + ".query")
@@ -638,7 +639,7 @@ class OnDemandSessionSearchIndex(SessionSearchIndex):
                     self._query_db.rollback()
                 source.close()
                 # Background maintenance leaves no query buffers/connection.
-                self.unload_memory()
+                self._release_query_buffers_locked()
 
     def _apply_memory_documents(self, documents, *, precomputed=None):
         with self._lock:
@@ -837,6 +838,13 @@ class OnDemandSessionSearchIndex(SessionSearchIndex):
             try:
                 if (
                     str(query or "").strip()
+                    and not self._memory_loaded
+                    and not interactive
+                    and not retaining
+                ):
+                    return super().search(query, **kwargs)
+                if (
+                    str(query or "").strip()
                     and self._query_db is None
                     and not self._gram_cache
                 ):
@@ -865,14 +873,25 @@ class OnDemandSessionSearchIndex(SessionSearchIndex):
 
     def preview_matches(self, session_ids, query):
         with self._lock:
+            if not self._memory_loaded:
+                self._load_memory()
             self._retain_queries = True
             self._query_depth += 1
             try:
                 return super().preview_matches(session_ids, query)
             finally:
                 self._query_depth -= 1
-                if self._candidate_cache or self._query_db is not None:
-                    self._schedule_release()
+                self._schedule_release()
+
+    def phrase_matches(self, session_ids, query):
+        with self._lock:
+            if not self._memory_loaded:
+                self._load_memory()
+            self._retain_queries = True
+            try:
+                return super().phrase_matches(session_ids, query)
+            finally:
+                self._schedule_release()
 
     def _schedule_release(self):
         if self._idle_timer is not None:
@@ -883,7 +902,12 @@ class OnDemandSessionSearchIndex(SessionSearchIndex):
         def release():
             with self._lock:
                 if generation == self._idle_generation:
-                    self.unload_memory()
+                    if self._maintenance_depth:
+                        self._schedule_release()
+                    else:
+                        self._idle_timer = None
+                        self._retain_queries = False
+                        self._release_resident_index_locked()
 
         self._idle_timer = Timer(self._idle_seconds, release)
         self._idle_timer.daemon = True
@@ -894,6 +918,16 @@ class OnDemandSessionSearchIndex(SessionSearchIndex):
             if self._idle_timer is None:
                 self._schedule_release()
 
+    def begin_maintenance(self):
+        with self._lock:
+            self._maintenance_depth += 1
+
+    def end_maintenance(self):
+        with self._lock:
+            self._maintenance_depth = max(0, self._maintenance_depth - 1)
+            if not self._maintenance_depth and self._idle_timer is None:
+                self._schedule_release()
+
     def begin_query(self):
         """Only an explicit query/navigation extends the residency window."""
         with self._lock:
@@ -901,18 +935,30 @@ class OnDemandSessionSearchIndex(SessionSearchIndex):
             self._schedule_release()
 
     def unload_memory(self):
-        """Release buffers, preserving the tiny ready catalog and disk index."""
+        """Release the reconstructible resident index while preserving disk data."""
         with self._lock:
             self._retain_queries = False
             self._idle_generation += 1
             if self._idle_timer is not None:
                 self._idle_timer.cancel()
                 self._idle_timer = None
-            self._invalidate_buffers()
-            self._gram_cache.clear()
-            self._preview_cache = {}
-            self._tail_cache.clear()
-            self._close_query_connection()
+            self._release_resident_index_locked()
+
+    def _release_query_buffers_locked(self):
+        self._invalidate_buffers()
+        self._gram_cache.clear()
+        self._preview_cache = {}
+        self._tail_cache.clear()
+        self._close_query_connection()
+
+    def _release_resident_index_locked(self):
+        self._release_query_buffers_locked()
+        self._session_slots.clear()
+        self._slot_sessions.clear()
+        self._free_slots.clear()
+        self._stamps.clear()
+        self._descriptors.clear()
+        self._memory_loaded = False
 
     def _close_query_connection(self):
         if self._query_db is not None:

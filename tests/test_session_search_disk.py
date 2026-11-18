@@ -171,7 +171,7 @@ def test_crash_between_source_commit_and_sidecar_commit_repairs_by_stamp(
         restarted.close()
 
 
-def test_capacity_and_idle_release_preserve_ready_state(pair, tmp_path):
+def test_capacity_and_idle_release_discards_rebuildable_catalog(pair, tmp_path):
     old, disk = pair
     disk._cache_limit = 4096
     for n in range(5):
@@ -184,16 +184,38 @@ def test_capacity_and_idle_release_preserve_ready_state(pair, tmp_path):
     assert len(disk._candidate_cache) < 5
     timer = disk._idle_timer
     timer.function()  # Deterministic expiry, without sleeping for 60 seconds.
-    assert disk.memory_loaded
+    assert not disk.memory_loaded
     assert disk.count() == 5
     assert not disk._candidate_cache and not disk._gram_cache
+    assert not disk._session_slots and not disk._stamps and not disk._descriptors
     assert disk._query_db is None
     assert disk.search("term") == expected
+    assert disk.memory_loaded
     # An obsolete expiry cannot evict a newer query's buffers.
     old_timer = disk._idle_timer
     disk.search("term0")
     old_timer.function()
     assert disk._candidate_cache
+
+
+def test_idle_release_waits_for_index_maintenance_and_preview_reloads(pair, tmp_path):
+    _old, disk = pair
+    path = _rollout(tmp_path / "maintenance.jsonl", "maintenance preview marker")
+    disk.upsert("one", [path])
+    expected = disk.search("marker")
+    disk.begin_maintenance()
+    timer = disk._idle_timer
+    assert timer is not None
+    timer.function()
+    assert disk.memory_loaded
+    disk.end_maintenance()
+    timer = disk._idle_timer
+    assert timer is not None
+    timer.function()
+    assert not disk.memory_loaded
+    assert disk.preview_matches(["one"], "marker")
+    assert disk.memory_loaded
+    assert disk.search("marker") == expected
 
 
 def test_release_waits_for_search_and_clear_removes_only_owned_artifacts(
@@ -280,9 +302,11 @@ def test_background_refresh_does_not_keep_query_buffers_alive(pair, tmp_path):
     disk.search("background", load=False)
     assert disk._idle_timer is timer
     timer.function()
+    assert not disk.memory_loaded
     assert not disk._candidate_cache
     disk.search("background", load=False)
     assert not disk._candidate_cache and disk._streams is None
+    assert not disk.memory_loaded
     assert disk._idle_timer is None
 
 
@@ -464,7 +488,7 @@ def test_completed_month_warm_job_repairs_compression_without_manual_rebuild(tmp
         total_count=1,
         enabled=True,
     ).dump(state_path)
-    job = SessionIndexWarmJob(manager, state_path=state_path, preload_grace_seconds=0)
+    job = SessionIndexWarmJob(manager, state_path=state_path, finalize_grace_seconds=0)
     try:
         assert job.start("1m")
         deadline = time.monotonic() + 5

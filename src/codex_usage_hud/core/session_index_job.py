@@ -251,7 +251,7 @@ class SessionIndexWarmJob:
         state_path: Path | str,
         clock: Callable[[], float] = time.time,
         progress_callback: Callable[[WarmJobSnapshot], None] | None = None,
-        preload_grace_seconds: float = 0.0,
+        finalize_grace_seconds: float = 0.0,
         before_clear: Callable[[], bool] | None = None,
         after_clear: Callable[[], None] | None = None,
     ) -> None:
@@ -271,7 +271,7 @@ class SessionIndexWarmJob:
         # this past the cold-start interactive window so the authoritative
         # HUD payload push is never starved (measured: ~3 s unpickle for a
         # 117 MB pickle + ~8.5 s doc-table scan on a 2.89 GB database).
-        self._preload_grace_seconds = max(0.0, float(preload_grace_seconds))
+        self._finalize_grace_seconds = max(0.0, float(finalize_grace_seconds))
         self._lock = threading.RLock()
         self._state = WarmJobState.load(self._state_path)
         self._attached = False
@@ -826,7 +826,13 @@ class SessionIndexWarmJob:
             )
 
     def _run(self) -> None:
+        begin_maintenance = self._capability("begin_maintenance")
+        end_maintenance = self._capability("end_maintenance")
+        maintenance_started = False
         try:
+            if callable(begin_maintenance):
+                begin_maintenance()
+                maintenance_started = True
             self._run_loop()
         except Exception as exc:
             with self._lock:
@@ -836,6 +842,8 @@ class SessionIndexWarmJob:
                 self._maybe_persist_locked()
                 self._publish_locked()
         finally:
+            if maintenance_started and callable(end_maintenance):
+                end_maintenance()
             with self._lock:
                 self._worker = None
 
@@ -1056,10 +1064,9 @@ class SessionIndexWarmJob:
             self._pending_snapshot_write = False
             lifecycle_generation = self._lifecycle_generation
         # Hand the heavy post-build work to a background thread ONLY AFTER the
-        # "done" state is published.  Pickling the ~200 MB snapshot (and, on a
-        # cold cache, deserialising it via _warm_memory) is GIL-heavy; if it ran
-        # inline the renderer main thread could not push the final idle state
-        # over CDP and the UI would freeze at 100% for seconds.  Yield the GIL
+        # "done" state is published. Pickling the ~200 MB snapshot is GIL-heavy;
+        # if it ran inline the renderer main thread could not push the final
+        # idle state over CDP and the UI would freeze at 100% for seconds. Yield the GIL
         # briefly first so the main thread gets a slice to deliver "done" before
         # the background serialisation starts saturating the GIL.
         time.sleep(0.05)
@@ -1076,16 +1083,12 @@ class SessionIndexWarmJob:
     def _finalize_off_thread(self, pending_write: bool, lifecycle_generation: int) -> None:
         """Best-effort post-build finalisation, off the worker thread.
 
-        Rewrites the resident pickle snapshot (only when a build mutated it)
-        and pre-loads it into the search index.  Both are GIL-heavy and must
-        not block the renderer main thread's delivery of the "done" state
-        (PRD §14.1 / §12).  The whole routine additionally waits out
-        ``preload_grace_seconds`` first: at cold start the interactive
-        startup (startup bubble steps, first full HUD payload) is still in
-        flight, and the unpickle/scan work measured here (seconds of GIL
-        saturation plus multi-GB reads) delayed that payload by 10-20 s in
-        practice, leaving zeroed HUD panels behind the bubble until it
-        landed (PRD §11: the warm job yields while the UI is busy).
+        Rewrites the resident snapshot only when a build mutated it. The
+        operation is GIL-heavy and must not block the renderer main thread's
+        delivery of the "done" state (PRD §14.1 / §12). Wait out
+        ``finalize_grace_seconds`` first because startup payload delivery may
+        still be in flight. The index itself stays unloaded until a query uses
+        it, so completion does not retain a second full in-memory catalog.
         """
         try:
             self._sleep_past_interactive_startup(lifecycle_generation)
@@ -1109,19 +1112,6 @@ class SessionIndexWarmJob:
                     if self._lifecycle_generation != lifecycle_generation:
                         return
                 self._write_snapshot_best_effort()
-            with self._lock:
-                if self._lifecycle_generation != lifecycle_generation:
-                    return
-            result = self._warm_memory()
-            try:
-                reconciled = int(result.get("reconciled") or 0)
-            except (AttributeError, TypeError, ValueError):
-                reconciled = 0
-            if reconciled > 0:
-                # The load repaired stale/missing snapshot documents from SQLite
-                # rows; rewrite the pickle so the repair is not repeated on every
-                # restart.
-                self._write_snapshot_best_effort()
         finally:
             with self._lock:
                 if (
@@ -1139,7 +1129,7 @@ class SessionIndexWarmJob:
         lifecycle_generation: int | None = None,
     ) -> None:
         """Wait out the grace window in small, clear-interruptible slices."""
-        remaining = self._preload_grace_seconds
+        remaining = self._finalize_grace_seconds
         while remaining > 0.0 and not self._closed:
             if lifecycle_generation is not None:
                 with self._lock:
@@ -1157,35 +1147,6 @@ class SessionIndexWarmJob:
             write_fn(force=True)
         except Exception:
             pass
-
-    def _warm_memory(self) -> dict[str, object]:
-        """Pre-load the resident search snapshot in the background.
-
-        The resident index is a pickled snapshot (``.memory``, ~200 MB on a
-        full corpus) whose first deserialisation costs on the order of 20 s on
-        a cold page cache.  Without this step that cost lands on the user's
-        first search (PRD §14.1 "seconds to first result").  The warm job is
-        already the startup-time background task, so it is the natural place
-        to pull that cost off the interactive path: ``load()`` populates the
-        in-process ``SessionSearchIndex`` instance that the renderer searches
-        against, and its ``_memory_loaded`` flag makes this idempotent across
-        the whole process.
-
-        This must never block the worker's state transitions or fail the job:
-        a missing ``load`` capability, an already-loaded index, or any error
-        is simply skipped (PRD §12: warm-up is best-effort).  Returns the
-        ``load()`` result dict (empty when skipped) so the caller can decide
-        whether a convergence snapshot write is warranted.
-        """
-        load_fn = self._capability("load")
-        if not callable(load_fn):
-            return {}
-        try:
-            result = load_fn()
-        except Exception:
-            # Best-effort only; the indexer already surfaced any real error.
-            return {}
-        return result if isinstance(result, dict) else {}
 
     def _fail(self, message: str) -> None:
         with self._lock:
