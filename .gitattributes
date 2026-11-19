@@ -1,1 +1,2 @@
 .githooks/* text eol=lf
+src/codex_usage_hud/assets/renderer.bundle.js text eol=lf

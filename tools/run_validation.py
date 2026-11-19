@@ -17,6 +17,8 @@ DEFAULT_FOCUSED_TESTS = (
     "tests/test_renderer_contract_tool.py",
     "tests/test_validation_tool.py",
     "tests/test_push_check.py",
+    "tests/test_memory_ownership_probe.py",
+    "tests/test_session_cleanup.py::SessionCleanupManagerTests::test_search_resolves_compressed_family_without_relaxing_delete_mapping",
     "tests/test_speed_title_model.py",
     "tests/test_background_control.py",
     "tests/test_runtime_commands.py",

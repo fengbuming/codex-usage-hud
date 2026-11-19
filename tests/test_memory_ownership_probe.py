@@ -104,14 +104,28 @@ def test_probe_cleanup_preserves_unrelated_ctypes_cache_entries():
     class Other(ctypes.Structure):
         _fields_ = [("value",ctypes.c_int)]
 
-    ctypes.POINTER(Temporary)
-    ctypes.POINTER(Other)
+    temporary_pointer = ctypes.POINTER(Temporary)
+    other_pointer = ctypes.POINTER(Other)
+    cache = getattr(ctypes, "_pointer_type_cache", None)
+    # CPython 3.14 moved pointer types from a global cache onto their classes.
+    caches_on_class = getattr(Temporary, "__pointer_type__", None) is temporary_pointer
     try:
+        if caches_on_class:
+            assert Other.__pointer_type__ is other_pointer
+        else:
+            assert cache[Temporary] is temporary_pointer
+            assert cache[Other] is other_pointer
+
         assert probe.clear_probe_ctype_caches() >= 1
-        assert not hasattr(Temporary,'__pointer_type__')
-        assert hasattr(Other,'__pointer_type__')
+        if caches_on_class:
+            assert not hasattr(Temporary, "__pointer_type__")
+            assert Other.__pointer_type__ is other_pointer
+        else:
+            assert Temporary not in cache
+            assert cache[Other] is other_pointer
     finally:
-        if hasattr(Other,'__pointer_type__'):
-            del Other.__pointer_type__
-        if isinstance(ctypes._pointer_type_cache,dict):
-            ctypes._pointer_type_cache.pop(Other,None)
+        for structure in (Temporary, Other):
+            if "__pointer_type__" in vars(structure):
+                del structure.__pointer_type__
+            if isinstance(cache, dict):
+                cache.pop(structure, None)

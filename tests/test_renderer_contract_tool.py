@@ -4,6 +4,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from codex_usage_hud.renderer_bundle import BUNDLE_PATH
 from tools.update_renderer_contract import (
     CONTRACT_PATH,
     MANIFEST_PATH,
@@ -15,6 +16,22 @@ from tools.update_renderer_contract import (
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_bundle_checkout_keeps_lf_with_autocrlf_enabled(tmp_path: Path) -> None:
+    relative_bundle = BUNDLE_PATH.relative_to(ROOT)
+    bundle = tmp_path / relative_bundle
+    bundle.parent.mkdir(parents=True)
+    bundle.write_bytes(BUNDLE_PATH.read_bytes())
+    (tmp_path / ".gitattributes").write_bytes((ROOT / ".gitattributes").read_bytes())
+
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    git = ["git", "-c", "core.autocrlf=true"]
+    subprocess.run([*git, "add", "--", str(relative_bundle)], cwd=tmp_path, check=True)
+    bundle.unlink()
+    subprocess.run([*git, "checkout-index", "--", str(relative_bundle)], cwd=tmp_path, check=True)
+
+    assert bundle.read_bytes() == BUNDLE_PATH.read_bytes()
 
 
 def test_renderer_contract_tool_matches_checked_in_values() -> None:

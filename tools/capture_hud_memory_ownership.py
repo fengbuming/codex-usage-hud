@@ -432,7 +432,11 @@ def walk_sizes(roots, seen, *, full=False, blocked=()):
             pending.extend(gc.get_referents(value))
             if isinstance(value, types.CodeType):
                 pending.extend([value.co_consts, value.co_names, value.co_filename,
-                                value.co_name, value.co_qualname, value.co_linetable, value.co_exceptiontable])
+                                value.co_name, value.co_linetable])
+                for name in ("co_qualname", "co_exceptiontable"):
+                    optional_field = getattr(value, name, None)
+                    if optional_field is not None:
+                        pending.append(optional_field)
         else:
             pending.extend(business_children(value))
     return {"bytes": total, "objects": count,

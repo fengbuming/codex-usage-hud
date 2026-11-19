@@ -82,17 +82,22 @@ class SessionCleanupManagerTests(unittest.TestCase):
         self.assertFalse(root_item.selectable)
         manager._search_index.sync(manager.search_index_entries())
         compressed.write_bytes(compress_rollout(payload.encode("utf-8")))
+        # The state database paths are normalized, including any aliases in
+        # the OS temporary directory path.
+        plain_path = plain.resolve()
+        compressed_path = compressed.resolve()
         # No inventory rescan is needed for a file-change delta; both the old
         # deletion event and the new compressed-file event select this family.
         for changed in (plain, compressed):
             entries = manager.search_index_entries([changed])
             self.assertEqual([entry[0] for entry in entries], [ROOT_ID])
-            self.assertIn(compressed, entries[0][1])
-            self.assertNotIn(plain, entries[0][1])
+            self.assertIn(compressed_path, entries[0][1])
+            self.assertNotIn(plain_path, entries[0][1])
         manager._search_index.sync(manager.search_index_entries([compressed]))
         search = manager.search("Linux.do & IDCFlare 回帖足迹")["search"]
         self.assertIn(root_item.id, search["matches"])
-        self.assertIn(plain, root_item._rollout_paths)
+        self.assertIn(plain_path, root_item._rollout_paths)
+        self.assertNotIn(compressed_path, root_item._rollout_paths)
         self.assertFalse(root_item.selectable)
 
     def tearDown(self):
