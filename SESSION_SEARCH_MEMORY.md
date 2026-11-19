@@ -16,6 +16,12 @@ one, it streams source documents. Conversion accumulates bitmap masks and commit
 them together, avoiding hundreds of slow transactions. Subsequent starts only
 reconcile changed stamps. Migration follows the existing background readiness flow.
 
+After the startup inventory scan, an enabled, previously completed index runs
+one background catch-up pass for its saved range. It checks fingerprints and
+updates only stale or missing documents, including changes made while HUD was
+closed. New, disabled and paused indexes are not started by this pass, and
+query buffers are still opened only on demand.
+
 Queries fetch just the requested gram postings and candidate token buffers.
 Candidate buffers use a 16 MiB LRU budget (including per-document overhead),
 with oversized candidates read through transient mapped views. Cache hits use

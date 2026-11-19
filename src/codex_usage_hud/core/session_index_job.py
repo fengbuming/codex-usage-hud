@@ -404,6 +404,13 @@ class SessionIndexWarmJob:
     # control API
     # ------------------------------------------------------------------
 
+    def refresh_on_startup(self) -> bool:
+        """Catch up a completed index without starting a fresh or paused build."""
+        with self._lock:
+            if self._state.job_state != "idle" or not self._state.completed_range:
+                return False
+            return self.start(self._state.selected_range)
+
     def start(self, range_key: str = DEFAULT_RANGE) -> bool:
         """Begin (or resume) a warm job for ``range_key``.
 

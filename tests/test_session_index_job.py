@@ -243,6 +243,28 @@ def test_warm_job_state_roundtrip_and_corruption(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize(
+    "state",
+    [
+        WarmJobState(),
+        WarmJobState(completed_range="1m", job_state="paused"),
+        WarmJobState(completed_range="1m", enabled=False),
+    ],
+)
+def test_startup_leaves_unbuilt_paused_and_disabled_indexes_alone(tmp_path, state):
+    state_path = tmp_path / "warm.json"
+    state.dump(state_path)
+    index = _FakeSearchIndex(_make_entries(tmp_path, {"recent": 1}))
+    job = SessionIndexWarmJob(index, state_path=state_path)
+    try:
+        assert not job.refresh_on_startup()
+        assert not index.sync_calls
+        assert index.load_calls == 0
+        assert job.status()["jobState"] == state.job_state
+    finally:
+        job.close()
+
+
 def test_warm_job_builds_default_range_and_finishes(tmp_path: Path) -> None:
     entries = _make_entries(tmp_path, {"a": 5, "b": 10, "c": 20})
     index = _FakeSearchIndex(entries)

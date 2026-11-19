@@ -1,4 +1,6 @@
+import json
 from pathlib import Path
+from threading import Event
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -6,7 +8,8 @@ import codex_usage_hud.runtime_context as runtime_context_module
 from codex_usage_hud.config import UserConfig, UserConfigStore
 from codex_usage_hud.core import JsonlSessionParser
 from codex_usage_hud.core.runtime_events import RuntimeEventBus
-from codex_usage_hud.core.session_index_job import WarmJobSnapshot
+from codex_usage_hud.core.session_index_job import WarmJobSnapshot, WarmJobState
+from codex_usage_hud.core.session_search_disk import OnDemandSessionSearchIndex
 from codex_usage_hud.runtime_context import RuntimeContext
 
 
@@ -146,3 +149,57 @@ def test_session_index_progress_publishes_only_while_renderer_is_attached(
     assert events[0].context["diskBytes"] == 0
     assert context.session_index_payload["totalCount"] == 5
     job.close()
+
+
+def test_renderer_startup_catches_up_rollout_changed_while_hud_was_off(tmp_path, monkeypatch):
+    rollout = tmp_path / "session.jsonl"
+    database = tmp_path / "search.sqlite"
+    entries = [("audit-session", [rollout], "Session title", "", "", "")]
+
+    def write(message):
+        record = {"type": "event_msg", "payload": {"type": "user_message", "message": message}}
+        rollout.write_text(json.dumps(record) + "\n", encoding="utf-8")
+
+    write("sequoiamarker")
+    previous = OnDemandSessionSearchIndex(database)
+    try:
+        previous.sync_batches(entries)
+        assert previous.search("sequoiamarker")["matches"]
+    finally:
+        previous.close()
+    WarmJobState(selected_range="3m", completed_range="3m", built_count=1, total_count=1).dump(
+        tmp_path / "session-index-warm.json"
+    )
+    write("bronzereplacement")
+    index = OnDemandSessionSearchIndex(database)
+    ready = Event()
+    manager = SimpleNamespace(_search_index=index, search_index_entries=lambda: entries, snapshot=dict, scan=dict)
+    context = SimpleNamespace(
+        rest_reminder=object(),
+        renderer_mode=True,
+        pricing_sync_scheduler=object(),
+        session_snapshot_cache=object(),
+        usage_insights_worker=object(),
+        session_cleanup_manager=manager,
+        session_cleanup_worker=MagicMock(),
+    )
+
+    def on_progress():
+        if context.session_index_payload["jobState"] == "idle":
+            ready.set()
+
+    context.session_cleanup_worker.refresh_warm_search.side_effect = on_progress
+    monkeypatch.setattr(runtime_context_module, "hud_runtime_dir", lambda: tmp_path)
+    monkeypatch.setattr(runtime_context_module, "ensure_runtime_error_diagnostics", lambda _context: None)
+    monkeypatch.setattr(runtime_context_module, "_refresh_usage_insights_payload", lambda _context: {})
+    try:
+        runtime_context_module._initialize_runtime_context_resources(context)
+        assert ready.wait(5), context.session_index_warm_job.status()
+        assert context.session_index_payload["coverage"] == "range_done(3m)"
+        assert not index._retain_queries
+        assert not index._candidate_cache and not index._gram_cache and index._query_db is None
+        assert index.search("bronzereplacement")["matches"]
+        assert not index.search("sequoiamarker")["matches"]
+    finally:
+        context.session_index_warm_job.close()
+        index.close()

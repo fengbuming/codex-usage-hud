@@ -20,6 +20,7 @@ from ..disk_sequence import DecodedHistoryCache, DiskRecordSequence
 
 DEFAULT_MODEL = "gpt-5.5"
 MAX_REQUEST_HISTORY = 500
+MAX_STRUCTURED_TOOL_PREVIEW_CHARS = 2000
 # Forked/subagent JSONL dumps parent history in a same-timestamp cluster right
 # after the structural boundary. Skip that cluster so only live child usage is
 # billed (matches cc-switch codex_session parsing).
@@ -482,41 +483,89 @@ def _command_duration_text(duration: Any) -> str:
     return f"{hours}h{minutes:02d}m{rest:02d}s"
 
 
+def _tool_output_has_image(value: Mapping[str, Any]) -> bool:
+    kind = value.get("type")
+    return any(key in value for key in ("image_url", "data_url", "image_data")) or (
+        isinstance(kind, str) and "image" in kind.casefold()
+    )
+
+
+def _structured_tool_output_preview(value: Mapping[str, Any], limit: int) -> str:
+    """Format only a bounded prefix of unfamiliar structured output."""
+    def fragments(item: Any, depth: int) -> Iterable[str]:
+        if depth >= 8:
+            yield "..."
+        elif isinstance(item, str):
+            yield repr("[图片输出]" if item.startswith("data:image/") else item[:limit])
+        elif isinstance(item, Mapping):
+            if _tool_output_has_image(item):
+                yield repr("[图片输出]")
+                return
+            yield "{"
+            for index, (key, child) in enumerate(item.items()):
+                if index:
+                    yield ", "
+                yield repr(key[:limit] if isinstance(key, str) else "?")
+                yield ": "
+                yield from fragments(child, depth + 1)
+            yield "}"
+        elif isinstance(item, list):
+            yield "["
+            for index, child in enumerate(item):
+                if index:
+                    yield ", "
+                yield from fragments(child, depth + 1)
+            yield "]"
+        elif item is None or isinstance(item, (bool, int, float)):
+            yield repr(item)
+        else:
+            yield "..."
+
+    parts = []
+    remaining = limit
+    for part in fragments(value, 0):
+        if len(part) > remaining:
+            parts.append(part[:remaining])
+            return "".join(parts)[:-3] + "..."
+        parts.append(part)
+        remaining -= len(part)
+    return "".join(parts)
+
+
 def _tool_output_preview(value: Any) -> str:
     """Extract readable tool output without stringifying image payloads."""
-    if isinstance(value, str):
-        return value
-    if isinstance(value, Mapping):
-        parts = [
-            _tool_output_preview(value[key])
-            for key in ("text", "message", "content", "output", "stdout", "stderr")
-            if key in value
-        ]
-        text = " ".join(part for part in parts if part)
-        has_image = any(
-            key in value for key in ("image_url", "data_url", "image_data")
-        ) or "image" in str(value.get("type") or "").casefold()
-        if has_image:
-            return f"{text} [图片输出]".strip()
-        return text
-    if isinstance(value, Sequence) and not isinstance(
-        value, (str, bytes, bytearray)
-    ):
-        return " ".join(
-            text for item in value if (text := _tool_output_preview(item))
-        )
-    if isinstance(value, (bool, int, float)):
-        return str(value)
-    return ""
+    fallback_remaining = MAX_STRUCTURED_TOOL_PREVIEW_CHARS
+
+    def extract(item: Any) -> str:
+        nonlocal fallback_remaining
+        if isinstance(item, str):
+            return "[图片输出]" if item.startswith("data:image/") else item
+        if isinstance(item, Mapping):
+            parts = [
+                extract(item[key])
+                for key in ("text", "message", "content", "output", "stdout", "stderr")
+                if key in item
+            ]
+            text = " ".join(part for part in parts if part)
+            if _tool_output_has_image(item):
+                return f"{text} [图片输出]".strip()
+            if not text and item and fallback_remaining > 3:
+                text = _structured_tool_output_preview(item, fallback_remaining)
+                fallback_remaining -= len(text)
+            return text
+        if isinstance(item, Sequence) and not isinstance(item, (str, bytes, bytearray)):
+            return " ".join(text for child in item if (text := extract(child)))
+        if isinstance(item, (bool, int, float)):
+            return str(item)
+        return ""
+
+    return extract(value)
 
 
 def _strip_work_image_payloads(value: Any) -> Any:
     """Drop inline image bytes from the active-work-only parse projection."""
     if isinstance(value, Mapping):
-        kind = str(value.get("type") or "").casefold()
-        if "image" in kind or any(
-            key in value for key in ("image_url", "data_url", "image_data")
-        ):
+        if _tool_output_has_image(value):
             return {"type": "text", "text": "[图片输出]"}
         return {key: _strip_work_image_payloads(item) for key, item in value.items()}
     if isinstance(value, list):

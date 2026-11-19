@@ -330,8 +330,8 @@ def _initialize_runtime_context_resources(context: RuntimeContext) -> None:
                 watcher_start = getattr(context.session_cleanup_worker, "_start_search_watcher", None)
                 if callable(watcher_start):
                     watcher_start()
-                # Keep the durable index idle until an explicit index control,
-                # scan, or filesystem change requests maintenance.
+                if context.session_index_warm_job.refresh_on_startup():
+                    _record_memory_profile_stage("session-index-catchup-started")
             except Exception as exc:
                 _record_memory_profile_stage("session-index-prime-failed")
                 _LOGGER.exception("session_index_warm_start_failed error=%s", exc)
