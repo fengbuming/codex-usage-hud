@@ -2533,7 +2533,7 @@ _TEXT_PREFIX = r"""
         const providerSettings = entry.settings;
         const required = activeProvider === draft.appProvider;
         const providerRegistryEntry = settings.provider_registry?.[activeProvider] || {};
-        const officialAccount = required && providerRegistryEntry.officialAccount === true;
+        const officialAccount = providerRegistryEntry.officialAccount === true;
         const quickLaunchEnabled = draft.quickLaunchProviders?.has(activeProvider) === true;
         const pricingDraftPending = settingsDirtyProviders.has(activeProvider);
         const meta = settingsProviderMeta(settings, activeProvider);
@@ -3182,15 +3182,11 @@ _TEXT_PREFIX = r"""
         const settings = hudSettingsFromPayload();
         ensureSettingsProviderDraft(settings);
         const normalizedProvider = String(provider || "").trim().toLowerCase();
-        const isAppProvider = !isNew && normalizedProvider === String(settingsProviderDraft.appProvider || "").trim().toLowerCase();
         const registryEntry = settings.provider_registry?.[normalizedProvider] || {};
         // 原 auth.json 供应商第一次修改 Key 后也改为同 ID 的配置凭据。
-        const usesCodexAuth = isAppProvider && (
-          (normalizedProvider === "custom" && registryEntry.usesExperimentalBearer !== true) || registryEntry.requiresOpenaiAuth === true
-        );
+        const usesCodexAuth = !isNew && registryEntry.usesCodexAuth === true;
         const usesExperimentalBearer = registryEntry.usesExperimentalBearer === true;
-        // 官方账号登录时，任意默认供应商都不可编辑（不限于 custom）。
-        if (isAppProvider && registryEntry.officialAccount === true) {
+        if (!isNew && registryEntry.officialAccount === true) {
           setSettingsStatus("官方账号登录时，默认 Codex App Provider 由 Codex Desktop 管理，不支持编辑。", "error");
           return;
         }
@@ -3457,16 +3453,11 @@ _TEXT_PREFIX = r"""
         const provider = String(idNode?.value || "").trim().toLowerCase();
         // 显示名称缺省时回退 Provider ID（默认名称与 Provider ID 一致）。
         const displayName = String(nameNode?.value || "").trim() || provider;
-        const isAppProvider = !isNew
-          && provider === String(settingsProviderDraft.appProvider || "").trim().toLowerCase();
         const settings = hudSettingsFromPayload();
         const providerRegistryEntry = settings.provider_registry?.[provider] || {};
-        // 与后端 is_default_app_provider 判定一致：仅 custom / requires_openai_auth 默认供应商走 auth.json 链路。
-        const usesCodexAuth = isAppProvider && (
-          (provider === "custom" && providerRegistryEntry.usesExperimentalBearer !== true) || providerRegistryEntry.requiresOpenaiAuth === true
-        );
+        const usesCodexAuth = !isNew && providerRegistryEntry.usesCodexAuth === true;
         const usesExperimentalBearer = providerRegistryEntry.usesExperimentalBearer === true;
-        if (isAppProvider && providerRegistryEntry.officialAccount === true) {
+        if (!isNew && providerRegistryEntry.officialAccount === true) {
           setProviderConfigDialogError("官方账号登录时，默认 Codex App Provider 由 Codex Desktop 管理，不支持编辑。");
           return false;
         }

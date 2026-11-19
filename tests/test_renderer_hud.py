@@ -1185,10 +1185,8 @@ class RendererHudPayloadTests(unittest.TestCase):
         self.assertIn("defaultProviderSectionText", script)
         self.assertIn('String(settingsProviderDraft.appProvider || "").trim().toLowerCase()', script)
         self.assertIn("section_text: String(draft.configText || \"\")", script)
-        self.assertIn("const isAppProvider = !isNew", script)
-        self.assertIn("const usesCodexAuth = isAppProvider &&", script)
-        self.assertIn("registryEntry.requiresOpenaiAuth === true", script)
-        self.assertIn("providerRegistryEntry.requiresOpenaiAuth === true", script)
+        self.assertIn("const usesCodexAuth = !isNew && registryEntry.usesCodexAuth === true;", script)
+        self.assertIn("const usesCodexAuth = !isNew && providerRegistryEntry.usesCodexAuth === true;", script)
         self.assertNotIn("defaultProviderEditable", script)
         self.assertIn(
             ": '<button type=\"button\" class=\"codex-usage-hud-settings-icon-action\" data-action=\"settings-edit-provider\"",
@@ -1197,7 +1195,6 @@ class RendererHudPayloadTests(unittest.TestCase):
         self.assertIn("status?.codexProvidersSaved", script)
         self.assertIn('refreshCodexProviderRuntime("", "", {', script)
         self.assertIn("modelUpdates: status.codexProvidersSaved.desktopModelUpdates || []", script)
-        self.assertIn("providerRegistryEntry.usesExperimentalBearer !== true", script)
         self.assertIn("detail.usesExperimentalBearer === true || !defined", script)
         self.assertIn("result.hudSettingsCloned === true", script)
         self.assertNotIn('{ action: "save", settings: nextSettings }', script)

@@ -21,6 +21,7 @@ from codex_usage_hud.provider_registry import discover_provider_registry
 from codex_usage_hud.provider_gateway_auth import GATEWAY_AUTH_HEADER
 from codex_usage_hud.core.parser import JsonlSessionParser
 from codex_usage_hud.config import UserConfig
+from codex_usage_hud.usage_insights import _provider_registry_payload
 
 A = "10000000-0000-4000-8000-000000000001"
 B = "10000000-0000-4000-8000-000000000002"
@@ -103,6 +104,41 @@ def test_takeover_switch_is_internal_and_exit_restores_direct_identity(active):
         gateway.validate_exit(result["exitToken"], config_path=path)
     gateway.activate_gateway(path, relay)
     assert gateway.gateway_info(path)["default_provider"] == "beta"
+
+
+def test_auth_store_provider_can_be_edited_after_gateway_default_switch(home):
+    with home.open("a", encoding="utf-8") as stream:
+        stream.write(
+            '\n[model_providers.custom]\nbase_url = "https://company.example/v1"\n'
+            'wire_api = "responses"\nrequires_openai_auth = true\n'
+        )
+    auth_file = home.with_name("auth.json")
+    auth_file.write_text('{"OPENAI_API_KEY": "company-test-only"}', encoding="utf-8")
+    gateway.activate_gateway(home, SimpleNamespace(route=lambda *_: "http://127.0.0.1:43210/codex_hud/v1"))
+    registry = discover_provider_registry(user_config=UserConfig.defaults(), config_path=home, include_history=False)
+    assert registry.app_provider == "alpha"
+    assert config.set_default_codex_provider("custom", config_path=home)["gateway"]
+    assert gateway.gateway_info(home)["default_provider"] == "custom"
+
+    payload = _provider_registry_payload(SimpleNamespace(provider_registry=registry))
+    entry = payload["custom"]
+    assert entry["usesCodexAuth"] and entry["hasApiKey"]
+    assert entry["apiKey"] == "company-test-only"
+    assert payload["alpha"]["apiKey"] == "alpha-test-only"
+    update = {"provider_id": "custom", "base_url": "https://company.example/v2", "api_key": entry["apiKey"]}
+    auth_before = auth_file.read_bytes()
+    result = config.save_provider_configs(update, config_path=home)
+    assert result["changed"] and not result["requiresCodexRestart"]
+    assert auth_file.read_bytes() == auth_before
+    definition = config.read_provider_definitions(home)["custom"]
+    assert definition.auth_key == "OPENAI_API_KEY" and not definition.bearer_token
+    assert definition.base_url == update["base_url"]
+
+    result = config.save_provider_configs({**update, "api_key": "rotated-test-only"}, config_path=home)
+    assert result["hotProviderIds"] == ["custom"] and not result["requiresCodexRestart"]
+    assert auth_file.read_bytes() == auth_before
+    route = gateway.resolve_route(home, headers(A), generation=True)
+    assert route["headers"]["Authorization"] == "Bearer rotated-test-only"
 
 
 def test_old_sessions_use_original_and_copy_uses_target_without_rewriting_source(active):

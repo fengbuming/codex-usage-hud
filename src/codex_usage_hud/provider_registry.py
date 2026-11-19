@@ -27,6 +27,7 @@ class ProviderRegistryEntry:
     name: str = ""
     base_url: str = ""
     env_key: str = ""
+    auth_key: str = ""
     official_account: bool = False
     requires_openai_auth: bool = False
     wire_api: str = "responses"
@@ -142,6 +143,7 @@ def discover_provider_registry(
                         "name": definition.name,
                         "base_url": definition.base_url,
                         "env_key": definition.env_key,
+                        "auth_key": definition.auth_key,
                         "official_account": definition.official_account,
                         "requires_openai_auth": definition.requires_openai_auth,
                         "wire_api": definition.wire_api,
@@ -184,6 +186,7 @@ def discover_provider_registry(
             name=str(state.get("name") or ""),
             base_url=str(state.get("base_url") or ""),
             env_key=str(state.get("env_key") or ""),
+            auth_key=str(state.get("auth_key") or ""),
             official_account=bool(state.get("official_account")),
             requires_openai_auth=bool(state.get("requires_openai_auth")),
             wire_api=str(state.get("wire_api") or "responses"),

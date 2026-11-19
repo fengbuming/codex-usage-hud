@@ -950,10 +950,18 @@ def _provider_registry_payload(context: object) -> dict[str, object]:
     entries = getattr(registry, "entries", {})
     if not isinstance(entries, Mapping):
         return {}
-    app_provider = str(getattr(registry, "app_provider", "") or "").strip().lower()
     config_path = str(getattr(registry, "config_path", "") or "").strip() or None
-    return {
-        provider: {
+    providers: dict[str, object] = {}
+    for provider, entry in entries.items():
+        auth_key = str(getattr(entry, "auth_key", "") or "")
+        env_key = str(getattr(entry, "env_key", "") or "")
+        bearer_token = str(getattr(entry, "bearer_token", "") or "")
+        official_account = bool(getattr(entry, "official_account", False))
+        if auth_key:
+            api_key = "" if official_account else read_codex_auth_api_key(config_path, auth_key=auth_key)
+        else:
+            api_key = bearer_token or _user_environment_value(env_key)
+        providers[provider] = {
             "profiles": list(getattr(entry, "profile_names", ())),
             "historicalOnly": bool(getattr(entry, "historical_only", False)),
             "defined": bool(getattr(entry, "from_provider_definition", False)),
@@ -963,38 +971,14 @@ def _provider_registry_payload(context: object) -> dict[str, object]:
             "proxyPort": int(getattr(entry, "proxy_port", 7897)),
             "desktopModel": str(getattr(entry, "desktop_model", "") or ""),
             "desktopModels": list(getattr(entry, "desktop_models", ()) or ()),
-            "envKey": str(getattr(entry, "env_key", "") or ""),
-            "officialAccount": bool(getattr(entry, "official_account", False)),
+            "envKey": env_key,
+            "officialAccount": official_account,
             "requiresOpenaiAuth": bool(getattr(entry, "requires_openai_auth", False)),
+            "usesCodexAuth": bool(auth_key),
             "wireApi": str(getattr(entry, "wire_api", "responses") or "responses"),
-            "usesExperimentalBearer": bool(
-                str(getattr(entry, "bearer_token", "") or "")
-            ),
-            "hasApiKey": bool(getattr(entry, "has_api_key", False)),
-            "apiKey": (
-                str(getattr(entry, "bearer_token", "") or "")
-                or read_codex_auth_api_key(config_path)
-                if (
-                    str(provider or "").strip().lower() == app_provider
-                    and (
-                        (str(provider or "").strip().lower() == "custom" and not getattr(entry, "bearer_token", ""))
-                        or bool(getattr(entry, "requires_openai_auth", False))
-                    )
-                )
-                else str(getattr(entry, "bearer_token", "") or "")
-                or _user_environment_value(str(getattr(entry, "env_key", "") or ""))
-            ),
-            "configText": (
-                ""
-                if (
-                    str(provider or "").strip().lower() == app_provider
-                    and (
-                        (str(provider or "").strip().lower() == "custom" and not getattr(entry, "bearer_token", ""))
-                        or bool(getattr(entry, "requires_openai_auth", False))
-                    )
-                )
-                else str(getattr(entry, "config_text", "") or "")
-            ),
+            "usesExperimentalBearer": bool(bearer_token),
+            "hasApiKey": bool(api_key),
+            "apiKey": api_key,
+            "configText": "" if auth_key else str(getattr(entry, "config_text", "") or ""),
         }
-        for provider, entry in entries.items()
-    }
+    return providers

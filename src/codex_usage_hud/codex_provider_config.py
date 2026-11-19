@@ -846,6 +846,8 @@ def save_provider_configs(
         normalized_updates = []
     if not normalized_updates:
         return {"changed": False, "providerIds": []}
+    from .provider_gateway import gateway_info, gateway_metadata, validate_gateway_upstream
+
     path = Path(config_path).expanduser() if config_path is not None else default_codex_config_path()
     if not path.exists():
         raise FileNotFoundError(f"Codex config was not found: {path}")
@@ -854,6 +856,7 @@ def save_provider_configs(
     definitions = read_provider_definitions(path)
     parsed_config = _parse_toml_mapping(original_text)
     default_provider = str(parsed_config.get("model_provider") or "").strip().casefold()
+    active_gateway = gateway_info(path)
     raw_model_providers = parsed_config.get("model_providers")
     seen_ids: set[str] = set()
     desktop_model_updates: list[dict[str, object]] = []
@@ -863,7 +866,6 @@ def save_provider_configs(
     provider_ids: list[str] = []
     default_provider_before_section = ""
     default_provider_candidate_section = ""
-    default_auth_before = ""
     default_auth_after: str | None = None
     auth_path: Path | None = None
     auth_original_text = ""
@@ -913,6 +915,8 @@ def save_provider_configs(
                 or bool(raw_default_entry.get("requires_openai_auth"))
             )
         )
+        is_gateway_auth_provider = bool(active_gateway and existing_definition and existing_definition.auth_key)
+        uses_auth_store = is_default_app_provider or is_gateway_auth_provider
         if (
             is_default_provider
             and uses_experimental_bearer
@@ -922,7 +926,7 @@ def save_provider_configs(
                 requested_api_key
                 != str(raw_default_entry.get("experimental_bearer_token") or "")
             )
-        if is_default_provider and codex_auth_uses_official_account(path):
+        if (is_default_provider or is_gateway_auth_provider) and codex_auth_uses_official_account(path):
             raise ValueError(
                 "官方账号登录时，默认 Codex App Provider 由 Codex Desktop 管理，不支持编辑。"
             )
@@ -938,16 +942,14 @@ def save_provider_configs(
             )
             validation_update["env_key"] = (
                 ""
-                if is_default_app_provider
+                if uses_auth_store
                 else _get_quoted_value(section_body, "env_key")
                 or str(update.get("env_key") or update.get("envKey") or "")
             )
         provider_id, base_url, env_key, api_key, is_new = _validate_request(
             validation_update,
-            allow_api_key_without_env=is_default_app_provider or uses_experimental_bearer,
+            allow_api_key_without_env=uses_auth_store or uses_experimental_bearer,
         )
-        from .provider_gateway import gateway_metadata, validate_gateway_upstream
-
         validate_gateway_upstream(base_url, gateway_metadata(original_text, include_inactive=True))
         normalized_id = provider_id.casefold()
         if normalized_id in seen_ids:
@@ -955,15 +957,14 @@ def save_provider_configs(
         seen_ids.add(normalized_id)
         provider_ids.append(provider_id)
         existing = definitions.get(normalized_id)
-        if is_default_app_provider:
-            auth_path = default_codex_auth_path(path)
-            default_auth_before = read_codex_auth_api_key(path)
-            if api_key:
-                default_auth_after = api_key
-            elif default_auth_before:
-                default_auth_after = default_auth_before
-            else:
+        saved_auth_key = ""
+        if uses_auth_store:
+            saved_auth_key = read_codex_auth_api_key(path)
+            if not (api_key or saved_auth_key):
                 raise ValueError("默认 Codex App Provider 尚未配置 API key，请填写后再保存。")
+            if is_default_app_provider:
+                auth_path = default_codex_auth_path(path)
+                default_auth_after = api_key or saved_auth_key
         section = _section_range(candidate_text, provider_id)
         if section is None:
             if section_body is not None and not is_default_app_provider:
@@ -994,7 +995,7 @@ def save_provider_configs(
                 profiles_to_create.append((profile_path, profile_text))
         else:
             _start, _end, body = section
-            if is_default_app_provider:
+            if uses_auth_store:
                 newline = _preferred_newline(candidate_text)
                 # Codex App owns the auth-related fields in this section. Only
                 # change base_url so its special flags survive a HUD round trip.
@@ -1012,7 +1013,7 @@ def save_provider_configs(
         # config.toml, whereas the running backend cannot inherit new env keys.
         # An unchanged auth.json key keeps the existing authentication mode.
         hot_key = api_key or (existing.bearer_token if existing else "")
-        if is_default_app_provider and api_key == default_auth_before:
+        if uses_auth_store and api_key == saved_auth_key:
             hot_key = ""
         if hot_key:
             section = _section_range(candidate_text, provider_id)
@@ -1065,9 +1066,6 @@ def save_provider_configs(
             })
 
         existing_proxy = proxy_metadata(_provider_section_text(original_text, provider_id))
-        from .provider_gateway import gateway_info
-
-        active_gateway = gateway_info(path)
         if "use_proxy" in update or existing_proxy or active_gateway:
             section = _section_range(candidate_text, provider_id)
             newline = _preferred_newline(candidate_text)
@@ -1106,7 +1104,7 @@ def save_provider_configs(
             default_provider_candidate_section = _provider_section_text(
                 candidate_text, provider_id
             )
-        else:
+        elif not is_gateway_auth_provider:
             previous_env_key = existing.env_key if existing else ""
             previous_env_value = _user_environment_value(previous_env_key)
             target_env_value = _user_environment_value(env_key)

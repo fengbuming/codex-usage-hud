@@ -52,6 +52,8 @@ class ProviderRegistryTests(unittest.TestCase):
         self.assertFalse(registry.entries["custom"].official_account)
         self.assertTrue(registry.entries["custom"].requires_openai_auth)
         self.assertEqual(payload["custom"]["apiKey"], "app-secret")
+        self.assertTrue(payload["custom"]["usesCodexAuth"])
+        self.assertTrue(payload["custom"]["hasApiKey"])
         self.assertTrue(payload["custom"]["requiresOpenaiAuth"])
 
     def test_registry_marks_official_account_provider_as_locked(self) -> None:
@@ -66,7 +68,7 @@ class ProviderRegistryTests(unittest.TestCase):
             config_path = root / "config.toml"
             config_path.write_text(config_text, encoding="utf-8")
             (root / "auth.json").write_text(
-                '{"tokens": {"refresh_token": "redacted"}}\n',
+                '{"OPENAI_API_KEY": "unused-key", "tokens": {"refresh_token": "redacted"}}\n',
                 encoding="utf-8",
             )
             registry = discover_provider_registry(
@@ -80,6 +82,8 @@ class ProviderRegistryTests(unittest.TestCase):
 
         self.assertTrue(registry.entries["custom"].official_account)
         self.assertTrue(payload["custom"]["officialAccount"])
+        self.assertFalse(payload["custom"]["hasApiKey"])
+        self.assertEqual(payload["custom"]["apiKey"], "")
         self.assertTrue(payload["custom"]["requiresOpenaiAuth"])
 
     def test_registry_exposes_requires_openai_auth_per_definition(self) -> None:
