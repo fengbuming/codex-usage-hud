@@ -433,6 +433,7 @@ def stabilize_published_items(
                     cached_item,
                     current=item.current,
                     collapsed_title=item.collapsed_title,
+                    collapsed_disclosure_ambiguous=item.collapsed_disclosure_ambiguous,
                 )
             merged[item_id] = item
         if cached_item is not None and cached_item.session_started_at is not None:

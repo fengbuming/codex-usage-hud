@@ -99,6 +99,33 @@ def test_resumed_rollouts_use_latest_task_before_updating_caches(
         assert active_work.active_work_items_for_snapshot(fresh, current, current_path) == []
 
 
+def test_current_refresh_keeps_newer_rollout_output_and_latest_dom_title() -> None:
+    from codex_usage_hud.active_work import _refresh_visible_current_work_item
+    from codex_usage_hud.core import Activity, ParsedSession, RequestTokens, WorkStatusItem
+
+    now = datetime.now().astimezone()
+    old_time = now - timedelta(seconds=10)
+    steps = ({"callId": "new-command", "timestamp": now.isoformat()},)
+    new_item = WorkStatusItem(
+        id="resumed", session_id="resumed", title="session", status="running",
+        status_label="运行中", detail="", last_text="新正文",
+        last_output_at=now, activity_steps=steps,
+    )
+    old = ParsedSession(
+        session_id="resumed", last_event_time=old_time,
+        task_started_at=old_time, task_completed_at=old_time,
+        last_output=Activity("assistant", "旧正文", old_time),
+        request=RequestTokens(status="confirmed", updated_at=now + timedelta(seconds=1)),
+        renderer_collapsed_title="正在运行 2 条命令",
+    )
+    context = SimpleNamespace()
+    [item] = _refresh_visible_current_work_item(context, [new_item], old)
+    assert (item.last_text, item.last_output_at, item.activity_steps) == ("新正文", now, steps)
+    assert item.collapsed_title == "正在运行 2 条命令"
+    assert item.current
+    assert not getattr(context, "_work_overlay_terminal_item_tasks", {})
+
+
 def test_active_work_pump_publishes_sequence_bound_result_and_wakes() -> None:
     wake = Event()
     expected = [SimpleNamespace(id="work-1")]

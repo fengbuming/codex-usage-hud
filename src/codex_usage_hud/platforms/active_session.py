@@ -1904,13 +1904,13 @@ class ActiveSessionTracker:
         self._thread_path_cache[cache_key] = (path, now)
         return path
 
-    def rematerialize_renderer_mapping(self, *, force: bool = True) -> bool:
-        """Re-resolve the latched renderer session id/title against state-db / files.
-
-        Used when follow is stuck on awaiting-exact-mapping. DOM re-report alone
-        cannot help when the page only exposes a title, or a known id whose
-        state-db row lags. Returns True when the mapping advanced to a real path.
-        """
+    def rematerialize_renderer_mapping(
+        self,
+        *,
+        force: bool = True,
+        changed_rollout_paths: Iterable[Path] | None = None,
+    ) -> bool:
+        """Resolve a pending selection or refresh its confirmed rollout path."""
         if not self.enabled:
             return False
         with self._lock:
@@ -1921,15 +1921,44 @@ class ActiveSessionTracker:
             title = str(self._renderer_title or self.latest_title or "").strip()
             selection_seq = int(self._selection_seq or 0)
             observed_at_ms = int(self._selection_observed_at_ms or 0)
-            already_mapped = (
-                self._renderer_path is not None and self._renderer_path.exists()
+            previous_path = self._renderer_path
+        if changed_rollout_paths is not None and not (
+            session_id
+            and previous_path is not None
+            and any(
+                candidate.suffix.lower() == ".jsonl"
+                and candidate != previous_path
+                and _thread_id_from_session_filename(candidate.name).casefold()
+                == session_id.casefold()
+                for candidate in changed_rollout_paths
             )
-        if already_mapped:
+        ):
             return False
         if not session_id and not raw_id and not title:
             return False
         if force:
             self.invalidate_mapping_cache()
+
+        if previous_path is not None and previous_path.exists():
+            # Codex can resume the same thread into a new rollout while keeping
+            # its old file on disk. Require an exact replacement for a confirmed
+            # selection and keep its live DOM state and sequence intact.
+            if not session_id:
+                return False
+            path = self.path_from_renderer_thread_id(session_id)
+            if path is None or self._same_path(previous_path, path):
+                return False
+            with self._lock:
+                if (
+                    self._selection_seq != selection_seq
+                    or self._renderer_session_id != session_id
+                    or self._renderer_path != previous_path
+                ):
+                    return False
+                self._renderer_path = path
+                self.latest_path = path
+            _LOGGER.info("RENDERER_ROLLOUT_CHANGED session_id=%s path=%s", session_id, path)
+            return True
 
         path: Path | None = None
         resolved_id = session_id

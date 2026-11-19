@@ -924,6 +924,59 @@ def test_tick_sampler_mapping_recovery_refreshes_once_and_preserves_session_writ
     assert [event.type for event in session_write.runtime_events] == ["session_file_changed"]
 
 
+def test_tick_sampler_follows_new_rollout_for_same_selected_thread(tmp_path) -> None:
+    from contextlib import closing
+    import sqlite3
+
+    from codex_usage_hud.platforms.active_session import ActiveSessionTracker
+
+    thread_id = "01881888-8888-7888-8888-888888888888"
+    old = tmp_path / f"rollout-2026-11-19T13-45-00-{thread_id}.jsonl"
+    new = tmp_path / f"rollout-2026-11-19T13-46-00-{thread_id}_turn.jsonl"
+    other = tmp_path / "rollout-2026-11-19T13-46-00-01881888-8888-7888-8888-888888888889.jsonl"
+    old.touch()
+    new.touch()
+    db = tmp_path / "state_5.sqlite"
+    with closing(sqlite3.connect(db)) as con, con:
+        con.execute("create table threads(id text primary key, rollout_path text, title text)")
+        con.execute("insert into threads values (?, ?, ?)", (thread_id, str(old), "session"))
+    tracker = ActiveSessionTracker(
+        platform=None, state_db=db, sessions_root=tmp_path,
+        session_index_path=tmp_path / "session_index.jsonl", poll_ms=500,
+        enabled=True, start_background_watcher=False,
+    )
+    tracker.observe_conversation_ref(
+        thread_id, "session", source="renderer", selection_seq=3,
+        collapsed_title="正在运行 2 条命令",
+    )
+    assert tracker.current_path() == old
+    with closing(sqlite3.connect(db)) as con, con:
+        con.execute("update threads set rollout_path=? where id=?", (str(new), thread_id))
+    changes = iter([
+        ({"sessions-root"}, {other}),
+        ({"sessions-root"}, {new}),
+        ({"session-map"}, {db}),
+    ])
+    ports = replace(
+        _sampler_ports(
+            event_bus=RuntimeEventBus(), update_state={}, tracker=tracker,
+            file_changes_fn=lambda: next(changes),
+        ),
+        invalidate_mapping=tracker.invalidate_mapping_cache,
+    )
+    sampler = RendererTickSampler(
+        RendererLoopState(latest_snapshot=ParsedSession(selection_seq=3)), ports,
+    )
+
+    assert not sampler.sample().event_refresh_request.active_session
+    assert tracker.current_path() == old
+    assert sampler.sample().event_refresh_request.active_session
+    assert tracker.current_path() == new
+    assert tracker.selection_seq == 3
+    assert tracker.renderer_collapsed_title == "正在运行 2 条命令"
+    assert not sampler.sample().event_refresh_request.has_work
+
+
 def test_tick_sampler_active_session_only_skips_deferred_state_sampling() -> None:
     bus = RuntimeEventBus(clock=lambda: 20.0)
     active_wake = Event()

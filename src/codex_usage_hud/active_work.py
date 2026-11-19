@@ -1050,6 +1050,23 @@ def _refresh_visible_current_work_item(
         ),
         None,
     )
+    if existing_index is not None:
+        existing = items[existing_index]
+        if (
+            existing.last_output_at is not None
+            and snapshot.last_event_time is not None
+            and _datetime_age_seconds(snapshot.last_event_time, existing.last_output_at) > 0
+        ):
+            # The background scan may have already read a resumed rollout.
+            # Keep its transcript and steps while accepting the live DOM label.
+            updated = list(items)
+            updated[existing_index] = replace(
+                existing,
+                current=True,
+                collapsed_title=_compact_work_text(snapshot.renderer_collapsed_title, 512),
+                collapsed_disclosure_ambiguous=snapshot.renderer_collapsed_disclosure_ambiguous,
+            )
+            return updated
     segment_released = bool(
         refreshed is not None
         and _clear_terminal_item_task_for_new_segment(context, snapshot)
@@ -1271,6 +1288,10 @@ def active_work_items_for_snapshot(
                         composer_draft=snapshot.composer_draft,
                         composer_draft_updated_at_ms=snapshot.composer_draft_updated_at_ms,
                         composer_send_requested=snapshot.composer_send_requested,
+                        renderer_collapsed_title=snapshot.renderer_collapsed_title,
+                        renderer_collapsed_disclosure_ambiguous=(
+                            snapshot.renderer_collapsed_disclosure_ambiguous
+                        ),
                     )
                 continue
             identity = parsed.session_id if parsed.session_id not in {"", "n/a"} else _session_path_key(path)

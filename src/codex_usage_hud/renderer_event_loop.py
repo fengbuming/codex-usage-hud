@@ -158,7 +158,8 @@ class RendererTickSampler:
         )
         reasons, paths = self.ports.take_file_changes()
         session_map_changed = False
-        if "session-map" in reasons:
+        mapping_event = "session-map" in reasons
+        if mapping_event:
             session_map_changed = self._rematerialize_mapping()
             if not session_map_changed:
                 # A database/WAL write need not change the selected thread.
@@ -166,6 +167,8 @@ class RendererTickSampler:
                 # during CDP backoff) when reconciliation did not advance.
                 reasons.discard("session-map")
         if "sessions-root" in reasons:
+            if not mapping_event and paths:
+                session_map_changed = self._rematerialize_mapping(changed_rollout_paths=paths)
             self._heal_pending_session_from_file()
         command = self.ports.take_command()
         runtime_events = self.ports.drain_events()
@@ -348,14 +351,22 @@ class RendererTickSampler:
         self.state.latest_budget_window_keys = current
         return current
 
-    def _rematerialize_mapping(self) -> bool:
-        self.ports.invalidate_mapping()
+    def _rematerialize_mapping(
+        self, *, changed_rollout_paths: set[Path] | None = None
+    ) -> bool:
+        if changed_rollout_paths is None:
+            self.ports.invalidate_mapping()
         tracker = self.ports.tracker()
         rematerialize = getattr(tracker, "rematerialize_renderer_mapping", None)
         if not callable(rematerialize):
             return False
         try:
-            if rematerialize(force=True):
+            changed = (
+                rematerialize(force=False)
+                if changed_rollout_paths is None
+                else rematerialize(changed_rollout_paths=changed_rollout_paths)
+            )
+            if changed:
                 self.state.activity_wake_pending = ""
                 setter = getattr(self.ports.bridge_wake_event, "set", None)
                 if callable(setter):
