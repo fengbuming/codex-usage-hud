@@ -34,7 +34,8 @@ experimental_bearer_token = "test-only-beta"
     monkeypatch.setattr(config, "_user_environment_value", lambda _: "")
     store = UserConfigStore(tmp_path / "hud.json")
     store.save(replace(UserConfig.defaults(), daily_budget_usd=123))
-    relay = SimpleNamespace(route=MagicMock(return_value="http://127.0.0.1:57324/codex_hud/v1"), close=MagicMock())
+    route = MagicMock(return_value="http://127.0.0.1:57324/codex_hud/v1")
+    relay = SimpleNamespace(route=route, gateway_route=route, close=MagicMock())
     return path, store, relay
 
 
@@ -259,6 +260,7 @@ def test_enabling_force_fast_activates_gateway_and_persists_global_override(setu
     assert status["restartVisible"] is True
     assert store.load().force_fast_requests is True
     assert store.load().provider_gateway_enabled is True
+    assert relay.gateway_route.call_args.kwargs == {"minimum_version": 4}
     assert gateway.gateway_info(path)
     route = gateway.resolve_route(
         path,
@@ -285,6 +287,55 @@ def test_enabling_force_fast_activates_gateway_and_persists_global_override(setu
         generation=True,
     )
     assert route["service_tier_override"] == "default"
+
+
+@pytest.mark.parametrize("previous_tier", [None, "0"])
+def test_failed_fast_save_restores_original_route_and_exact_tier(setup, monkeypatch, previous_tier):
+    from codex_usage_hud.provider_gateway_settings import save_fast_request_settings
+
+    path, store, relay = setup
+    original = path.read_bytes()
+    previous = store.load()
+    with gateway._state_db(path) as db:
+        db.execute("INSERT INTO settings VALUES ('default_provider', 'beta')")
+        if previous_tier is not None:
+            db.execute("INSERT INTO settings VALUES ('force_fast_requests', ?)", (previous_tier,))
+    monkeypatch.setattr(store, "save", MagicMock(side_effect=OSError("settings write failed")))
+
+    with pytest.raises(OSError, match="settings write failed"):
+        save_fast_request_settings(
+            store, previous, replace(previous, force_fast_requests=True), config_path=path, relay=relay,
+        )
+
+    assert path.read_bytes() == original
+    assert store.load() == previous
+    assert not gateway.gateway_info(path)
+    with gateway._read_state_db(path) as db:
+        rows = dict(db.execute("SELECT key, value FROM settings"))
+    assert rows == ({"default_provider": "beta", "force_fast_requests": "0"}
+                    if previous_tier is not None else {"default_provider": "beta"})
+
+
+def test_fast_save_rejects_legacy_relay_before_changing_live_gateway(setup, monkeypatch):
+    from codex_usage_hud.provider_gateway_settings import save_fast_request_settings
+
+    path, store, relay = setup
+    set_gateway_enabled(store, True, config_path=path, relay=relay)
+    original = path.read_bytes()
+    previous = store.load()
+    relay.gateway_route.side_effect = RuntimeError("legacy proxy")
+    monkeypatch.setattr(store, "save", MagicMock())
+
+    with pytest.raises(RuntimeError, match="legacy proxy"):
+        save_fast_request_settings(
+            store, previous, replace(previous, force_fast_requests=True), config_path=path, relay=relay,
+        )
+
+    assert path.read_bytes() == original
+    assert store.load() == previous
+    store.save.assert_not_called()
+    with gateway._read_state_db(path) as db:
+        assert db.execute("SELECT value FROM settings WHERE key='force_fast_requests'").fetchone() is None
 
 
 def test_default_switch_only_updates_gateway_route_without_reloading_hud(setup):

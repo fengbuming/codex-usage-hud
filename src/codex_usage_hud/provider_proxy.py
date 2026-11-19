@@ -658,7 +658,7 @@ class DetachedProviderProxyRelay(ProviderProxyRelay):
                     except (OSError, RuntimeError, ValueError, http.client.HTTPException) as exc:
                         _LOGGER.warning("provider_legacy_route_restore_failed error=%s", type(exc).__name__)
 
-    def gateway_route(self, metadata: dict, config_path: Path) -> str:
+    def gateway_route(self, metadata: dict, config_path: Path, *, minimum_version: int = 2) -> str:
         from .provider_proxy_service import ProviderProxyServiceClient
         from .runtime_paths import runtime_file_path
 
@@ -673,7 +673,7 @@ class DetachedProviderProxyRelay(ProviderProxyRelay):
                     on_evidence=self._deliver_source_evidence,
                     peer=(self.port, self.state_path or runtime_file_path("provider-proxy-service.json")),
                 )
-            return self._gateway_service.route(metadata, config_path)
+            return self._gateway_service.route(metadata, config_path, minimum_version=minimum_version)
 
     def close(self) -> None:
         with self.lock:

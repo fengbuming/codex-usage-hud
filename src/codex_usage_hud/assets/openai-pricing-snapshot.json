@@ -1,12 +1,62 @@
 {
-  "checked_at": "2026-09-24T01:12:55.994754Z",
+  "checked_at": "2026-11-19T12:07:36.745459Z",
   "currency": "USD",
   "prices": [
     {
+      "cache_write": 10.0,
+      "cached_input": 0.4,
+      "catalog_status": "active",
+      "currency": "USD",
+      "input": 8.0,
+      "last_seen_at": "2026-11-19T12:07:36.745459Z",
+      "model": "gpt-6.2-astra",
+      "output": 40.0,
+      "reasoning": 40.0,
+      "unit": "USD_per_1M_tokens"
+    },
+    {
+      "cache_write": 2.5,
+      "cached_input": 0.1,
+      "catalog_status": "active",
+      "currency": "USD",
+      "input": 2.0,
+      "last_seen_at": "2026-11-19T12:07:36.745459Z",
+      "model": "gpt-6.2-sol",
+      "output": 10.0,
+      "reasoning": 10.0,
+      "unit": "USD_per_1M_tokens"
+    },
+    {
+      "cache_write": 1.25,
+      "cached_input": 0.05,
+      "catalog_status": "active",
+      "currency": "USD",
+      "input": 1.0,
+      "last_seen_at": "2026-11-19T12:07:36.745459Z",
+      "model": "gpt-6.1-terra",
+      "output": 5.0,
+      "reasoning": 5.0,
+      "unit": "USD_per_1M_tokens"
+    },
+    {
+      "cache_write": 0.125,
+      "cached_input": 0.01,
+      "catalog_status": "active",
+      "currency": "USD",
+      "input": 0.1,
+      "last_seen_at": "2026-11-19T12:07:36.745459Z",
+      "model": "gpt-6-luna",
+      "output": 0.5,
+      "reasoning": 0.5,
+      "unit": "USD_per_1M_tokens"
+    },
+    {
       "cache_write": 12.5,
       "cached_input": 1.0,
+      "catalog_status": "historical",
       "currency": "USD",
       "input": 10.0,
+      "last_seen_at": "2026-11-17T13:26:58.473031Z",
       "model": "gpt-6-astra",
       "output": 50.0,
       "reasoning": 50.0,
@@ -14,22 +64,14 @@
     },
     {
       "cache_write": 2.5,
-      "cached_input": 0.2,
+      "cached_input": 0.1,
+      "catalog_status": "historical",
       "currency": "USD",
       "input": 2.0,
-      "model": "gpt-6-sol",
+      "last_seen_at": "2026-11-17T13:26:58.473031Z",
+      "model": "gpt-6.1-sol",
       "output": 10.0,
       "reasoning": 10.0,
-      "unit": "USD_per_1M_tokens"
-    },
-    {
-      "cache_write": 0.125,
-      "cached_input": 0.01,
-      "currency": "USD",
-      "input": 0.1,
-      "model": "gpt-6-luna",
-      "output": 0.5,
-      "reasoning": 0.5,
       "unit": "USD_per_1M_tokens"
     },
     {
@@ -91,17 +133,29 @@
       "output": 14.0,
       "reasoning": 14.0,
       "unit": "USD_per_1M_tokens"
+    },
+    {
+      "cache_write": 2.5,
+      "cached_input": 0.2,
+      "catalog_status": "historical",
+      "currency": "USD",
+      "input": 2.0,
+      "last_seen_at": "2026-09-24T01:12:55.994754Z",
+      "model": "gpt-6-sol",
+      "output": 10.0,
+      "reasoning": 10.0,
+      "unit": "USD_per_1M_tokens"
     }
   ],
   "provider": "openai",
   "schema_version": 2,
   "sources": [
     {
-      "sha256": "02e52e6ad8af66882d8c41d1c874370c8bf5dacd9e1e612e62f08d8d9930e38c",
+      "sha256": "e246b27bf3e11101bf6ff6cb6f8a905f00418f7793ffadd09149b44750c9ff15",
       "url": "https://developers.openai.com/api/docs/models"
     },
     {
-      "sha256": "c29e14ca0c46699a017fab5cfd8f2c9e8a84a08590a2186f913763c423316d91",
+      "sha256": "16216d4af21e18323228e826b58c8f03a2c9fe1254c08c263c873412828d41bf",
       "url": "https://platform.openai.com/docs/pricing"
     }
   ],

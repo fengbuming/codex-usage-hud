@@ -7,13 +7,36 @@ and this repository follows Semantic Versioning for release tags.
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-11-19
+
+### Added
+
+- Added an explicit global Fast preference for HTTP Responses requests through
+  the HUD gateway. Older running proxies are detected before the setting is saved.
+
+### Improved
+
+- Load session search indexes and Renderer history details on demand. Release idle
+  search caches, reuse closed history, and send only changed data to the Renderer.
+- Reduce memory retained by usage and work caches, helper imports, large proxy
+  requests, and image responses. Cache the static foreground of completed bubbles.
+- Catch up previously completed search indexes on startup and show progress when
+  preserving usage before batch session deletion.
+
 ### Fixed
 
-- Coalesced session-mapping file events and stopped refreshing the renderer
-  when reconciliation leaves the selected session unchanged, including during
-  CDP backoff. Pending sessions still refresh when their mapping becomes available.
-- Removed global image-preview scans from ordinary typing and clicks while
-  preserving pointer and keyboard preview open/close detection through DOM events.
+- Preserve the original gateway configuration and request tier when saving a Fast
+  change fails.
+- Repair search indexes after Codex compresses rollouts, support deleting compressed
+  sessions, and follow the replacement rollout when a session resumes.
+- Coalesce session-mapping changes and avoid image-preview scans during ordinary
+  typing. Keep HUD placement usable around long native titles and restore structured
+  tool-output previews.
+- Preserve provider credentials during async saves and gateway switches. Reject
+  upstream URLs that point back to the HUD gateway.
+- Read collapsed Standard rows on the official OpenAI pricing page and bundle the
+  current Codex catalog, including GPT-6.2 Astra and Sol. Preserve prices for
+  previously seen models in families that still have active members.
 
 ## [1.6.0] - 2026-11-06
 

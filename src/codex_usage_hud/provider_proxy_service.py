@@ -23,6 +23,7 @@ from .provider_proxy import LoopbackHTTPServer
 CONTROL_PATH = "/__codex_hud_proxy__/"
 CONTROL_HEADER = "X-Codex-Hud-Proxy-Control"
 PROTOCOL_VERSION = 4
+FAST_REQUESTS_PROTOCOL_VERSION = 4
 
 # A HUD launched from the Windows desktop can itself be placed in a
 # kill-on-close Job Object.  The provider relay is deliberately a separate
@@ -136,9 +137,11 @@ class ProviderProxyServiceClient:
     def ensure(self, *, minimum_version: int = 1) -> None:
         with self._lock:
             self.state = _read_state(self.state_path, self.port)
+            version = 0
             if self.state:
                 try:
-                    if minimum_version <= self._call("health").get("version", 0) <= PROTOCOL_VERSION:
+                    version = self._call("health").get("version", 0)
+                    if minimum_version <= version <= PROTOCOL_VERSION:
                         self._subscribe()
                         return
                 except (OSError, ValueError, RuntimeError, http.client.HTTPException):
@@ -149,6 +152,11 @@ class ProviderProxyServiceClient:
                 probe.settimeout(.3)
                 occupied = probe.connect_ex(("127.0.0.1", self.port)) == 0
             if occupied:
+                if minimum_version == FAST_REQUESTS_PROTOCOL_VERSION and 0 < version < minimum_version:
+                    raise RuntimeError(
+                        "当前 HUD 请求代理版本不支持强制 Fast。请等待进行中的请求结束，"
+                        "升级常驻代理后重试。"
+                    )
                 raise RuntimeError(f"端口 {self.port} 仍由旧版 HUD 代理或其它程序占用；请先完成代理进程迁移。")
             if not self.state:
                 self.state = _load_or_create_state(self.state_path, self.port)
@@ -190,10 +198,10 @@ class ProviderProxyServiceClient:
                 f" exit_code={exit_code}; 启动日志：{self.state_path.with_suffix('.startup.log')}"
             )
 
-    def route(self, metadata: dict, config_path: Path) -> str:
+    def route(self, metadata: dict, config_path: Path, *, minimum_version: int = 1) -> str:
         # Keep an already-running pre-reload helper alive. It will return its
         # existing private URL until a safe one-time migration is arranged.
-        self.ensure(minimum_version=2 if metadata.get("gateway_config") else 1)
+        self.ensure(minimum_version=max(minimum_version, 2 if metadata.get("gateway_config") else 1))
         result = self._call("route", {"metadata": metadata, "config_path": str(config_path.resolve())})
         metadata.update(result["metadata"])
         return result["endpoint"]

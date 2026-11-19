@@ -39,6 +39,10 @@ DEFAULT_DATA_FILES = (
         "codex_usage_hud/assets",
     ),
     (
+        PROJECT_ROOT / "src" / "codex_usage_hud" / "assets" / "openai-pricing-snapshot.json",
+        "codex_usage_hud/assets",
+    ),
+    (
         PROJECT_ROOT / "src" / "codex_usage_hud" / "assets" / "sponsor_alipay.jpg",
         "codex_usage_hud/assets",
     ),

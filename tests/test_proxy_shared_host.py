@@ -61,6 +61,35 @@ def test_live_version_three_listener_is_preserved(tmp_path, monkeypatch):
     assert calls == ['health']
 
 
+def test_fast_gateway_route_rejects_occupied_version_three_listener(tmp_path, monkeypatch):
+    state = {"version": 3, "control_token": "test-only"}
+    monkeypatch.setattr(service, "_read_state", lambda *args: state)
+    calls = []
+
+    def call(client, action, payload=None):
+        calls.append(action)
+        return {"version": 3}
+
+    class OccupiedPort:
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+        def settimeout(self, *args): pass
+        def connect_ex(self, *args): return 0
+
+    monkeypatch.setattr(service.ProviderProxyServiceClient, "_call", call)
+    monkeypatch.setattr(service.socket, "socket", OccupiedPort)
+    monkeypatch.setattr(service, "launch_helper", lambda *args, **kwargs: pytest.fail("do not replace live listener"))
+    client = service.ProviderProxyServiceClient(57324, state_path=tmp_path / "gateway.json")
+    config_path = tmp_path / "config.toml"
+
+    with pytest.raises(RuntimeError, match="不支持强制 Fast"):
+        client.route({"gateway_config": str(config_path)}, config_path,
+                     minimum_version=service.FAST_REQUESTS_PROTOCOL_VERSION)
+
+    assert calls == ["health"]
+    assert client.process is None
+
+
 def test_frozen_proxy_dispatch_does_not_import_renderer_or_desktop_helper():
     import json
     import os

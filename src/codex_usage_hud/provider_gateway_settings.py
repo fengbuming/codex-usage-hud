@@ -7,6 +7,50 @@ from .provider_gateway import _state_db, activate_gateway, gateway_info, prepare
 from .provider_proxy import provider_proxy_relay
 
 
+def save_fast_request_settings(store, previous, candidate, *, config_path=None, relay=None) -> dict:
+    """Commit the request tier and HUD settings together with gateway takeover."""
+    path = config_path or config.default_codex_config_path()
+    original = config._read_text_exact(path) if path.is_file() else None
+    active = bool(gateway_info(path))
+    written: list[str] = []
+    initial_defaults: list[str] = []
+    saved = False
+    try:
+        if candidate.force_fast_requests or active:
+            if original is None:
+                raise ValueError("未找到 Codex 配置，请先完成 Codex 初始化。")
+            activate_gateway(
+                path, relay if relay is not None else provider_proxy_relay,
+                on_config_written=written.append,
+                on_initial_default=initial_defaults.append,
+                require_fast_requests=True,
+                original_text=original,
+            )
+            candidate = replace(candidate, provider_gateway_enabled=True)
+        with _state_db(path) as db:
+            if initial_defaults:
+                db.execute(
+                    "INSERT OR REPLACE INTO settings VALUES ('default_provider', ?)",
+                    (initial_defaults[0],),
+                )
+            db.execute(
+                "INSERT OR REPLACE INTO settings VALUES ('force_fast_requests', ?)",
+                ("1" if candidate.force_fast_requests else "0",),
+            )
+            store.save(candidate)
+            saved = True
+    except Exception:
+        # Compare against our write so an external editor keeps its changes.
+        try:
+            if written and original is not None:
+                config._write_text_atomically(path, original, written[-1], private=True)
+        finally:
+            if saved and store.load() == candidate:
+                store.save(previous)
+        raise
+    return {"requiresConfigReload": bool(written), "gateway": candidate.provider_gateway_enabled}
+
+
 def set_gateway_enabled(store, enabled: bool, *, provider: str = "", config_path=None, relay=None) -> dict:
     if not isinstance(enabled, bool):
         raise ValueError("请指定供应商请求代理的开关状态。")

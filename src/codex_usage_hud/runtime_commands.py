@@ -185,6 +185,7 @@ class GeneralCommandPorts:
     clone_provider_with_bearer_key: Callable[..., Mapping[str, object]] | None = None
     save_config_fast: Callable[[Any], None] | None = None
     gateway_command: Callable[[Mapping[str, object]], Mapping[str, object]] | None = None
+    save_fast_request_settings: Callable[[UserConfig, UserConfig], Mapping[str, object]] | None = None
     validate_provider_exit: Callable[[str], None] | None = None
 
 
@@ -1919,76 +1920,31 @@ def handle_general_command(
                 if ports.save_codex_providers is None:
                     raise RuntimeError("Codex provider 配置写入当前不可用。")
                 codex_provider_result = ports.save_codex_providers(codex_updates)
-            gateway_result: Mapping[str, object] | None = None
-            if action == "save" and config.force_fast_requests and not config.provider_gateway_enabled:
-                if ports.gateway_command is None:
-                    raise RuntimeError("无法启用 Fast：HUD 请求代理当前不可用。")
-                gateway_result = ports.gateway_command(
-                    {"action": "providerGatewayToggle", "enabled": True}
-                )
-                if gateway_result.get("gateway") is not True:
-                    raise RuntimeError("无法启用 Fast：HUD 请求代理未能接管 Codex 请求。")
-                config = replace(config, provider_gateway_enabled=True)
-            sync_fast_force = action == "save" and (
-                config.force_fast_requests != previous_config.force_fast_requests
-                or config.force_fast_requests
-            )
-            if sync_fast_force:
-                if ports.gateway_command is None:
+            if action == "save" and config.force_fast_requests != previous_config.force_fast_requests:
+                if ports.save_fast_request_settings is None:
                     raise RuntimeError("Fast 强制设置当前不可用。")
-                fast_force_result = ports.gateway_command({
-                    "action": "fastRequestForceSet",
-                    "enabled": config.force_fast_requests,
-                })
-                if config.force_fast_requests and fast_force_result.get("gateway") is not True:
-                    try:
-                        gateway_result = ports.gateway_command(
-                            {"action": "providerGatewayToggle", "enabled": True}
-                        )
-                        if gateway_result.get("gateway") is not True:
-                            raise RuntimeError("HUD 请求代理未能接管 Codex 请求。")
-                        config = replace(config, provider_gateway_enabled=True)
-                    except Exception:
-                        try:
-                            ports.gateway_command({
-                                "action": "fastRequestForceSet",
-                                "enabled": previous_config.force_fast_requests,
-                            })
-                        except Exception:
-                            _LOGGER.exception("fast_request_force_rollback_failed")
-                        raise RuntimeError("无法启用 Fast：HUD 请求代理未能接管 Codex 请求。")
-            try:
-                ports.save_config(config)
-            except Exception:
-                if sync_fast_force and ports.gateway_command is not None:
-                    try:
-                        ports.gateway_command({
-                            "action": "fastRequestForceSet",
-                            "enabled": previous_config.force_fast_requests,
-                        })
-                    except Exception:
-                        _LOGGER.exception("fast_request_force_rollback_failed")
-                raise
-            if action == "applyDisplayMode":
-                return _status(
-                    "Renderer 方案已保存；当前会话已处于内嵌显示，无需重启。"
-                )
-            if config.force_fast_requests != previous_config.force_fast_requests:
+                gateway_result = ports.save_fast_request_settings(previous_config, config)
+                needs_reload = bool(gateway_result.get("requiresConfigReload"))
                 if config.force_fast_requests:
                     message = (
                         "Fast 已强制开启；Codex 重新加载配置后，HUD 请求代理会为所有会话的 Responses 请求附加 Fast 档位。"
-                        if gateway_result and gateway_result.get("requiresConfigReload")
+                        if needs_reload
                         else "已强制启用 Fast：HUD 请求代理会为所有会话的 Responses 请求附加 Fast 档位。"
                     )
                 else:
                     message = "已关闭 Fast：HUD 请求代理会为所有会话使用普通服务档位，覆盖旧聊天和 Codex 配置中的 Fast 偏好。"
                 status = runtime_settings.settings_status(
                     message,
-                    restart_visible=bool(gateway_result and gateway_result.get("requiresConfigReload")),
-                    restart_codex=bool(gateway_result and gateway_result.get("requiresConfigReload")),
+                    restart_visible=needs_reload,
+                    restart_codex=needs_reload,
                 )
                 status["forceFastRequests"] = {"enabled": config.force_fast_requests}
                 return status
+            ports.save_config(config)
+            if action == "applyDisplayMode":
+                return _status(
+                    "Renderer 方案已保存；当前会话已处于内嵌显示，无需重启。"
+                )
             if str(command.get("section") or "") == "restReminder":
                 started_at_ms = (
                     settings_payload.get("rest_reminder_timer_started_at_ms")
@@ -2356,6 +2312,16 @@ def _handle_renderer_settings_command(
         context.settings_mtime = None
         context.reload_user_config(include_history=False)
 
+    def save_fast_settings(previous: UserConfig, config: UserConfig) -> Mapping[str, object]:
+        from .provider_gateway_settings import save_fast_request_settings
+
+        if settings_store is None:
+            raise RuntimeError("配置存储当前不可用。")
+        result = save_fast_request_settings(settings_store, previous, config)
+        context.settings_mtime = None
+        context.reload_user_config(include_history=False)
+        return result
+
     def install_update(info: object) -> None:
         installer = download_update_asset(info)
         launch_installer(installer)
@@ -2578,9 +2544,11 @@ def _handle_renderer_settings_command(
 
             return set_fast_request(str(command.get("sessionId") or ""), command.get("enabled"))
         if command.get("action") == "fastRequestForceSet":
-            from .provider_gateway import set_fast_requests_forced
-
-            return set_fast_requests_forced(command.get("enabled"))
+            enabled = command.get("enabled")
+            if not isinstance(enabled, bool):
+                raise ValueError("Fast 强制设置无效。")
+            previous = load_config()
+            return save_fast_settings(previous, replace(previous, force_fast_requests=enabled))
         if command.get("action") == "imageGenerationDraft":
             from .provider_gateway import set_image_draft
 
@@ -2649,6 +2617,7 @@ def _handle_renderer_settings_command(
         codex_cli_launch=launch_cli,
         set_default_provider=set_default_provider,
         gateway_command=gateway_command,
+        save_fast_request_settings=save_fast_settings,
         validate_provider_exit=validate_exit,
         clone_provider_with_bearer_key=clone_provider_with_bearer_key,
         save_config_fast=save_config_fast,

@@ -96,7 +96,7 @@ def retain_historical_prices(
     checked_at: str,
     limit: int = HISTORICAL_SERIES_LIMIT,
 ) -> list[dict[str, object]]:
-    """Carry forward the last known prices for the two prior model series."""
+    """Carry forward inactive models in current and two prior series."""
     active_keys = {str(model).casefold() for model in active_prices}
     active_series = {
         series
@@ -114,7 +114,7 @@ def retain_historical_prices(
                 continue
             model = str(raw.get("model") or "").strip()
             series = model_series(model)
-            if not model or not series or model.casefold() in active_keys or series in active_series:
+            if not model or not series or model.casefold() in active_keys:
                 continue
             if str(raw.get("catalog_status") or "active").casefold() not in {"active", "historical"}:
                 continue
@@ -127,11 +127,11 @@ def retain_historical_prices(
                 candidates[model.casefold()] = candidate
 
     series_order = sorted(
-        {model_series(str(row.get("model") or "")) for row in candidates.values()} - {None},
+        {model_series(str(row.get("model") or "")) for row in candidates.values()} - active_series - {None},
         key=lambda value: _series_sort_key(str(value)),
         reverse=True,
     )
-    retained_series = set(series_order[: max(0, int(limit))])
+    retained_series = active_series | set(series_order[: max(0, int(limit))])
     return [
         row
         for row in candidates.values()

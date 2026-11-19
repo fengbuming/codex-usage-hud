@@ -68,6 +68,10 @@ class PyInstallerCommandTests(unittest.TestCase):
                 msg=command,
             )
             self.assertTrue(
+                any("openai-pricing-snapshot.json" in item for item in command),
+                msg=command,
+            )
+            self.assertTrue(
                 any("codex_usage_hud/assets" in item for item in command),
                 msg=command,
             )

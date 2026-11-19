@@ -187,6 +187,7 @@ def test_snapshot_retains_the_two_previous_numeric_model_series():
     previous = {
         "checked_at": "2026-09-20T00:00:00Z",
         "prices": [
+            {"model": "gpt-6-sol-retired", "input": 2, "output": 10},
             {"model": "gpt-5.6-sol", "input": 4, "output": 20},
             {"model": "gpt-5.5", "input": 5, "output": 30},
             {"model": "gpt-5.4", "input": 2.5, "output": 15},
@@ -201,7 +202,8 @@ def test_snapshot_retains_the_two_previous_numeric_model_series():
         checked_at="2026-09-24T00:00:00Z",
     )
     rows = {row["model"]: row for row in payload["prices"]}
-    assert set(rows) == {"gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.5"}
+    assert set(rows) == {"gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-6-sol-retired", "gpt-5.6-sol", "gpt-5.5"}
+    assert rows["gpt-6-sol-retired"]["catalog_status"] == "historical"
     assert rows["gpt-5.6-sol"]["catalog_status"] == "historical"
     assert rows["gpt-5.6-sol"]["last_seen_at"] == "2026-09-20T00:00:00Z"
     assert "gpt-5.4" not in rows
@@ -419,23 +421,29 @@ def test_merge_pricing_rows_preserves_historical_catalog_status():
     }]
 
 
-def test_bundled_snapshot_preserves_cache_write_and_compares_it():
-    prices, _metadata = fetch_pricing_snapshot(timeout_seconds=0.01)
-    assert "gpt-6-astra" in prices
-    assert "gpt-6-sol" in prices
-    price = prices["gpt-6-astra"]
-    assert price.cache_write == 12.5
+def test_bundled_snapshot_preserves_cache_write_and_compares_it(monkeypatch):
+    def offline(*args, **kwargs):
+        raise OSError("offline")
+
+    monkeypatch.setattr("codex_usage_hud.pricing_sync._download_pricing_snapshot", offline)
+    prices, metadata = fetch_pricing_snapshot()
+    assert metadata["bundled"] is True
+    assert prices["gpt-6-astra"].catalog_status == "historical"
+    assert prices["gpt-6-sol"].catalog_status == "historical"
+    assert prices["gpt-6.2-sol"].catalog_status == "active"
+    price = prices["gpt-6.2-astra"]
+    assert price.cache_write == 10
     changes = classify_price_changes(
-        {"gpt-6-astra": {**price.to_dict(), "cache_write": 0}},
+        {price.model: {**price.to_dict(), "cache_write": 0}},
         [price],
     )
     assert changes == [
         {
-            "model": "gpt-6-astra",
+            "model": "gpt-6.2-astra",
             "field": "cache_write",
             "kind": "increased",
             "local": 0.0,
-            "official": 12.5,
+            "official": 10.0,
         }
     ]
 

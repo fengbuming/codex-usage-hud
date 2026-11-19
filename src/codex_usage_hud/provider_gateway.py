@@ -637,7 +637,15 @@ def _provider_route(path: Path, provider: str, definitions: Mapping) -> dict:
     return route
 
 
-def activate_gateway(path: Path, relay, *, on_config_written: Callable[[str], None] | None = None) -> None:
+def activate_gateway(
+    path: Path,
+    relay,
+    *,
+    on_config_written: Callable[[str], None] | None = None,
+    on_initial_default: Callable[[str], None] | None = None,
+    require_fast_requests: bool = False,
+    original_text: str | None = None,
+) -> None:
     from . import codex_provider_config as config
     from .provider_proxy import with_proxy_metadata
     from .provider_gateway_auth import GATEWAY_PATH_ID, with_gateway_auth
@@ -645,7 +653,7 @@ def activate_gateway(path: Path, relay, *, on_config_written: Callable[[str], No
 
     if not path.exists():
         return
-    original = config._read_text_exact(path)
+    original = original_text if original_text is not None else config._read_text_exact(path)
     parsed = config._parse_toml_mapping(original, strict=True)
     metadata = gateway_metadata(original, include_inactive=True)
     was_gateway = bool(metadata)
@@ -666,15 +674,24 @@ def activate_gateway(path: Path, relay, *, on_config_written: Callable[[str], No
     _provider_route(path, default, definitions)
     # The service stores only the config path; upstream credentials are read
     # for the selected provider at request time, never copied to control state.
-    route = getattr(relay, "gateway_route", relay.route)
-    endpoint = route({"base_url": "http://localhost/v1", "token": metadata["token"], "path_id": GATEWAY_PATH_ID,
-                      "gateway_config": str(path.resolve())}, path)
+    route_metadata = {"base_url": "http://localhost/v1", "token": metadata["token"], "path_id": GATEWAY_PATH_ID,
+                      "gateway_config": str(path.resolve())}
+    if require_fast_requests:
+        from .provider_proxy_service import FAST_REQUESTS_PROTOCOL_VERSION
+
+        endpoint = relay.gateway_route(route_metadata, path, minimum_version=FAST_REQUESTS_PROTOCOL_VERSION)
+    else:
+        route = getattr(relay, "gateway_route", relay.route)
+        endpoint = route(route_metadata, path)
     metadata["endpoint"] = endpoint
     named_endpoint = urlsplit(endpoint).path.split("/")[1:2] == [GATEWAY_PATH_ID]
     metadata["active"] = True
     if not gateway_metadata(original):
-        with _state_db(path) as db:
-            db.execute("INSERT OR REPLACE INTO settings VALUES ('default_provider', ?)", (default,))
+        if on_initial_default is not None:
+            on_initial_default(default)
+        else:
+            with _state_db(path) as db:
+                db.execute("INSERT OR REPLACE INTO settings VALUES ('default_provider', ?)", (default,))
     candidate = original
     newline = config._preferred_newline(original)
     for provider, definition in definitions.items():
