@@ -1,4 +1,5 @@
 from decimal import Decimal
+from html import escape
 from io import BytesIO
 import json
 from threading import Event
@@ -9,6 +10,7 @@ import pytest
 from codex_usage_hud.config import UserConfig
 from codex_usage_hud.pricing_sync import OfficialPrice, classify_price_changes, fetch_pricing_snapshot, merge_pricing_rows, parse_openai_models_html
 from codex_usage_hud.pricing_sync import normalize_local_price_scope, pricing_snapshot_urls
+from codex_usage_hud.pricing_sync import parse_openai_pricing_html
 from codex_usage_hud.pricing_sync_scheduler import PricingSyncScheduler
 from tools import sync_openai_pricing
 from tools.sync_openai_pricing import validate_sources
@@ -20,6 +22,61 @@ def test_parser_reads_model_rows_and_rejects_empty_page():
     assert parsed["gpt-5"].input == 1
     assert str(parsed["gpt-5"].cached_input) == "0.10"
     assert parsed["gpt-5"].output == 2
+
+
+def _text_token_table(tier, *rows):
+    props = {
+        "tier": [0, tier],
+        "collapsedLatestRowCount": [0, 1],
+        "rows": [1, [[1, [[0, cell] for cell in row]] for row in rows]],
+    }
+    return (
+        '<astro-island component-export="TextTokenPricingTables" '
+        f'props="{escape(json.dumps(props), quote=True)}"></astro-island>'
+    )
+
+
+def test_snapshot_generator_reads_collapsed_standard_rows_not_other_tiers(tmp_path, monkeypatch):
+    models_html = (
+        "<span>gpt-6.2-sol</span><div>Input price</div><div>$2</div><div>Output price</div><div>$10</div>"
+        "<span>gpt-6-luna</span><div>Input price</div><div>$0.1</div><div>Output price</div><div>$0.5</div>"
+    )
+    pricing_html = (
+        _text_token_table("flex", ("gpt-6-luna", 0.05, 0.005, 0.0625, 0.25))
+        + _text_token_table("standard", ("gpt-6.2-sol", 2, 0.1, 2.5, 10), ("gpt-6-luna", 0.1, 0.01, 0.125, 0.5))
+        + "<table><tr><th>Model</th><th>Input</th><th>Output</th></tr>"
+        "<tr><td>gpt-6.2-sol</td><td>$2</td><td>$10</td></tr></table>"
+    )
+    monkeypatch.setattr(sync_openai_pricing, "fetch", lambda url: (
+        models_html if url == sync_openai_pricing.OPENAI_MODELS_URL else pricing_html
+    ).encode())
+    output = tmp_path / "snapshot.json"
+    monkeypatch.setattr(sync_openai_pricing, "OUTPUTS", (output,))
+
+    assert sync_openai_pricing.main() == 0
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    active = {row["model"]: row for row in payload["prices"] if row["catalog_status"] == "active"}
+    assert set(active) == {"gpt-6.2-sol", "gpt-6-luna"}
+    luna = active["gpt-6-luna"]
+    assert (luna["input"], luna["cached_input"], luna["cache_write"], luna["output"]) == (0.1, 0.01, 0.125, 0.5)
+
+    pricing_html = _text_token_table("standard", ("gpt-6.2-sol", 2, 0.1, 2.5, 10), ("gpt-6-luna", 0.2, 0.01, 0.125, 0.5))
+    with pytest.raises(ValueError, match="disagree for: gpt-6-luna"):
+        sync_openai_pricing.main()
+    assert json.loads(output.read_text(encoding="utf-8")) == payload
+
+
+def test_pricing_parser_rejects_malformed_standard_rows():
+    html = _text_token_table("standard", ("gpt-6-luna", "0.1", 0.01, 0.125, 0.5))
+    with pytest.raises(ValueError, match="invalid Standard token price"):
+        parse_openai_pricing_html(html)
+
+
+def test_pricing_fetch_rejects_truncated_source(monkeypatch):
+    response = BytesIO(b" " * (2 * 1024 * 1024 + 1))
+    monkeypatch.setattr(sync_openai_pricing, "urlopen", lambda *_args, **_kwargs: response)
+    with pytest.raises(ValueError, match="exceeds 2097152 bytes"):
+        sync_openai_pricing.fetch(sync_openai_pricing.PRICING_URL)
 
 
 def test_scheduler_does_not_poll_until_due_and_uses_failure_backoff():

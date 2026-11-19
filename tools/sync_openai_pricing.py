@@ -15,6 +15,7 @@ sys.path.insert(0, str(ROOT / "src"))
 from codex_usage_hud.pricing_sync import (  # noqa: E402
     OPENAI_MODELS_URL,
     parse_openai_models_html,
+    parse_openai_pricing_html,
     source_hash,
 )
 
@@ -28,8 +29,12 @@ OUTPUTS = (
 
 def fetch(url: str) -> bytes:
     request = Request(url, headers={"Accept": "text/html", "User-Agent": "codex-usage-hud-pricing-sync"})
+    limit = 2 * 1024 * 1024
     with urlopen(request, timeout=30) as response:
-        return response.read(2 * 1024 * 1024 + 1)
+        body = response.read(limit + 1)
+    if len(body) > limit:
+        raise ValueError(f"official pricing source exceeds {limit} bytes: {url}")
+    return body
 
 
 def validate_sources(models: dict[str, object], pricing: dict[str, object]) -> None:
@@ -179,7 +184,7 @@ def main(argv: list[str] | None = None) -> int:
     models_body = fetch(OPENAI_MODELS_URL)
     pricing_body = fetch(PRICING_URL)
     models = parse_openai_models_html(models_body)
-    prices = parse_openai_models_html(pricing_body)
+    prices = parse_openai_pricing_html(pricing_body)
     previous_payloads = tuple(
         payload
         for payload in (

@@ -180,6 +180,79 @@ def parse_openai_models_html(body: str | bytes) -> dict[str, OfficialPrice]:
     return records
 
 
+class _StandardPricingParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.rows: list | None = None
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag != "astro-island":
+            return
+        attributes = dict(attrs)
+        if attributes.get("component-export") != "TextTokenPricingTables":
+            return
+        props = json.loads(attributes.get("props") or "{}", parse_float=Decimal)
+        if not isinstance(props, dict):
+            raise ValueError("official Pricing page has unexpected text-token table props")
+        if props.get("tier") != [0, "standard"]:
+            return
+        if self.rows is not None:
+            raise ValueError("official Pricing page has multiple Standard text-token tables")
+        self.rows = _astro_pricing_value(props.get("rows"), 1)
+        if not isinstance(self.rows, list) or not self.rows:
+            raise ValueError("official Pricing page has no Standard text-token rows")
+
+
+def _astro_pricing_value(value: object, kind: int):
+    if not isinstance(value, list) or len(value) != 2 or value[0] != kind:
+        raise ValueError("official Pricing page has an unexpected Standard table format")
+    return value[1]
+
+
+def _standard_amount(value: object) -> Decimal | None:
+    if value is None or value == "-":
+        return None
+    if type(value) in {int, Decimal}:
+        amount = Decimal(value)
+        if amount.is_finite() and amount >= 0:
+            return amount
+    raise ValueError("official Pricing page has an invalid Standard token price")
+
+
+def parse_openai_pricing_html(body: str | bytes) -> dict[str, OfficialPrice]:
+    """Read all Standard text-token prices, including rows collapsed in the HTML."""
+    raw = body.decode("utf-8", "replace") if isinstance(body, bytes) else body
+    parser = _StandardPricingParser()
+    parser.feed(raw)
+    if parser.rows is None:
+        return parse_openai_models_html(raw)
+
+    prices: dict[str, OfficialPrice] = {}
+    for encoded in parser.rows:
+        row = _astro_pricing_value(encoded, 1)
+        if not isinstance(row, list) or len(row) not in {4, 5}:
+            raise ValueError("official Pricing page has an unexpected Standard text-token row")
+        label, *amounts = (_astro_pricing_value(cell, 0) for cell in row)
+        if isinstance(label, dict):
+            label = _astro_pricing_value(label.get("label"), 0)
+        model_match = _MODEL.match(label) if isinstance(label, str) else None
+        if model_match is None:
+            continue
+        model = model_match.group(0)
+        price_input, cached, *writes, output = map(_standard_amount, amounts)
+        if price_input is None or output is None or model in prices:
+            raise ValueError(f"official Pricing page has invalid or duplicate Standard prices for {model}")
+        prices[model] = OfficialPrice(
+            model=model,
+            input=price_input,
+            cached_input=cached if cached is not None else price_input,
+            cache_write=writes[0] if writes and writes[0] is not None else Decimal("0"),
+            output=output,
+            reasoning=output,
+        )
+    return prices
+
+
 def source_hash(body: str | bytes) -> str:
     data = body if isinstance(body, bytes) else body.encode("utf-8")
     return hashlib.sha256(data).hexdigest()
