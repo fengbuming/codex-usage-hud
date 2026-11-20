@@ -37,6 +37,55 @@ def pair(tmp_path):
     disk.close()
 
 
+def test_search_repairs_index_with_inherited_rollout_segments(pair, tmp_path):
+    old, disk = pair
+    thread_id = "01a1f1fb-c1e1-7000-8000-000000000001"
+    recorder_id = "01a1f253-7d6a-7000-8000-000000000002"
+    latest_id = "01a1f781-d800-7000-8000-000000000003"
+    previous_day = tmp_path / "sessions/2026/11/19"
+    current_day = tmp_path / "sessions/2026/11/20"
+    previous_day.mkdir(parents=True)
+    current_day.mkdir(parents=True)
+    initial = previous_day / f"rollout-2026-11-19T12-06-10-{thread_id}.jsonl"
+    middle = previous_day / f"rollout-2026-11-19T13-42-00-{thread_id}_{recorder_id}.jsonl"
+    latest = current_day / f"rollout-2026-11-20T13-42-56-{thread_id}_{latest_id}.jsonl"
+
+    def record(kind, payload):
+        return (json.dumps({"type": kind, "payload": payload}, ensure_ascii=False) + "\r\n").encode()
+
+    def metadata(base_id=None, end=None):
+        return record("session_meta", {
+            "id": thread_id,
+            "history_mode": "paginated",
+            "history_base": {"thread_id": base_id, "end_byte_offset": end} if base_id else None,
+        })
+
+    def message(text):
+        return record("response_item", {"type": "message", "role": "assistant", "content": text})
+
+    first_page = metadata() + message("已提交 907bcb4")
+    second_page = metadata(thread_id, len(first_page)) + message("intermediate")
+    latest.write_bytes(metadata(recorder_id, len(second_page)) + message("current"))
+    entry = (thread_id, (latest,), "", "", "", "")
+    for index in (old, disk):
+        index.upsert(thread_id, [latest])
+        assert index.search("current")["matches"]
+        assert index.search("907bcb4")["matches"] == []
+
+    # Only the referenced byte prefixes belong to this conversation.
+    initial.write_bytes(first_page + message("excludedfirst"))
+    middle.write_bytes(second_page + message("excludedsecond"))
+    for index in (old, disk):
+        assert index.stale_session_ids([entry]) == {thread_id}
+        index.sync([entry])
+        assert index.stale_session_ids([entry]) == set()
+        assert [match["sessionId"] for match in index.search("907bcb4")["matches"]] == [thread_id]
+        assert index.search("intermediate")["matches"]
+        assert index.search("current")["matches"]
+        assert index.search("excludedfirst")["matches"] == []
+        assert index.search("excludedsecond")["matches"] == []
+
+
 def test_same_results_ranking_tokens_and_find_query(pair, tmp_path):
     old, disk = pair
     texts = [

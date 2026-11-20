@@ -6,7 +6,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 import io
 from pathlib import Path
-from typing import TextIO
+from typing import BinaryIO, TextIO
 
 
 def resolve_rollout_path(path: Path) -> Path:
@@ -30,12 +30,12 @@ def resolve_rollout_path(path: Path) -> Path:
 
 
 @contextmanager
-def open_rollout_text(path: Path) -> Iterator[TextIO]:
-    """Open plain or zstd-compressed rollout data as a streaming text source."""
+def open_rollout_bytes(path: Path) -> Iterator[BinaryIO]:
+    """Open the original JSONL byte stream, including for compressed rollouts."""
 
     path = resolve_rollout_path(Path(path))
     if path.suffix.casefold() != ".zst":
-        with path.open("r", encoding="utf-8", errors="replace") as handle:
+        with path.open("rb") as handle:
             yield handle
         return
 
@@ -45,12 +45,7 @@ def open_rollout_text(path: Path) -> Iterator[TextIO]:
         stdlib_zstd = None
 
     if stdlib_zstd is not None:
-        with stdlib_zstd.open(
-            path,
-            "rt",
-            encoding="utf-8",
-            errors="replace",
-        ) as handle:
+        with stdlib_zstd.open(path, "rb") as handle:
             yield handle
         return
 
@@ -62,11 +57,15 @@ def open_rollout_text(path: Path) -> Iterator[TextIO]:
         ) from exc
 
     with path.open("rb") as compressed:
-        decompressed = zstandard.ZstdDecompressor().stream_reader(compressed)
-        with decompressed:
-            with io.TextIOWrapper(
-                decompressed,
-                encoding="utf-8",
-                errors="replace",
-            ) as handle:
+        with zstandard.ZstdDecompressor().stream_reader(compressed) as decompressed:
+            with io.BufferedReader(decompressed) as handle:
                 yield handle
+
+
+@contextmanager
+def open_rollout_text(path: Path) -> Iterator[TextIO]:
+    """Open plain or zstd-compressed rollout data as a streaming text source."""
+
+    with open_rollout_bytes(path) as stream:
+        with io.TextIOWrapper(stream, encoding="utf-8", errors="replace") as handle:
+            yield handle

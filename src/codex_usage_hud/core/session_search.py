@@ -23,7 +23,8 @@ from threading import RLock
 import time
 from typing import Callable
 
-from .rollout_io import open_rollout_text, resolve_rollout_path
+from .rollout_io import open_rollout_bytes, open_rollout_text, resolve_rollout_path
+from .search_rollout_history import rollout_history_segments
 from .search_tail_cache import SearchTailCache
 
 
@@ -182,6 +183,7 @@ _PARALLEL_PARSE_WORKERS = 8
 # otherwise freeze the session-index UI for the whole parse (reproducible for the
 # same corpus, since the same heavy session is always in the extension set).
 _PARALLEL_PARSE_LARGE_BYTES = 8 * 1024 * 1024
+_RolloutFingerprint = tuple[str, int, int] | tuple[str, int, int, int]
 
 
 @dataclass(frozen=True, slots=True)
@@ -749,33 +751,48 @@ class _RolloutTextState:
         )
 
 
+def _read_search_segment(path: Path, end: int | None) -> Iterator[str]:
+    if end is None:
+        with open_rollout_text(path) as stream:
+            yield from stream
+        return
+    with open_rollout_bytes(path) as stream:
+        remaining = end
+        while remaining > 0:
+            line = stream.readline(remaining)
+            if not line.endswith(b"\n"):
+                break
+            remaining -= len(line)
+            yield line.decode("utf-8", errors="replace")
+
+
 def parse_rollout(paths: Sequence[Path]) -> tuple[str, str, str, tuple[str, ...]]:
     """Read plain or compressed rollout files and extract searchable fields."""
     state = _RolloutTextState()
     for path in paths:
-        try:
-            with open_rollout_text(path) as handle:
-                for raw_line in handle:
-                    if state.exhausted:
-                        break
+        for segment, end in rollout_history_segments(path):
+            try:
+                for raw_line in _read_search_segment(segment, end):
                     state.consume(raw_line)
-                if state.total >= MAX_DOCUMENT_CHARS:
-                    break
-        except (OSError, UnicodeError):
-            continue
+                    if state.exhausted:
+                        return state.result()
+            except (OSError, UnicodeError):
+                continue
     return state.result()
 
 
-def rollout_fingerprints(paths: Sequence[Path]) -> tuple[tuple[str, int, int], ...]:
-    values: list[tuple[str, int, int]] = []
+def rollout_fingerprints(paths: Sequence[Path]) -> tuple[_RolloutFingerprint, ...]:
+    values: list[_RolloutFingerprint] = []
     for path in paths:
-        path = resolve_rollout_path(path)
-        try:
-            stat = path.stat()
-        except OSError:
-            values.append((str(path), -1, -1))
-        else:
-            values.append((str(path), int(stat.st_size), int(stat.st_mtime_ns)))
+        for segment, end in rollout_history_segments(path):
+            try:
+                stat = segment.stat()
+                fingerprint = (str(segment), int(stat.st_size), int(stat.st_mtime_ns))
+            except OSError:
+                fingerprint = (str(segment), -1, -1)
+            # The optional byte boundary distinguishes inherited segments
+            # from the original entry paths when recovering legacy indexes.
+            values.append(fingerprint if end is None else (*fingerprint, end))
     return tuple(values)
 
 
@@ -1183,7 +1200,11 @@ class SessionSearchIndex:
 
     def _parse_changed_rollout(self, paths: Sequence[Path]) -> tuple[str, str, str, tuple[str, ...]]:
         paths = tuple(resolve_rollout_path(path) for path in paths)
-        if len(paths) == 1 and Path(paths[0]).suffix.casefold() == ".jsonl":
+        if (
+            len(paths) == 1
+            and paths[0].suffix.casefold() == ".jsonl"
+            and len(rollout_history_segments(paths[0])) == 1
+        ):
             try:
                 return self._tail_cache.parse(Path(paths[0]), _RolloutTextState)
             except (OSError, UnicodeError):
@@ -1261,7 +1282,8 @@ class SessionSearchIndex:
                             continue
                         connection.execute(f"DELETE FROM {_CURSOR_TABLE} WHERE session_id=?", (session_id,))
                         self._upsert_connection(
-                            connection, session_id, tuple(Path(value[0]) for value in fingerprints),
+                            connection, session_id,
+                            tuple(Path(value[0]) for value in fingerprints if len(value) == 3),
                             title=title, workdir=workdir, model_provider=provider, client_kind=client,
                         )
                     connection.commit()
@@ -1273,14 +1295,14 @@ class SessionSearchIndex:
         return connection
 
     @staticmethod
-    def _encode_fingerprints(value: Sequence[tuple[str, int, int]]) -> str:
+    def _encode_fingerprints(value: Sequence[_RolloutFingerprint]) -> str:
         return json.dumps(
             {"version": _EXTRACTION_VERSION, "files": list(value)},
             ensure_ascii=False, separators=(",", ":"),
         )
 
     @staticmethod
-    def _decode_fingerprints(value: object) -> tuple[tuple[str, int, int], ...]:
+    def _decode_fingerprints(value: object) -> tuple[_RolloutFingerprint, ...]:
         try:
             payload = json.loads(str(value or "[]"))
         except (TypeError, ValueError, json.JSONDecodeError):
@@ -1289,11 +1311,12 @@ class SessionSearchIndex:
             payload = payload.get("files")
         if not isinstance(payload, list):
             return ()
-        result: list[tuple[str, int, int]] = []
+        result: list[_RolloutFingerprint] = []
         for item in payload:
-            if isinstance(item, list) and len(item) == 3:
+            if isinstance(item, list) and len(item) in (3, 4):
                 try:
-                    result.append((str(item[0]), int(item[1]), int(item[2])))
+                    fingerprint = (str(item[0]), int(item[1]), int(item[2]))
+                    result.append(fingerprint if len(item) == 3 else (*fingerprint, int(item[3])))
                 except (TypeError, ValueError):
                     continue
         return tuple(result)
@@ -1788,7 +1811,7 @@ class SessionSearchIndex:
         model_provider: str = "",
         client_kind: str = "",
         parsed: tuple[str, str, str, tuple[str, ...]] | None = None,
-        observed_fingerprints: tuple[tuple[str, int, int], ...] | None = None,
+        observed_fingerprints: tuple[_RolloutFingerprint, ...] | None = None,
     ) -> tuple[bool, SearchDocument | None]:
         canonical = str(session_id or "").strip()
         if not canonical:
