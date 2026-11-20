@@ -3,6 +3,9 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+import pytest
+
+from codex_usage_hud import codex_provider_config
 from codex_usage_hud.config import UserConfig
 from codex_usage_hud.provider_cleanup import (
     delete_provider_for_context,
@@ -188,15 +191,34 @@ def test_delete_provider_for_context_removes_quick_launch_without_price_deletion
     assert result["settingsChanged"] is True
 
 
-def test_delete_provider_for_context_rejects_default_provider() -> None:
-    context = SimpleNamespace(app_provider="custom")
+def test_delete_provider_for_context_ignores_observed_session_provider(tmp_path, monkeypatch) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text(
+        'model_provider = "custom"\n[model_providers.custom]\nname = "Default"\n'
+        '[model_providers.other]\nname = "Other"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(codex_provider_config, "default_codex_config_path", lambda: path)
+    context = SimpleNamespace(app_provider="other")
+    with patch(
+        "codex_usage_hud.provider_cleanup.discover_provider_registry",
+        return_value=SimpleNamespace(app_provider="custom"),
+    ):
+        result = delete_provider_for_context(context, {"provider": "other"})
 
-    with patch("codex_usage_hud.provider_cleanup.delete_provider_config") as delete_config:
-        try:
-            delete_provider_for_context(context, {"provider": "custom"})
-        except ValueError as exc:
-            assert "默认 Codex App Provider" in str(exc)
-        else:  # pragma: no cover - assertion keeps the test readable on old pytest
-            raise AssertionError("default provider deletion should fail")
+    assert result["status"] == "ok"
+    assert "other" not in codex_provider_config.read_provider_definitions(path)
+    assert "custom" in codex_provider_config.read_provider_definitions(path)
 
-    delete_config.assert_not_called()
+
+def test_delete_provider_for_context_rejects_persisted_default_provider(tmp_path, monkeypatch) -> None:
+    path = tmp_path / "config.toml"
+    original = 'model_provider = "custom"\n[model_providers.custom]\nname = "Default"\n'
+    path.write_text(original, encoding="utf-8")
+    monkeypatch.setattr(codex_provider_config, "default_codex_config_path", lambda: path)
+    context = SimpleNamespace(app_provider="other")
+
+    with pytest.raises(ValueError, match="默认 Codex App Provider"):
+        delete_provider_for_context(context, {"provider": "custom"})
+
+    assert path.read_text(encoding="utf-8") == original

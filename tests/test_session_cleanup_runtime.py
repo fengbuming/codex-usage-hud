@@ -340,7 +340,12 @@ def test_session_cleanup_worker_publishes_matching_terminal_state_before_refresh
 
 
 @pytest.mark.parametrize("retained_cli", [0, 1])
-def test_session_cleanup_worker_deletes_provider_history_before_config(monkeypatch, retained_cli) -> None:
+def test_session_cleanup_worker_deletes_provider_history_before_config(tmp_path, monkeypatch, retained_cli) -> None:
+    from codex_usage_hud import codex_provider_config
+
+    path = tmp_path / "config.toml"
+    path.write_text('model_provider = "custom"\n', encoding="utf-8")
+    monkeypatch.setattr(codex_provider_config, "default_codex_config_path", lambda: path)
     delete_config = MagicMock(return_value={"status": "ok", "providerId": "muyuan"})
     monkeypatch.setattr("codex_usage_hud.session_cleanup_runtime.delete_provider_for_context", delete_config)
     manager = MagicMock()
@@ -358,7 +363,7 @@ def test_session_cleanup_worker_deletes_provider_history_before_config(monkeypat
     )
     # 先尝试历史清理，再删除供应商配置；活动 CLI 作为预期保留。
     context = SimpleNamespace(
-        session_cleanup_payload={}, runtime_events=RuntimeEventBus()
+        app_provider="muyuan", session_cleanup_payload={}, runtime_events=RuntimeEventBus()
     )
     worker = SessionCleanupWorker(
         context,
@@ -391,6 +396,39 @@ def test_session_cleanup_worker_deletes_provider_history_before_config(monkeypat
         message = final_operation["providerResult"]["message"]
         assert "已删除 2 条会话记录" in message
         assert ("保留 1 条正在活动的 CLI 会话" in message) is bool(retained_cli)
+    finally:
+        assert worker.close()
+
+
+def test_session_cleanup_worker_rechecks_default_before_deleting_history(tmp_path, monkeypatch):
+    from codex_usage_hud import codex_provider_config
+
+    path = tmp_path / "config.toml"
+    original = 'model_provider = "muyuan"\n'
+    path.write_text(original, encoding="utf-8")
+    monkeypatch.setattr(codex_provider_config, "default_codex_config_path", lambda: path)
+    delete_config = MagicMock()
+    monkeypatch.setattr("codex_usage_hud.session_cleanup_runtime.delete_provider_for_context", delete_config)
+    manager = MagicMock()
+    manager.mark_operation.side_effect = lambda **values: _operation(
+        str(values["request_id"]), str(values["action"]), str(values["state"])
+    )
+    context = SimpleNamespace(
+        app_provider="other", session_cleanup_payload={}, runtime_events=RuntimeEventBus()
+    )
+    worker = SessionCleanupWorker(context, manager, on_deleted=lambda *_args: None)
+    try:
+        worker.enqueue({
+            "action": "providerDelete", "provider": "muyuan",
+            "requestId": "default-delete", "deleteSessionHistory": True,
+        })
+        deadline = time.monotonic() + 2
+        while context.session_cleanup_payload.get("operation", {}).get("state") != "failed":
+            assert time.monotonic() < deadline
+            time.sleep(0.01)
+        manager.delete_provider_history.assert_not_called()
+        delete_config.assert_not_called()
+        assert path.read_text(encoding="utf-8") == original
     finally:
         assert worker.close()
 

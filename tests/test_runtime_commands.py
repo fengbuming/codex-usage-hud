@@ -23,6 +23,31 @@ from codex_usage_hud.config import ModelPrice, ProviderSettings, UserConfig
 TARGET_ID = "10000000-0000-4000-8000-000000000012"
 
 
+@pytest.mark.parametrize("provider", ["custom", "other"])
+def test_provider_delete_history_checks_persisted_default(tmp_path, monkeypatch, provider):
+    from codex_usage_hud import codex_provider_config
+
+    path = tmp_path / "config.toml"
+    path.write_text('model_provider = "custom"\n', encoding="utf-8")
+    monkeypatch.setattr(codex_provider_config, "default_codex_config_path", lambda: path)
+    enqueue = MagicMock(return_value={"requestId": "delete-actual-default"})
+    context = SimpleNamespace(
+        app_provider="other", session_cleanup_worker=SimpleNamespace(enqueue=enqueue),
+    )
+    result = _handle_renderer_settings_command(
+        {"action": "deleteProvider", "provider": provider, "deleteSessionHistory": True},
+        context, MagicMock(), MagicMock(),
+    )
+
+    if provider == "custom":
+        assert result["kind"] == "error"
+        assert "请先切换默认供应商" in result["message"]
+        enqueue.assert_not_called()
+    else:
+        assert result["providerDeletePending"] is True
+        enqueue.assert_called_once()
+
+
 def test_renderer_resume_transfer_target_builds_verified_resume_launch(
     tmp_path: Path,
 ) -> None:

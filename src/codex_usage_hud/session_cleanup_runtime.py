@@ -13,6 +13,7 @@ from threading import Event, Lock, Thread, Timer, current_thread
 import time
 import uuid
 
+from .codex_provider_config import validate_provider_deletion
 from .core.session_cleanup import (
     _canonical_uuid,
     SessionCleanupError,
@@ -745,15 +746,7 @@ class SessionCleanupWorker:
                         .strip()
                         .casefold()
                     )
-                    app_provider = (
-                        str(getattr(self._context, "app_provider", "") or "")
-                        .strip()
-                        .casefold()
-                    )
-                    if provider_id and provider_id == app_provider:
-                        raise SessionCleanupError(
-                            "默认 Codex App Provider 不支持删除供应商配置。"
-                        )
+                    validate_provider_deletion(provider_id)
                     history_snapshot: Mapping[str, object] | None = None
                     history_error = ""
                     if bool(command.get("deleteSessionHistory")):

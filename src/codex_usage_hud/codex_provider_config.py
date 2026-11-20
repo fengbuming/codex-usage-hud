@@ -1637,6 +1637,35 @@ def verify_provider_connectivity(
     return True
 
 
+def validate_provider_deletion(
+    provider_id: str,
+    *,
+    config_path: str | Path | None = None,
+) -> None:
+    """Check the persisted default before deleting config or session history."""
+    provider = str(provider_id or "").strip().casefold()
+    if not PROVIDER_ID_PATTERN.fullmatch(provider):
+        raise ValueError("Provider ID 只能使用字母、数字、连字符或下划线。")
+    path = (
+        Path(config_path).expanduser()
+        if config_path is not None
+        else default_codex_config_path()
+    )
+    if not path.exists():
+        return
+    parsed = _parse_toml_mapping(_read_text_exact(path), strict=True)
+    from .provider_gateway import PROVIDER_ID, gateway_info
+
+    gateway = gateway_info(path)
+    if provider == PROVIDER_ID:
+        raise ValueError("HUD 代理身份不能删除，请先关闭统一代理接管。")
+    default_provider = str(
+        gateway.get("default_provider") or parsed.get("model_provider") or "openai"
+    ).strip().casefold()
+    if provider == default_provider:
+        raise ValueError("默认 Codex App Provider 不支持删除供应商配置，请先切换默认供应商。")
+
+
 def delete_provider_config(
     provider_id: str,
     *,
@@ -1670,14 +1699,7 @@ def delete_provider_config(
         }
     original_text = _read_text_exact(path)
     parsed_config = _parse_toml_mapping(original_text)
-    default_provider = str(parsed_config.get("model_provider") or "").strip().casefold()
-    if default_provider == normalized_provider:
-        raise ValueError("默认 Codex App Provider 不支持删除供应商配置。")
-    from .provider_gateway import PROVIDER_ID, gateway_info
-
-    gateway = gateway_info(path)
-    if normalized_provider == PROVIDER_ID or normalized_provider == gateway.get("default_provider"):
-        raise ValueError("HUD 代理身份和默认供应商不能删除，请先切换默认供应商。")
+    validate_provider_deletion(provider, config_path=path)
 
     raw_providers = parsed_config.get("model_providers")
     provider_env_key = ""
@@ -2009,5 +2031,6 @@ __all__ = [
     "save_provider_configs",
     "send_cli_chat_probe",
     "send_provider_chat_probe",
+    "validate_provider_deletion",
     "verify_provider_connectivity",
 ]

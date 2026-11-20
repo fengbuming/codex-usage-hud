@@ -130,9 +130,6 @@ def delete_provider_for_context(
     provider = normalize_provider(command.get("provider") or command.get("providerId"))
     if not provider:
         raise ValueError("Provider ID 不能为空。")
-    if provider == normalize_provider(getattr(context, "app_provider", "")):
-        raise ValueError("默认 Codex App Provider 不支持删除供应商配置。")
-
     config_result = delete_provider_config(provider)
     pricing_result: dict[str, int] = {
         "modelPrices": 0,

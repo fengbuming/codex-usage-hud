@@ -19,6 +19,7 @@ from codex_usage_hud.provider_proxy import ProviderProxyRelay, DetachedProviderP
 from codex_usage_hud.provider_proxy import _decode_gateway_body
 from codex_usage_hud.provider_registry import discover_provider_registry
 from codex_usage_hud.provider_gateway_auth import GATEWAY_AUTH_HEADER
+from codex_usage_hud.provider_cleanup import delete_provider_for_context
 from codex_usage_hud.core.parser import JsonlSessionParser
 from codex_usage_hud.config import UserConfig
 from codex_usage_hud.usage_insights import _provider_registry_payload
@@ -255,6 +256,27 @@ def test_registry_hides_native_gateway_but_keeps_real_default_and_credentials(ac
     assert registry.entries["beta"].base_url == "https://beta.example/api/v2"
     with pytest.raises(ValueError, match="默认"):
         config.delete_provider_config("beta", config_path=path)
+
+
+def test_delete_observed_provider_uses_live_gateway_default(active):
+    path, _, _ = active
+    gateway.select_provider("beta", config_path=path)
+    # The takeover marker still names alpha, while SQLite now selects beta.
+    assert gateway.gateway_metadata(path.read_text(encoding="utf-8"))["default_provider"] == "alpha"
+    context = SimpleNamespace(app_provider="alpha", user_config=UserConfig.defaults())
+    with patch(
+        "codex_usage_hud.provider_cleanup.discover_provider_registry",
+        side_effect=lambda **kwargs: discover_provider_registry(config_path=path, **kwargs),
+    ):
+        result = delete_provider_for_context(context, {"provider": "alpha"})
+
+    assert result["status"] == "ok"
+    assert "alpha" not in config.read_provider_definitions(path)
+    assert gateway.gateway_info(path)["default_provider"] == "beta"
+    assert gateway.resolve_route(path, headers(B), generation=True)["provider"] == "beta"
+    for provider in ("beta", gateway.PROVIDER_ID):
+        with pytest.raises(ValueError):
+            config.validate_provider_deletion(provider, config_path=path)
 
 
 def test_copy_scrubs_only_source_reasoning_seals_and_rejects_opaque_context(active):

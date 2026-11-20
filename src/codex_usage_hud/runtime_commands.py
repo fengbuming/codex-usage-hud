@@ -26,6 +26,7 @@ from .codex_provider_config import (
     send_cli_chat_probe,
     send_provider_chat_probe,
     set_default_codex_provider,
+    validate_provider_deletion,
 )
 from .codex_cli_launcher import (
     build_codex_cli_command,
@@ -2454,8 +2455,7 @@ def _handle_renderer_settings_command(
             provider = normalize_provider(command.get("provider") or command.get("providerId"))
             if not provider:
                 raise ValueError("Provider ID 不能为空。")
-            if provider == normalize_provider(getattr(context, "app_provider", "")):
-                raise ValueError("默认 Codex App Provider 不支持删除供应商配置。")
+            validate_provider_deletion(provider)
             worker = getattr(context, "session_cleanup_worker", None)
             enqueue = getattr(worker, "enqueue", None)
 
