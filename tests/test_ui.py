@@ -17567,7 +17567,7 @@ class DaemonLifecycleTests(unittest.TestCase):
         )
 
         self.assertGreaterEqual(idle_delay, 1.5)
-        self.assertAlmostEqual(running_delay, 0.5)
+        self.assertAlmostEqual(running_delay, 0.9)
         self.assertAlmostEqual(forced_delay, 0.5)
 
     def test_renderer_file_watch_specs_cover_session_settings_and_mapping(self) -> None:

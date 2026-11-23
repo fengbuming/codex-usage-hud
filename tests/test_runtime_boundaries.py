@@ -116,7 +116,7 @@ def test_runtime_policy_keeps_running_refresh_fast() -> None:
         request_status="running",
         elapsed_seconds=0.2,
         idle_poll_ms=1500,
-    ) == 0.3
+    ) == 0.7
     assert runtime_policies.refresh_delay_seconds(
         poll_ms=500,
         request_status="idle",

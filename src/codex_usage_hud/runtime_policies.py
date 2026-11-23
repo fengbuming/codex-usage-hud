@@ -144,7 +144,13 @@ def refresh_delay_seconds(
 ) -> float:
     fast_seconds = max(0.1, poll_ms / 1000.0)
     target_seconds = fast_seconds
-    if not force_fast and request_status != "running":
+    if request_status == "running" and not force_fast:
+        # Streaming JSONL writes can arrive faster than the renderer can parse
+        # the current-session projection. Keep the live indicator responsive,
+        # while leaving enough time for one CDP update to finish before the
+        # next one is scheduled.
+        target_seconds = max(fast_seconds, 0.9)
+    elif not force_fast and request_status != "running":
         target_seconds = max(fast_seconds, idle_poll_ms / 1000.0)
     return max(0.1, target_seconds - max(0.0, elapsed_seconds))
 
