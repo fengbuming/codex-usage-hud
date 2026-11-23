@@ -18085,7 +18085,7 @@ class DaemonLifecycleTests(unittest.TestCase):
                 force_fast=False,
             )
         )
-        self.assertFalse(
+        self.assertTrue(
             runtime_orchestration._renderer_event_idle_wait_enabled(
                 file_events,
                 snapshot,

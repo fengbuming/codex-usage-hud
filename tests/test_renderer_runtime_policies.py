@@ -117,6 +117,18 @@ def test_policy_idle_wait_adapter_only_wakes_for_event_driven_idle_state() -> No
     )
 
 
+def test_policy_keeps_running_event_wait_after_force_fast_wake() -> None:
+    file_events = SimpleNamespace(event_driven=True)
+    running = SimpleNamespace(request=SimpleNamespace(status="running"))
+    assert renderer_runtime_policies._renderer_event_idle_wait_enabled(
+        file_events,
+        running,
+        {"phase": "idle"},
+        1.0,
+        force_fast=True,
+    )
+
+
 def test_policy_idle_wait_disabled_while_budget_is_unmeasured() -> None:
     """A pending cold-start budget must not wait a full idle interval."""
     file_events = SimpleNamespace(event_driven=True)

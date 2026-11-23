@@ -317,7 +317,15 @@ def _renderer_event_idle_wait_enabled(
     force_fast: bool,
 ) -> bool:
     del delay
-    if file_events is None or not file_events.event_driven or force_fast:
+    if file_events is None or not file_events.event_driven:
+        return False
+    request = getattr(snapshot, "request", None)
+    request_running = str(getattr(request, "status", "") or "") == "running"
+    # A native session watcher is authoritative for streaming JSONL writes.
+    # Keep the event wait even after a force-fast wake. The event has already
+    # been consumed, and another write will wake the loop again. The short
+    # polling fallback remains active only when the watcher is degraded.
+    if force_fast and not request_running:
         return False
     # A cold-start budget scan leaves the top bar parked on the "今日 计算中…"
     # placeholder. The long idle wait must not extend that placeholder past the
