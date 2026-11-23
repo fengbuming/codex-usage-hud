@@ -914,6 +914,7 @@ TEXT = r"""
         ctx.observers.clear("active_session");
         if (!container && !header && !conversation) return false;
         window[activeSessionObserverName] = ctx.observers.set("active_session", new MutationObserver(() => {
+          if (document.hidden) return;
           scheduleActiveSessionReport("active-session-dom");
         }));
         if (container) window[activeSessionObserverName].observe(container, {
@@ -1033,6 +1034,7 @@ TEXT = r"""
         delete window[activeSessionDraftTimerName];
         delete window[activeSessionSendFollowupTimersName];
         delete window[activeSessionComposerHandlerName];
+        delete window[activeSessionVisibilityHandlerName];
         delete window[activeSessionClickHandlerName];
         delete window[activeSessionHistoryPatchName];
         delete window[activeSessionLastSignatureName];
@@ -1124,6 +1126,18 @@ TEXT = r"""
           if (!composerBadgeEnabled) {
             activeSessionScope.listen(document, "keydown", keydown, true);
           }
+        }
+        if (!window[activeSessionVisibilityHandlerName]) {
+          window[activeSessionVisibilityHandlerName] = () => {
+            if (document.hidden) return;
+            refreshActiveSessionObserver();
+            scheduleActiveSessionReport("visibility");
+          };
+          activeSessionScope.listen(
+            document,
+            "visibilitychange",
+            window[activeSessionVisibilityHandlerName],
+          );
         }
         installActiveSessionHistoryPatch();
         startActiveSessionBootstrapObserver();

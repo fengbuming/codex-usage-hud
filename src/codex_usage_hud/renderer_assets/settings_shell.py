@@ -9718,6 +9718,11 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
         if (document.body) {
           const observer = ctx.observers.set("codex_cli_quick_launch_menu", new MutationObserver((records) => {
             if (!document.getElementById(rootId)) return;
+            // Chromium can continue delivering body mutations while the
+            // Desktop page is hidden. Defer the menu scan until the page is
+            // visible again so streamed chat output cannot compete with the
+            // hidden renderer.
+            if (document.hidden) return;
             syncCodexCliQuickLaunchMenu();
             observeCodexProviderMismatchErrors(records);
           }));
@@ -9729,6 +9734,11 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
             attributeFilter: ["data-mounted", "data-visible", "data-removed"],
           });
         }
+        ctx.lifecycle.listen("codex_cli_quick_launch_menu", document, "visibilitychange", () => {
+          if (document.hidden || !document.getElementById(rootId)) return;
+          syncCodexCliQuickLaunchMenu();
+          observeCodexProviderMismatchErrors();
+        });
         syncCodexCliQuickLaunchMenu();
         observeCodexProviderMismatchErrors();
       }

@@ -78,6 +78,7 @@ const settingsProviderName = "__codexUsageHudSettingsProvider";
   const activeSessionDraftTimerName = "__codexUsageHudActiveSessionDraftTimer";
   const activeSessionSendFollowupTimersName = "__codexUsageHudActiveSessionSendTimers";
   const activeSessionComposerHandlerName = "__codexUsageHudActiveSessionComposerHandler";
+  const activeSessionVisibilityHandlerName = "__codexUsageHudActiveSessionVisibilityHandler";
   const activeSessionClickHandlerName = "__codexUsageHudActiveSessionClick";
   const activeSessionHistoryPatchName = "__codexUsageHudActiveSessionHistoryPatch";
   const activeSessionCanonicalIdName = "__codexUsageHudActiveSessionCanonicalId";
@@ -18682,6 +18683,11 @@ searchDraft: String(_sessionCleanupFilterSnapshot.search || ""),
         if (document.body) {
           const observer = ctx.observers.set("codex_cli_quick_launch_menu", new MutationObserver((records) => {
             if (!document.getElementById(rootId)) return;
+            // Chromium can continue delivering body mutations while the
+            // Desktop page is hidden. Defer the menu scan until the page is
+            // visible again so streamed chat output cannot compete with the
+            // hidden renderer.
+            if (document.hidden) return;
             syncCodexCliQuickLaunchMenu();
             observeCodexProviderMismatchErrors(records);
           }));
@@ -18693,6 +18699,11 @@ searchDraft: String(_sessionCleanupFilterSnapshot.search || ""),
             attributeFilter: ["data-mounted", "data-visible", "data-removed"],
           });
         }
+        ctx.lifecycle.listen("codex_cli_quick_launch_menu", document, "visibilitychange", () => {
+          if (document.hidden || !document.getElementById(rootId)) return;
+          syncCodexCliQuickLaunchMenu();
+          observeCodexProviderMismatchErrors();
+        });
         syncCodexCliQuickLaunchMenu();
         observeCodexProviderMismatchErrors();
       }
@@ -30858,6 +30869,7 @@ searchDraft: String(_sessionCleanupFilterSnapshot.search || ""),
         ctx.observers.clear("active_session");
         if (!container && !header && !conversation) return false;
         window[activeSessionObserverName] = ctx.observers.set("active_session", new MutationObserver(() => {
+          if (document.hidden) return;
           scheduleActiveSessionReport("active-session-dom");
         }));
         if (container) window[activeSessionObserverName].observe(container, {
@@ -30977,6 +30989,7 @@ searchDraft: String(_sessionCleanupFilterSnapshot.search || ""),
         delete window[activeSessionDraftTimerName];
         delete window[activeSessionSendFollowupTimersName];
         delete window[activeSessionComposerHandlerName];
+        delete window[activeSessionVisibilityHandlerName];
         delete window[activeSessionClickHandlerName];
         delete window[activeSessionHistoryPatchName];
         delete window[activeSessionLastSignatureName];
@@ -31068,6 +31081,18 @@ searchDraft: String(_sessionCleanupFilterSnapshot.search || ""),
           if (!composerBadgeEnabled) {
             activeSessionScope.listen(document, "keydown", keydown, true);
           }
+        }
+        if (!window[activeSessionVisibilityHandlerName]) {
+          window[activeSessionVisibilityHandlerName] = () => {
+            if (document.hidden) return;
+            refreshActiveSessionObserver();
+            scheduleActiveSessionReport("visibility");
+          };
+          activeSessionScope.listen(
+            document,
+            "visibilitychange",
+            window[activeSessionVisibilityHandlerName],
+          );
         }
         installActiveSessionHistoryPatch();
         startActiveSessionBootstrapObserver();

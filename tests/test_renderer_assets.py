@@ -754,6 +754,25 @@ def test_active_session_reports_native_current_work_disclosure_title() -> None:
     assert "aria-expanded" in observer
 
 
+def test_renderer_defers_hidden_mutation_work_until_visibility_returns() -> None:
+    script = renderer_script._RENDERER_HUD_SCRIPT_TEMPLATE
+
+    active_observer = script.split(
+        "function refreshActiveSessionObserver()", 1
+    )[1].split("function startActiveSessionBootstrapObserver()", 1)[0]
+    assert "if (document.hidden) return;" in active_observer
+    assert 'scheduleActiveSessionReport("visibility")' in script
+    assert "activeSessionVisibilityHandlerName" in script
+
+    menu_observer = script.split(
+        'new MutationObserver((records) => {', 1
+    )[1].split(
+        'observer?.observe(document.body, {', 1
+    )[0]
+    assert "if (document.hidden) return;" in menu_observer
+    assert 'document, "visibilitychange"' in script
+
+
 def test_native_work_titles_recognize_progress_and_preserve_finished_headings() -> None:
     script = renderer_script._RENDERER_HUD_SCRIPT_TEMPLATE
     start = script.index("function activeSessionDisclosureTitleLine(value)")
