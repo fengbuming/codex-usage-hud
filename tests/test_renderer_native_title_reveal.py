@@ -278,6 +278,7 @@ def test_toolbar_mutations_invalidate_reveal_without_reflowing_anchor() -> None:
     ]
     script = r"""
 const assert = require('node:assert/strict');
+const document = {hidden: false};
 const rootId = 'hud';
 const runtimeIsCurrent = () => true, ctx = {lifecycle: {active: () => true}};
 const cachedHeaderNode = null, cachedComposerNode = null;

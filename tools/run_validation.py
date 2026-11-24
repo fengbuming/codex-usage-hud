@@ -28,6 +28,8 @@ DEFAULT_FOCUSED_TESTS = (
     "tests/test_renderer_provider_resume.py",
     "tests/test_renderer_leaf_domains.py",
     "tests/test_renderer_assets.py",
+    "tests/test_renderer_native_title_reveal.py::test_toolbar_mutations_invalidate_reveal_without_reflowing_anchor",
+    "tests/test_renderer_new_chat_position.py::test_header_control_changes_reflow_manual_hud_without_polling",
     "tests/test_architecture.py",
 )
 

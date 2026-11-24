@@ -172,6 +172,7 @@ def test_header_control_changes_reflow_manual_hud_without_polling() -> None:
     ]
     run_node(r"""
 const assert = require('node:assert/strict');
+const document = {hidden: false};
 const rootId = 'hud';
 const runtimeIsCurrent = () => true, ctx = {lifecycle: {active: () => true}};
 const elementFromMutationNode = node => node;
