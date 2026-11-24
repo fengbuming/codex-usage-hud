@@ -65,6 +65,7 @@ def test_dom_navigation_starts_only_one_settling_burst_per_pending_identity() ->
     run_js(r'''
 const assert = require('node:assert/strict');
 const window = {}, activeSessionTimerName = 'report';
+const document = {hidden:false};
 let pendingReconcileKey = '', callback, selected = {pendingSession:true, rendererSessionId:'raw-a', title:'A'};
 const bursts = [], posted = [];
 const ctx = {lifecycle:{clearTimeout(){}, timeout(_owner, fn){callback=fn;return 1;}}};
@@ -73,6 +74,15 @@ const postActiveSession = (_reason, ref) => posted.push(ref);
 const refreshActiveSessionObserver = () => {};
 const scheduleActiveSessionSendFollowup = (reason, id) => bursts.push({reason,id});
 ''' + schedule + r'''
+document.hidden=true;
+scheduleActiveSessionReport('payload');
+assert.equal(callback, undefined, 'hidden payloads do not schedule conversation scans');
+document.hidden=false;
+scheduleActiveSessionReport('payload');
+document.hidden=true;
+callback();
+assert.equal(posted.length, 0, 'scheduled scan skips work if its window has since been hidden');
+document.hidden=false;
 scheduleActiveSessionReport('active-session-dom'); callback();
 assert.deepEqual(bursts, [{reason:'active-session-dom',id:'raw-a'}]);
 for (let i=0;i<5;i++) { scheduleActiveSessionReport('payload'); callback(); }

@@ -2095,6 +2095,17 @@ TEXT = r"""
   window[scrollHandlerName] = () => {};
   ctx.lifecycle.listen("layout", window, "resize", window[resizeHandlerName]);
   ctx.lifecycle.listen("layout", window, "scroll", window[scrollHandlerName], true);
+  ctx.lifecycle.listen("layout", document, "visibilitychange", () => {
+    if (document.hidden) {
+      ctx.frames.cancel("layout");
+      for (const timer of window[settleTimerName] || []) ctx.lifecycle.clearTimeout(timer);
+      window[settleTimerName] = [];
+      return;
+    }
+    invalidateHeaderAnchor();
+    invalidateComposerAnchor();
+    scheduleForPanels(Object.keys(PANEL), { invalidateTop: true });
+  });
   modelPickerDomain.install();
   themeDomain.install();
   diagnosticsDomain.install();

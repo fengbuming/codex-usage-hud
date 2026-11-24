@@ -40,7 +40,8 @@ function readActiveSessionRef() {return selectedRef;}
 function hudSettingsFromPayload() {return settings;}
 function providerDisplayName(_, provider) {return provider;}
 function escapeHtml(value) {return String(value);}
-function visible(node) {return node.shown !== false;}
+let layoutReads=0, walkedNodes=0;
+function visible(node) {layoutReads++;return node.shown !== false;}
 function typedSettingsRequestId() {return 'switch-' + (++serial);}
 const input={value:'Please continue', innerHTML:'Please continue'};
 const button={isConnected:true,click(){retryCount++;capture();}};
@@ -52,6 +53,11 @@ function makeLayer() {return {dataset:{},isConnected:true,innerHTML:'', handlers
   setAttribute(){}, querySelector(key){return {addEventListener:(_,fn)=>this.handlers[key]=fn};},
   remove(){layers.delete(this);this.isConnected=false;}};}
 const document={createElement:makeLayer, body:{appendChild(node){layers.add(node);}}};
+document.createTreeWalker = node => {
+  const nodes = node.testNodes || [{nodeType:3,nodeValue:node.textContent || ''}];
+  let index=0;
+  return {nextNode(){walkedNodes++;return nodes[index++] || null;}};
+};
 async function codexBridgeRequest(method) {
   reads.push(method);
   if (delayedRead) await delayedRead;
@@ -101,6 +107,20 @@ function reset() {
   assert.equal(parseCodexProviderMismatch('network error'),null);
   assert.equal(parseCodexProviderMismatch('This chat uses custom, but your current provider is custom. Switch to custom to continue.'),null);
   const text='提交消息出错 This chat uses custom, but your current provider is crab-ai. Switch to custom to continue.';
+  const initialLayoutReads=layoutReads;
+  for(let i=0;i<100;i++) observe(banner('ordinary streaming output '+i));
+  const large=banner('');
+  Object.defineProperty(large,'textContent',{get(){throw new Error('must not flatten ancestor text');}});
+  large.testNodes=[{nodeType:3,nodeValue:'x'.repeat(1501)}];
+  observe(large);
+  large.testNodes=Array.from({length:10000},()=>({nodeType:1}));
+  const beforeWalk=walkedNodes;observe(large);
+  assert(walkedNodes-beforeWalk<=97,'bound empty/deep subtree traversal too');
+  assert.equal(layoutReads,initialLayoutReads,'ordinary output must not force layout');
+  const nested=banner('');nested.testNodes=[{nodeType:1},{nodeType:3,nodeValue:text.slice(0,35)},
+    {nodeType:1},{nodeType:3,nodeValue:text.slice(35)}];
+  observe(nested);assert(codexProviderMismatchState.layer,'nested native error text remains detectable');
+  reset();
   for(const options of [{hud:true},{shown:false}]) observe(banner(text,options));
   assert.equal(codexProviderMismatchState.layer,null,'quoted conversation text/hidden/HUD content cannot prompt');
   let toast=banner(text); observe(toast);

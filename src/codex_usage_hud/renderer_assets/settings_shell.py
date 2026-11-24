@@ -9101,6 +9101,22 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
         }
       }
 
+      function codexProviderMismatchCandidateText(node) {
+        // Never flatten a conversation ancestor's textContent for each token.
+        // Bound both text size and traversal work, including empty elements.
+        const walker = document.createTreeWalker(node, 0xffffffff);
+        let text = "";
+        let visited = 0;
+        for (let child = walker.nextNode(); child; child = walker.nextNode()) {
+          if (++visited > 96) return "";
+          if (child.nodeType !== 3) continue;
+          const value = child.nodeValue || "";
+          if (text.length + value.length > 1500) return "";
+          text += value;
+        }
+        return text;
+      }
+
       function observeCodexProviderMismatchErrors(records = null) {
         const state = codexProviderMismatchState;
         if (state.context && codexProviderMismatchThreadId() !== state.context.threadId && !state.requestId) {
@@ -9138,11 +9154,14 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
         });
         else document.querySelectorAll(selector).forEach((node) => candidates.add(node));
         for (const node of candidates) {
-          if (!visible(node) || node.closest?.("#" + rootId + ", [data-codex-provider-migrate-layer], [data-codex-provider-switch-feedback]")) continue;
-          const text = String(node.textContent || "");
-          if (text.length > 1500 || state.seen.get(node) === text) continue;
+          if (node.closest?.("#" + rootId + ", [data-codex-provider-migrate-layer], [data-codex-provider-switch-feedback]")) continue;
+          const text = codexProviderMismatchCandidateText(node);
+          if (!text || state.seen.get(node) === text) continue;
           const mismatch = parseCodexProviderMismatch(text);
           if (!mismatch) { state.seen.delete(node); continue; }
+          // Geometry reads can force synchronous layout during streaming.
+          // Ordinary conversation mutations must never reach this point.
+          if (!visible(node)) continue;
           const nativeToast = node.matches?.("[data-sonner-toast]") && node.closest?.(".codex-toast-area");
           if (!nativeToast) {
             const rect = node.getBoundingClientRect?.();
@@ -9577,6 +9596,7 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
       }
 
       function syncCodexCliQuickLaunchMenu() {
+        if (document.hidden) return;
         const providers = codexCliQuickLaunchMenuProviders();
         const menubar = codexDesktopApplicationMenu();
         const existing = document.querySelector('[data-codex-usage-hud-cli-menu-toggle="true"]');

@@ -724,7 +724,9 @@ TEXT = r"""
 
       function scheduleActiveSessionReport(reason = "event") {
         ctx.lifecycle.clearTimeout(window[activeSessionTimerName] || 0);
+        if (document.hidden) return;
         window[activeSessionTimerName] = ctx.lifecycle.timeout("active_session", () => {
+          if (document.hidden) return;
           const ref = readActiveSessionRef();
           postActiveSession(reason, ref);
           refreshActiveSessionObserver();
@@ -967,6 +969,7 @@ TEXT = r"""
         if (window[activeSessionBootstrapObserverName] || refreshActiveSessionObserver()) return;
         if (!document.body) return;
         window[activeSessionBootstrapObserverName] = ctx.observers.set("active_session_bootstrap", new MutationObserver(() => {
+          if (document.hidden) return;
           if (refreshActiveSessionObserver()) {
             ctx.observers.clear("active_session_bootstrap");
             delete window[activeSessionBootstrapObserverName];
@@ -1140,6 +1143,7 @@ TEXT = r"""
           );
         }
         installActiveSessionHistoryPatch();
+        if (document.hidden) return;
         startActiveSessionBootstrapObserver();
         scheduleActiveSessionReport("payload");
       }

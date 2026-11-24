@@ -71,7 +71,7 @@ def test_budget_badge_hides_and_remeasures_after_rail_or_font_resize() -> None:
     factory = BUDGET.split("  const budgetDomain = ctx.domains.register(", 1)[0]
     script = r'''
 const assert = require('node:assert/strict');
-let resizeCallback, fontCallback, width = 260, wideFont = false;
+let resizeCallback, fontCallback, visibilityCallback, width = 260, wideFont = false;
 let text = 'Full $75', pad = '';
 let measurements = 0;
 const copy = {get textContent(){return text},set textContent(value){text=value}};
@@ -99,7 +99,11 @@ global.ResizeObserver = class {constructor(callback){resizeCallback=callback}obs
 global.getComputedStyle = () => ({right:'6px'});
 const ctx = {
   observers:{set(_name,observer){return observer},clear(){}},
-  lifecycle:{listen(_owner,_target,_type,callback){fontCallback=callback;return ()=>{}}},
+  lifecycle:{listen(_owner,_target,type,callback){
+    if (type === 'loadingdone') fontCallback=callback;
+    if (type === 'visibilitychange') visibilityCallback=callback;
+    return ()=>{};
+  }},
   frames:{cancel(){}},
 };
 ''' + factory + r'''
@@ -122,7 +126,12 @@ resizeCallback([{target:rail}]);
 assert.equal(text, 'Full $75');
 assert.equal(badge.style.display, '');
 wideFont = true;
-fontCallback();
+document.hidden = true;
+const beforeHidden = measurements;
+resizeCallback([{target:rail}]); fontCallback(); visibilityCallback();
+assert.equal(measurements, beforeHidden, 'hidden rails do not trigger layout');
+document.hidden = false;
+visibilityCallback();
 assert.equal(text, '$75');
 assert.equal(badge.style.display, '');
 console.log('budget-badge-resize-ok');
@@ -901,9 +910,12 @@ fiber.memoizedProps = modernProps;
 const modelContainer = new FakeContainer([defaultItem, nativeItem]);
 const slider = new FakeNode("", {{ role: "menuitem", "data-reasoning-slider": "true" }});
 const reasoningContainer = new FakeContainer([slider]);
+const patchTimers = new Set();
+let nextPatchTimer = 0, pickerQueries = 0;
 global.window = {{ CSS: {{ escape: String }} }};
 global.document = {{
   querySelectorAll(selector) {{
+    pickerQueries++;
     if (selector.includes('[role="menuitem"]')) return modelContainer.children;
     if (selector.includes("data-codex-usage-hud")) return [...modelContainer.children, ...reasoningContainer.children].filter((node) => node.getAttribute("data-codex-usage-hud-model-option") || node.getAttribute("data-codex-usage-hud-reasoning-option"));
     return [];
@@ -914,7 +926,8 @@ const ctx = {{
   frames: {{ cancel() {{}}, schedule(_owner, callback) {{ callback(); return 1; }} }},
   lifecycle: {{
     listen(_owner, _target, type, callback) {{ listeners[type] = callback; }},
-    clearTimeout() {{}}, timeout() {{ return 1; }},
+    clearTimeout(id) {{ patchTimers.delete(id); }},
+    timeout() {{ patchTimers.add(++nextPatchTimer); return nextPatchTimer; }},
   }},
 }};
 const normalize = (value) => String(value || "").replace(/\\s+/g, " ").trim();
@@ -945,6 +958,17 @@ assert.ok(ultra);
 listeners.click({{ type: "click", target: ultra, preventDefault() {{}}, stopPropagation() {{}} }});
 assert.deepEqual(selectCalls, [["catalog-a", "low"], ["catalog-a", "ultra"]]);
 assert.equal(completed, 2);
+assert.equal(patchTimers.size, 3);
+document.hidden = true;
+listeners.visibilitychange();
+const beforeHidden = pickerQueries;
+for (let i = 0; i < 20; i++) domain.apply();
+assert.equal(pickerQueries, beforeHidden);
+assert.equal(patchTimers.size, 0);
+document.hidden = false;
+listeners.visibilitychange();
+assert.ok(pickerQueries > beforeHidden);
+assert.equal(patchTimers.size, 0);
 console.log("modern-model-picker-ok");
 """
     completed = subprocess.run(

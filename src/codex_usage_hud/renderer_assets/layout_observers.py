@@ -3,7 +3,7 @@
 TEXT = r"""
       function syncPosition(names = Object.keys(PANEL), { forceAutoFit = false } = {}) {
         if (!runtimeIsCurrent() || !ctx.lifecycle.active()) return;
-        if (layoutGeometryFrozen()) return;
+        if (document.hidden || layoutGeometryFrozen()) return;
         const root = document.getElementById(rootId);
         if (!root) return;
         positionStartupBubble(root);
@@ -75,6 +75,7 @@ TEXT = r"""
       }
 
       function refreshTopContentFit({ refreshProgress = true, forceCollapsed = false } = {}) {
+        if (document.hidden) return;
         const panel = document.querySelector(`#${rootId} [data-panel="top"]`);
         if (!panel) return;
         if (panel.dataset.awaitingChrome === "true") return;
@@ -164,7 +165,7 @@ TEXT = r"""
 
       function syncPositionSettled(names = Object.keys(PANEL), options = {}) {
         if (!runtimeIsCurrent() || !ctx.lifecycle.active()) return;
-        if (layoutGeometryFrozen()) return;
+        if (document.hidden || layoutGeometryFrozen()) return;
         for (const timer of (window[settleTimerName] || [])) ctx.lifecycle.clearTimeout(timer);
         window[settleTimerName] = [
           ctx.lifecycle.timeout("layout_settle", () => {
@@ -187,6 +188,7 @@ TEXT = r"""
         pendingForceAutoFit = pendingForceAutoFit || forceAutoFit;
         if (!pendingSyncPanels) pendingSyncPanels = new Set();
         for (const name of panelNames) pendingSyncPanels.add(name);
+        if (document.hidden) return;
         ctx.frames.cancel("layout");
         window[rafName] = ctx.frames.schedule("layout", () => {
           if (!runtimeIsCurrent() || !ctx.lifecycle.active()) return;
@@ -330,6 +332,7 @@ TEXT = r"""
 
       function handleLayoutMutations(mutations) {
         if (!runtimeIsCurrent() || !ctx.lifecycle.active()) return;
+        if (document.hidden) return;
         const headerNode = cachedHeaderNode;
         const composerNode = cachedComposerNode;
         let touchesHeaderTitle = false;
@@ -641,6 +644,7 @@ TEXT = r"""
           let signature = horizontalLayoutSignature(headerNode, composerNode);
           window[resizeObserverName] = ctx.observers.set("layout_resize", new ResizeObserver(() => {
             if (!runtimeIsCurrent() || !ctx.lifecycle.active()) return;
+            if (document.hidden) return;
             const next = horizontalLayoutSignature(headerNode, composerNode);
             if (next === signature) return;
             signature = next;
@@ -672,6 +676,7 @@ TEXT = r"""
         if (window[bootstrapObserverName] || !document.body) return;
         window[bootstrapObserverName] = ctx.observers.set("layout_bootstrap", new MutationObserver(() => {
           if (!runtimeIsCurrent() || !ctx.lifecycle.active()) return;
+          if (document.hidden) return;
           invalidateHeaderAnchor();
           invalidateComposerAnchor();
           const headerNode = conversationHeaderElement();

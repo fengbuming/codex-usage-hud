@@ -2801,6 +2801,8 @@ TEXT = r"""
     }
 
     let installed = false;
+    let pendingSessionView = null;
+    let stopSessionVisibilityWatch = null;
     let activeActivityScroll = null;
     let activityScrollSerial = 0;
     const numericTokenRe = /\$?\d+(?:,\d{3})*(?:\.\d+)?(?:[kM%])?/g;
@@ -2809,11 +2811,39 @@ TEXT = r"""
     function install() {
       if (installed) return false;
       installed = true;
+      stopSessionVisibilityWatch = ctx.lifecycle.listen("session_view_visibility", document, "visibilitychange", () => {
+        if (document.hidden || !pendingSessionView) return;
+        const pending = pendingSessionView;
+        pendingSessionView = null;
+        const root = document.getElementById(rootId);
+        if (!root) return;
+        // Only the newest projection survives background streaming. Rebuild
+        // full details if any deferred update changed them, then apply the
+        // final lightweight selection when that was the last update.
+        if (pending.full) applyCurrentSessionPayload(root, pending.payload);
+        if (!pending.full || pending.kind === "sessionSwitch") {
+          applySessionSwitchPayload(root, pending.payload);
+        }
+      });
       return true;
     }
 
     function apply(root, payload, kind = "currentSession") {
       if (!installed) install();
+      // Keep initial mounting synchronous for startup acknowledgement. Once
+      // mounted, hidden windows need state updates, not request-row DOM churn.
+      if (document.hidden && root?.dataset?.hudReady === "true") {
+        pendingSessionView = {
+          payload: payload || {},
+          kind,
+          full: kind === "currentSession" || !!pendingSessionView?.full,
+        };
+        return;
+      }
+      if (pendingSessionView?.full && kind === "sessionSwitch") {
+        applyCurrentSessionPayload(root, payload || {});
+      }
+      pendingSessionView = null;
       if (kind === "sessionSwitch") applySessionSwitchPayload(root, payload || {});
       else applyCurrentSessionPayload(root, payload || {});
     }
@@ -2821,6 +2851,9 @@ TEXT = r"""
     function dispose() {
       const wasInstalled = installed;
       installed = false;
+      pendingSessionView = null;
+      stopSessionVisibilityWatch?.();
+      stopSessionVisibilityWatch = null;
       cancelSpeedTitleTimeouts();
       displayedSpeedTitle = 0;
       currentSpeedValue = null;

@@ -153,6 +153,7 @@ DOM_PROBE_SCRIPT = r"""
     return text.length <= limit ? text : `${text.slice(0, Math.max(0, limit - 3))}...`;
   };
   const appErrorText = () => {
+    if (document.hidden) return "";
     const errorSelectors = [
       "[role='alert']",
       "[role='status']",

@@ -45,13 +45,14 @@ const px = v => `${v}px`;
 const noop = () => {};
 const resetNativeTitleReveal = noop, invalidateNativeTitleReveal = noop;
 const positionStartupBubble = noop, positionRestReminderBubble = noop;
-const applyPanelStates = noop, refreshAllMarquees = noop;
+let layoutPasses = 0;
+const applyPanelStates = () => { layoutPasses++; }, refreshAllMarquees = noop;
 const budgetDomain = {measureCollapsedProgressStrip: () => ({clipped: false})};
 const refreshLayoutObservers = noop, startBootstrapObserver = noop;
 const desktopChromeMissing = () => false;
 const panels = Object.fromEntries(Object.keys(PANEL).map(name => [name, {dataset: {panel: name}, style: {}, querySelector: () => null}]));
 const root = {querySelector: s => panels[s.match(/data-panel="(.*?)"/)?.[1]]};
-global.document = {getElementById: () => root, querySelector: () => null};
+global.document = Object.assign(new EventProbe(), {hidden: false, getElementById: () => root, querySelector: () => null});
 const states = {top: {}, request: {}};
 const getPanelState = name => states[name];
 const visible = () => true;
@@ -115,6 +116,19 @@ assert.equal(rect('top').left + rect('top').width, chromeWidth - 100);
 // No perpetual polling, and scrolling/typing cannot move these panels.
 window.dispatch('scroll'); window.dispatch('input');
 assert.equal(frames.size, 0); assert.equal(timers.size, 0);
+// Hide with resize work pending, then receive more updates while hidden.
+window.dispatch('resize');
+const beforeHide = layoutPasses;
+document.hidden = true; document.dispatch('visibilitychange');
+for (let i = 0; i < 20; i++) window.dispatch('resize');
+syncPosition();
+assert.equal(frames.size, 0); assert.equal(timers.size, 0);
+assert.equal(layoutPasses, beforeHide);
+document.hidden = false; document.dispatch('visibilitychange');
+assert.equal(frames.size, 1); assert.equal(timers.size, 0);
+flushFrames();
+assert.equal(layoutPasses, beforeHide + 1);
+assert.equal(JSON.stringify(states), originalStates);
 // Disposing a runtime removes listeners and cancels pending settle work.
 window.dispatch('resize'); ctx.teardown.run();
 assert.equal(frames.size, 0); assert.equal(timers.size, 0);

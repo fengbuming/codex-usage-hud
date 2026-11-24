@@ -5,6 +5,8 @@ TEXT = r"""
   let badgeLayoutCache = new WeakMap();
   let badgeResizeObserver = null;
   let stopFontWatch = null;
+  let stopVisibilityWatch = null;
+  let pendingBudgetPayload = null;
   function progressStripViewport(node) {
     const parent = node?.parentElement;
     if (!parent?.classList?.contains("codex-usage-hud-progress-strip-viewport")) return null;
@@ -538,6 +540,7 @@ TEXT = r"""
       installed = true;
       if (typeof ResizeObserver === "function" && ctx.observers?.set) {
         badgeResizeObserver = ctx.observers.set("budget_resize", new ResizeObserver((entries) => {
+          if (document.hidden) return;
           for (const { target } of entries) {
             if (!target?.isConnected) continue;
             badgeLayoutCache.delete(target);
@@ -551,16 +554,31 @@ TEXT = r"""
           refresh(document.getElementById(rootId));
         });
       }
+      stopVisibilityWatch = ctx.lifecycle?.listen?.("budget", document, "visibilitychange", () => {
+        if (document.hidden) return;
+        const root = document.getElementById(rootId);
+        if (pendingBudgetPayload && root) {
+          renderTopProgress(root, pendingBudgetPayload);
+          pendingBudgetPayload = null;
+        } else {
+          refresh(root);
+        }
+      });
       return true;
     }
 
     function apply(root, payload) {
       if (!installed) install();
+      if (document.hidden && root?.dataset?.hudReady === "true") {
+        pendingBudgetPayload = payload || {};
+        return;
+      }
+      pendingBudgetPayload = null;
       renderTopProgress(root, payload || {});
     }
 
     function refresh(root) {
-      if (!root) return;
+      if (document.hidden || !root) return;
       root.querySelectorAll(".codex-usage-hud-progress-rail").forEach(refreshProgressRailLabel);
       root.querySelectorAll(".codex-usage-hud-progress-strip").forEach(refreshCollapsedProgressStrip);
       ctx.domains?.get("layout")?.refreshTopContentFit();
@@ -574,6 +592,9 @@ TEXT = r"""
       badgeResizeObserver = null;
       stopFontWatch?.();
       stopFontWatch = null;
+      stopVisibilityWatch?.();
+      stopVisibilityWatch = null;
+      pendingBudgetPayload = null;
       badgeLayoutCache = new WeakMap();
       progressPaletteCache.clear();
       return wasInstalled;

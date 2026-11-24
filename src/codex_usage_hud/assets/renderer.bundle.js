@@ -1074,6 +1074,7 @@ searchDraft: String(_sessionCleanupFilterSnapshot.search || ""),
     }
 
     function patchCodexModelPicker() {
+      if (document.hidden) return;
       const selection = selectionContext();
       refreshProviderModels(selection);
       patchModelLabel(selection);
@@ -1112,14 +1113,19 @@ searchDraft: String(_sessionCleanupFilterSnapshot.search || ""),
       }
     }
 
-    function schedulePatch(event = null) {
-      if (!installed) return;
-      if (event?.type && !models.length && !ownedLabels.size && observedTriggerParent
-        && !observedTriggerParent.contains?.(event.target)) return;
+    function cancelPendingPatch() {
       ctx.frames.cancel("model_picker");
       for (const timer of (window[modelPickerPatchTimersName] || [])) {
         ctx.lifecycle.clearTimeout(timer);
       }
+      window[modelPickerPatchTimersName] = [];
+    }
+
+    function schedulePatch(event = null) {
+      if (!installed || document.hidden) return;
+      if (event?.type && !models.length && !ownedLabels.size && observedTriggerParent
+        && !observedTriggerParent.contains?.(event.target)) return;
+      cancelPendingPatch();
       window[modelPickerPatchRafName] = ctx.frames.schedule("model_picker", patchCodexModelPicker);
       window[modelPickerPatchTimersName] = [60, 180, 360].map((delay) => (
         ctx.lifecycle.timeout("model_picker", patchCodexModelPicker, delay)
@@ -1136,6 +1142,10 @@ searchDraft: String(_sessionCleanupFilterSnapshot.search || ""),
       ctx.lifecycle.listen("model_picker", document, "keydown", schedulePatch, true);
       ctx.lifecycle.listen("model_picker", document, "click", handleSyntheticSelection);
       ctx.lifecycle.listen("model_picker", document, "keydown", handleSyntheticSelection);
+      ctx.lifecycle.listen("model_picker", document, "visibilitychange", () => {
+        if (document.hidden) cancelPendingPatch();
+        else ctx.frames.schedule("model_picker", patchCodexModelPicker);
+      });
       return true;
     }
 
@@ -1145,10 +1155,7 @@ searchDraft: String(_sessionCleanupFilterSnapshot.search || ""),
 
     function dispose() {
       installed = false;
-      ctx.frames.cancel("model_picker");
-      for (const timer of (window[modelPickerPatchTimersName] || [])) {
-        ctx.lifecycle.clearTimeout(timer);
-      }
+      cancelPendingPatch();
       removeSyntheticItems();
       for (const [node, state] of ownedLabels) restoreModelLabel(node, state);
       ctx.observers?.clear?.("model_picker_trigger");
@@ -1593,6 +1600,8 @@ searchDraft: String(_sessionCleanupFilterSnapshot.search || ""),
   let badgeLayoutCache = new WeakMap();
   let badgeResizeObserver = null;
   let stopFontWatch = null;
+  let stopVisibilityWatch = null;
+  let pendingBudgetPayload = null;
   function progressStripViewport(node) {
     const parent = node?.parentElement;
     if (!parent?.classList?.contains("codex-usage-hud-progress-strip-viewport")) return null;
@@ -2126,6 +2135,7 @@ searchDraft: String(_sessionCleanupFilterSnapshot.search || ""),
       installed = true;
       if (typeof ResizeObserver === "function" && ctx.observers?.set) {
         badgeResizeObserver = ctx.observers.set("budget_resize", new ResizeObserver((entries) => {
+          if (document.hidden) return;
           for (const { target } of entries) {
             if (!target?.isConnected) continue;
             badgeLayoutCache.delete(target);
@@ -2139,16 +2149,31 @@ searchDraft: String(_sessionCleanupFilterSnapshot.search || ""),
           refresh(document.getElementById(rootId));
         });
       }
+      stopVisibilityWatch = ctx.lifecycle?.listen?.("budget", document, "visibilitychange", () => {
+        if (document.hidden) return;
+        const root = document.getElementById(rootId);
+        if (pendingBudgetPayload && root) {
+          renderTopProgress(root, pendingBudgetPayload);
+          pendingBudgetPayload = null;
+        } else {
+          refresh(root);
+        }
+      });
       return true;
     }
 
     function apply(root, payload) {
       if (!installed) install();
+      if (document.hidden && root?.dataset?.hudReady === "true") {
+        pendingBudgetPayload = payload || {};
+        return;
+      }
+      pendingBudgetPayload = null;
       renderTopProgress(root, payload || {});
     }
 
     function refresh(root) {
-      if (!root) return;
+      if (document.hidden || !root) return;
       root.querySelectorAll(".codex-usage-hud-progress-rail").forEach(refreshProgressRailLabel);
       root.querySelectorAll(".codex-usage-hud-progress-strip").forEach(refreshCollapsedProgressStrip);
       ctx.domains?.get("layout")?.refreshTopContentFit();
@@ -2162,6 +2187,9 @@ searchDraft: String(_sessionCleanupFilterSnapshot.search || ""),
       badgeResizeObserver = null;
       stopFontWatch?.();
       stopFontWatch = null;
+      stopVisibilityWatch?.();
+      stopVisibilityWatch = null;
+      pendingBudgetPayload = null;
       badgeLayoutCache = new WeakMap();
       progressPaletteCache.clear();
       return wasInstalled;
@@ -5381,6 +5409,8 @@ searchDraft: String(_sessionCleanupFilterSnapshot.search || ""),
     }
 
     let installed = false;
+    let pendingSessionView = null;
+    let stopSessionVisibilityWatch = null;
     let activeActivityScroll = null;
     let activityScrollSerial = 0;
     const numericTokenRe = /\$?\d+(?:,\d{3})*(?:\.\d+)?(?:[kM%])?/g;
@@ -5389,11 +5419,39 @@ searchDraft: String(_sessionCleanupFilterSnapshot.search || ""),
     function install() {
       if (installed) return false;
       installed = true;
+      stopSessionVisibilityWatch = ctx.lifecycle.listen("session_view_visibility", document, "visibilitychange", () => {
+        if (document.hidden || !pendingSessionView) return;
+        const pending = pendingSessionView;
+        pendingSessionView = null;
+        const root = document.getElementById(rootId);
+        if (!root) return;
+        // Only the newest projection survives background streaming. Rebuild
+        // full details if any deferred update changed them, then apply the
+        // final lightweight selection when that was the last update.
+        if (pending.full) applyCurrentSessionPayload(root, pending.payload);
+        if (!pending.full || pending.kind === "sessionSwitch") {
+          applySessionSwitchPayload(root, pending.payload);
+        }
+      });
       return true;
     }
 
     function apply(root, payload, kind = "currentSession") {
       if (!installed) install();
+      // Keep initial mounting synchronous for startup acknowledgement. Once
+      // mounted, hidden windows need state updates, not request-row DOM churn.
+      if (document.hidden && root?.dataset?.hudReady === "true") {
+        pendingSessionView = {
+          payload: payload || {},
+          kind,
+          full: kind === "currentSession" || !!pendingSessionView?.full,
+        };
+        return;
+      }
+      if (pendingSessionView?.full && kind === "sessionSwitch") {
+        applyCurrentSessionPayload(root, payload || {});
+      }
+      pendingSessionView = null;
       if (kind === "sessionSwitch") applySessionSwitchPayload(root, payload || {});
       else applyCurrentSessionPayload(root, payload || {});
     }
@@ -5401,6 +5459,9 @@ searchDraft: String(_sessionCleanupFilterSnapshot.search || ""),
     function dispose() {
       const wasInstalled = installed;
       installed = false;
+      pendingSessionView = null;
+      stopSessionVisibilityWatch?.();
+      stopSessionVisibilityWatch = null;
       cancelSpeedTitleTimeouts();
       displayedSpeedTitle = 0;
       currentSpeedValue = null;
@@ -18066,6 +18127,22 @@ searchDraft: String(_sessionCleanupFilterSnapshot.search || ""),
         }
       }
 
+      function codexProviderMismatchCandidateText(node) {
+        // Never flatten a conversation ancestor's textContent for each token.
+        // Bound both text size and traversal work, including empty elements.
+        const walker = document.createTreeWalker(node, 0xffffffff);
+        let text = "";
+        let visited = 0;
+        for (let child = walker.nextNode(); child; child = walker.nextNode()) {
+          if (++visited > 96) return "";
+          if (child.nodeType !== 3) continue;
+          const value = child.nodeValue || "";
+          if (text.length + value.length > 1500) return "";
+          text += value;
+        }
+        return text;
+      }
+
       function observeCodexProviderMismatchErrors(records = null) {
         const state = codexProviderMismatchState;
         if (state.context && codexProviderMismatchThreadId() !== state.context.threadId && !state.requestId) {
@@ -18103,11 +18180,14 @@ searchDraft: String(_sessionCleanupFilterSnapshot.search || ""),
         });
         else document.querySelectorAll(selector).forEach((node) => candidates.add(node));
         for (const node of candidates) {
-          if (!visible(node) || node.closest?.("#" + rootId + ", [data-codex-provider-migrate-layer], [data-codex-provider-switch-feedback]")) continue;
-          const text = String(node.textContent || "");
-          if (text.length > 1500 || state.seen.get(node) === text) continue;
+          if (node.closest?.("#" + rootId + ", [data-codex-provider-migrate-layer], [data-codex-provider-switch-feedback]")) continue;
+          const text = codexProviderMismatchCandidateText(node);
+          if (!text || state.seen.get(node) === text) continue;
           const mismatch = parseCodexProviderMismatch(text);
           if (!mismatch) { state.seen.delete(node); continue; }
+          // Geometry reads can force synchronous layout during streaming.
+          // Ordinary conversation mutations must never reach this point.
+          if (!visible(node)) continue;
           const nativeToast = node.matches?.("[data-sonner-toast]") && node.closest?.(".codex-toast-area");
           if (!nativeToast) {
             const rect = node.getBoundingClientRect?.();
@@ -18542,6 +18622,7 @@ searchDraft: String(_sessionCleanupFilterSnapshot.search || ""),
       }
 
       function syncCodexCliQuickLaunchMenu() {
+        if (document.hidden) return;
         const providers = codexCliQuickLaunchMenuProviders();
         const menubar = codexDesktopApplicationMenu();
         const existing = document.querySelector('[data-codex-usage-hud-cli-menu-toggle="true"]');
@@ -28365,7 +28446,7 @@ searchDraft: String(_sessionCleanupFilterSnapshot.search || ""),
 
       function syncPosition(names = Object.keys(PANEL), { forceAutoFit = false } = {}) {
         if (!runtimeIsCurrent() || !ctx.lifecycle.active()) return;
-        if (layoutGeometryFrozen()) return;
+        if (document.hidden || layoutGeometryFrozen()) return;
         const root = document.getElementById(rootId);
         if (!root) return;
         positionStartupBubble(root);
@@ -28437,6 +28518,7 @@ searchDraft: String(_sessionCleanupFilterSnapshot.search || ""),
       }
 
       function refreshTopContentFit({ refreshProgress = true, forceCollapsed = false } = {}) {
+        if (document.hidden) return;
         const panel = document.querySelector(`#${rootId} [data-panel="top"]`);
         if (!panel) return;
         if (panel.dataset.awaitingChrome === "true") return;
@@ -28526,7 +28608,7 @@ searchDraft: String(_sessionCleanupFilterSnapshot.search || ""),
 
       function syncPositionSettled(names = Object.keys(PANEL), options = {}) {
         if (!runtimeIsCurrent() || !ctx.lifecycle.active()) return;
-        if (layoutGeometryFrozen()) return;
+        if (document.hidden || layoutGeometryFrozen()) return;
         for (const timer of (window[settleTimerName] || [])) ctx.lifecycle.clearTimeout(timer);
         window[settleTimerName] = [
           ctx.lifecycle.timeout("layout_settle", () => {
@@ -28549,6 +28631,7 @@ searchDraft: String(_sessionCleanupFilterSnapshot.search || ""),
         pendingForceAutoFit = pendingForceAutoFit || forceAutoFit;
         if (!pendingSyncPanels) pendingSyncPanels = new Set();
         for (const name of panelNames) pendingSyncPanels.add(name);
+        if (document.hidden) return;
         ctx.frames.cancel("layout");
         window[rafName] = ctx.frames.schedule("layout", () => {
           if (!runtimeIsCurrent() || !ctx.lifecycle.active()) return;
@@ -28692,6 +28775,7 @@ searchDraft: String(_sessionCleanupFilterSnapshot.search || ""),
 
       function handleLayoutMutations(mutations) {
         if (!runtimeIsCurrent() || !ctx.lifecycle.active()) return;
+        if (document.hidden) return;
         const headerNode = cachedHeaderNode;
         const composerNode = cachedComposerNode;
         let touchesHeaderTitle = false;
@@ -29003,6 +29087,7 @@ searchDraft: String(_sessionCleanupFilterSnapshot.search || ""),
           let signature = horizontalLayoutSignature(headerNode, composerNode);
           window[resizeObserverName] = ctx.observers.set("layout_resize", new ResizeObserver(() => {
             if (!runtimeIsCurrent() || !ctx.lifecycle.active()) return;
+            if (document.hidden) return;
             const next = horizontalLayoutSignature(headerNode, composerNode);
             if (next === signature) return;
             signature = next;
@@ -29034,6 +29119,7 @@ searchDraft: String(_sessionCleanupFilterSnapshot.search || ""),
         if (window[bootstrapObserverName] || !document.body) return;
         window[bootstrapObserverName] = ctx.observers.set("layout_bootstrap", new MutationObserver(() => {
           if (!runtimeIsCurrent() || !ctx.lifecycle.active()) return;
+          if (document.hidden) return;
           invalidateHeaderAnchor();
           invalidateComposerAnchor();
           const headerNode = conversationHeaderElement();
@@ -30679,7 +30765,9 @@ searchDraft: String(_sessionCleanupFilterSnapshot.search || ""),
 
       function scheduleActiveSessionReport(reason = "event") {
         ctx.lifecycle.clearTimeout(window[activeSessionTimerName] || 0);
+        if (document.hidden) return;
         window[activeSessionTimerName] = ctx.lifecycle.timeout("active_session", () => {
+          if (document.hidden) return;
           const ref = readActiveSessionRef();
           postActiveSession(reason, ref);
           refreshActiveSessionObserver();
@@ -30922,6 +31010,7 @@ searchDraft: String(_sessionCleanupFilterSnapshot.search || ""),
         if (window[activeSessionBootstrapObserverName] || refreshActiveSessionObserver()) return;
         if (!document.body) return;
         window[activeSessionBootstrapObserverName] = ctx.observers.set("active_session_bootstrap", new MutationObserver(() => {
+          if (document.hidden) return;
           if (refreshActiveSessionObserver()) {
             ctx.observers.clear("active_session_bootstrap");
             delete window[activeSessionBootstrapObserverName];
@@ -31095,6 +31184,7 @@ searchDraft: String(_sessionCleanupFilterSnapshot.search || ""),
           );
         }
         installActiveSessionHistoryPatch();
+        if (document.hidden) return;
         startActiveSessionBootstrapObserver();
         scheduleActiveSessionReport("payload");
       }
@@ -33324,6 +33414,17 @@ searchDraft: String(_sessionCleanupFilterSnapshot.search || ""),
   window[scrollHandlerName] = () => {};
   ctx.lifecycle.listen("layout", window, "resize", window[resizeHandlerName]);
   ctx.lifecycle.listen("layout", window, "scroll", window[scrollHandlerName], true);
+  ctx.lifecycle.listen("layout", document, "visibilitychange", () => {
+    if (document.hidden) {
+      ctx.frames.cancel("layout");
+      for (const timer of window[settleTimerName] || []) ctx.lifecycle.clearTimeout(timer);
+      window[settleTimerName] = [];
+      return;
+    }
+    invalidateHeaderAnchor();
+    invalidateComposerAnchor();
+    scheduleForPanels(Object.keys(PANEL), { invalidateTop: true });
+  });
   modelPickerDomain.install();
   themeDomain.install();
   diagnosticsDomain.install();

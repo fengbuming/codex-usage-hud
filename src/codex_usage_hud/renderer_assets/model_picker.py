@@ -335,6 +335,7 @@ TEXT = r"""
     }
 
     function patchCodexModelPicker() {
+      if (document.hidden) return;
       const selection = selectionContext();
       refreshProviderModels(selection);
       patchModelLabel(selection);
@@ -373,14 +374,19 @@ TEXT = r"""
       }
     }
 
-    function schedulePatch(event = null) {
-      if (!installed) return;
-      if (event?.type && !models.length && !ownedLabels.size && observedTriggerParent
-        && !observedTriggerParent.contains?.(event.target)) return;
+    function cancelPendingPatch() {
       ctx.frames.cancel("model_picker");
       for (const timer of (window[modelPickerPatchTimersName] || [])) {
         ctx.lifecycle.clearTimeout(timer);
       }
+      window[modelPickerPatchTimersName] = [];
+    }
+
+    function schedulePatch(event = null) {
+      if (!installed || document.hidden) return;
+      if (event?.type && !models.length && !ownedLabels.size && observedTriggerParent
+        && !observedTriggerParent.contains?.(event.target)) return;
+      cancelPendingPatch();
       window[modelPickerPatchRafName] = ctx.frames.schedule("model_picker", patchCodexModelPicker);
       window[modelPickerPatchTimersName] = [60, 180, 360].map((delay) => (
         ctx.lifecycle.timeout("model_picker", patchCodexModelPicker, delay)
@@ -397,6 +403,10 @@ TEXT = r"""
       ctx.lifecycle.listen("model_picker", document, "keydown", schedulePatch, true);
       ctx.lifecycle.listen("model_picker", document, "click", handleSyntheticSelection);
       ctx.lifecycle.listen("model_picker", document, "keydown", handleSyntheticSelection);
+      ctx.lifecycle.listen("model_picker", document, "visibilitychange", () => {
+        if (document.hidden) cancelPendingPatch();
+        else ctx.frames.schedule("model_picker", patchCodexModelPicker);
+      });
       return true;
     }
 
@@ -406,10 +416,7 @@ TEXT = r"""
 
     function dispose() {
       installed = false;
-      ctx.frames.cancel("model_picker");
-      for (const timer of (window[modelPickerPatchTimersName] || [])) {
-        ctx.lifecycle.clearTimeout(timer);
-      }
+      cancelPendingPatch();
       removeSyntheticItems();
       for (const [node, state] of ownedLabels) restoreModelLabel(node, state);
       ctx.observers?.clear?.("model_picker_trigger");
