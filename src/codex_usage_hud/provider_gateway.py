@@ -15,7 +15,7 @@ import secrets
 import sqlite3
 import os
 import time
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from threading import RLock
 from urllib.parse import parse_qsl, urlsplit
 import uuid
@@ -177,16 +177,43 @@ def apply_request_service_tier(body: bytes | None, tier: object) -> bytes | None
     return replace_body_fields(body, {"service_tier": tier})
 
 
-def session_provider(thread_id: str, native_provider: str = "", *, config_path: Path | None = None) -> str:
+def _bound_provider(db: sqlite3.Connection | None, thread_id: str) -> str:
+    if db is None or not thread_id:
+        return ""
+    row = db.execute("SELECT provider FROM sessions WHERE id = ?", (thread_id,)).fetchone()
+    return str(row[0]) if row else ""
+
+
+def session_provider(
+    thread_id: str,
+    native_provider: str = "",
+    *,
+    config_path: Path | None = None,
+    forked_from_id: object = None,
+) -> str:
+    """Read a chat's provider without binding it or using the new-chat default."""
     from .codex_provider_config import default_codex_config_path
 
     path = config_path or default_codex_config_path()
-    bound = ""
-    if path.with_name("hud-provider-sessions.sqlite").exists():
-        with _read_state_db(path) as db:
-            row = db.execute("SELECT provider FROM sessions WHERE id = ?", (thread_id,)).fetchone()
-            bound = str(row[0]) if row else ""
-    return bound or (native_provider if native_provider != PROVIDER_ID else "")
+    state = (
+        _read_state_db(path)
+        if path.with_name("hud-provider-sessions.sqlite").exists()
+        else nullcontext()
+    )
+    with state as db:
+        bound = _bound_provider(db, thread_id)
+        if bound:
+            return bound
+        parent = canonical_thread_id(forked_from_id)
+        if parent and native_provider in {"", "unknown", PROVIDER_ID}:
+            try:
+                inherited = _inherited_provider(db, path, thread_id, parent)
+                if inherited:
+                    return inherited
+            except (RuntimeError, sqlite3.Error):
+                # Keep the snapshot usable while Codex's local state is unavailable.
+                pass
+    return native_provider if native_provider != PROVIDER_ID else ""
 
 
 def _historical_provider(path: Path, thread_id: str, *, before: int = 0) -> str:
@@ -211,28 +238,69 @@ def _historical_provider(path: Path, thread_id: str, *, before: int = 0) -> str:
     return ""
 
 
-def _parent_thread_id(path: Path, thread_id: str) -> str:
+def _source_parent_id(source: object, depth: int = 0) -> str:
+    if not isinstance(source, dict) or depth > 5:
+        return ""
+    return canonical_thread_id(source.get("parent_thread_id")) or next(
+        (found for item in source.values() if (found := _source_parent_id(item, depth + 1))), "",
+    )
+
+
+def _rollout_fork_parent(rollout_path: str, thread_id: str) -> str:
+    from .core.rollout_io import open_rollout_bytes
+
+    try:
+        with open_rollout_bytes(Path(rollout_path)) as stream:
+            header = stream.readline(1024 * 1024)
+        if not header.endswith(b"\n") or b'"forked_from_id"' not in header:
+            return ""
+        record = json.loads(header)
+    except (OSError, ValueError):
+        return ""
+    if not isinstance(record, dict) or record.get("type") != "session_meta":
+        return ""
+    meta = record.get("payload")
+    if isinstance(meta, dict) and canonical_thread_id(meta.get("id")) == thread_id:
+        return canonical_thread_id(meta.get("forked_from_id"))
+    return ""
+
+
+def _parent_thread_id(path: Path, thread_id: str, *, include_fork: bool = True) -> str:
     for database in sorted(path.parent.glob("state_*.sqlite"), reverse=True):
         db = sqlite3.connect(database.resolve().as_uri() + "?mode=ro", uri=True, timeout=1)
         try:
             columns = {row[1] for row in db.execute("PRAGMA table_info(threads)")}
-            if "source" not in columns:
+            if "id" not in columns:
                 continue
-            row = db.execute("SELECT source FROM threads WHERE id = ?", (thread_id,)).fetchone()
-            if not row:
+            source = "source" if "source" in columns else "NULL"
+            rollout = "rollout_path" if include_fork and "rollout_path" in columns else "NULL"
+            if source == rollout == "NULL":
                 continue
-            try:
-                source = json.loads(row[0])
-            except (ValueError, TypeError):
-                return ""
-            def parent(value, depth=0):
-                if not isinstance(value, dict) or depth > 5:
-                    return ""
-                return canonical_thread_id(value.get("parent_thread_id")) or next(
-                    (found for item in value.values() if (found := parent(item, depth + 1))), "")
-            return parent(source)
+            row = db.execute(f"SELECT {source}, {rollout} FROM threads WHERE id = ?", (thread_id,)).fetchone()
         finally:
             db.close()
+        if not row:
+            continue
+        try:
+            parent = _source_parent_id(json.loads(row[0]))
+        except (ValueError, TypeError):
+            parent = ""
+        return parent or (_rollout_fork_parent(row[1], thread_id) if row[1] else "")
+    return ""
+
+
+def _inherited_provider(
+    db: sqlite3.Connection | None, path: Path, thread_id: str, parent: str,
+) -> str:
+    visited = {thread_id}
+    for _ in range(32):
+        if not parent or parent in visited:
+            break
+        visited.add(parent)
+        provider = _bound_provider(db, parent) or _historical_provider(path, parent)
+        if provider not in {"", "unknown", PROVIDER_ID}:
+            return provider
+        parent = _parent_thread_id(path, parent)
     return ""
 
 
@@ -274,7 +342,12 @@ def select_provider(provider: str, *, config_path: Path | None = None, thread_id
                 raise ValueError("历史会话必须使用原供应商，请先复制会话。")
             db.execute("INSERT OR IGNORE INTO sessions VALUES (?, ?)", (thread_id, provider))
             if copied_from:
-                source_provider = session_provider(copied_from, config_path=path) or _historical_provider(path, copied_from)
+                source_provider = _bound_provider(db, copied_from)
+                if not source_provider:
+                    source_provider = _historical_provider(path, copied_from)
+                    if source_provider == PROVIDER_ID:
+                        parent = _parent_thread_id(path, copied_from)
+                        source_provider = _inherited_provider(db, path, copied_from, parent)
                 if not source_provider or source_provider == PROVIDER_ID:
                     raise ValueError("无法确认原会话的真实供应商，未绑定副本。")
                 db.execute("INSERT OR IGNORE INTO copies(id, source_provider) VALUES (?, ?)", (thread_id, source_provider))
@@ -284,16 +357,17 @@ def select_provider(provider: str, *, config_path: Path | None = None, thread_id
             "nativeProviderId": PROVIDER_ID, "sessionId": thread_id}
 
 
-def _inherit_copy_history(db, path: Path, thread_id: str, provider: str) -> None:
+def _inherit_copy_history(
+    db: sqlite3.Connection, path: Path, thread_id: str, provider: str, parent: str,
+) -> None:
     """Carry account-specific history into descendants, including older bindings."""
-    parent = _parent_thread_id(path, thread_id)
     visited = {thread_id}
     for _ in range(32):
         if not parent or parent in visited:
             return
         visited.add(parent)
-        bound = db.execute("SELECT provider FROM sessions WHERE id = ?", (parent,)).fetchone()
-        if bound and bound[0] != provider:
+        bound = _bound_provider(db, parent)
+        if bound and bound != provider:
             return
         source = db.execute("SELECT source_provider, prepared FROM copies WHERE id = ?", (parent,)).fetchone()
         if source:
@@ -318,27 +392,27 @@ def resolve_route(path: Path, headers: Mapping, *, generation: bool) -> dict:
     if generation and not thread_id:
         raise ValueError("Codex 请求未携带会话 ID，无法安全选择供应商。")
     with _state_db(path) as db:
-        row = db.execute("SELECT provider FROM sessions WHERE id = ?", (thread_id,)).fetchone() if thread_id else None
-        provider = str(row[0]) if row else ""
+        bound = _bound_provider(db, thread_id)
+        provider = bound
         historical = ""
         parent = ""
         if not provider:
             historical = _historical_provider(path, thread_id) if thread_id else ""
-            parent = _parent_thread_id(path, thread_id) if thread_id else ""
-            parent_row = db.execute("SELECT provider FROM sessions WHERE id = ?", (parent,)).fetchone() if parent else None
-            inherited = str(parent_row[0]) if parent_row else (_historical_provider(path, parent) if parent else "")
-            if inherited == PROVIDER_ID:
-                inherited = ""
+            if thread_id:
+                parent = _parent_thread_id(
+                    path, thread_id, include_fork=historical in {"", "unknown", PROVIDER_ID},
+                )
+            inherited = _inherited_provider(db, path, thread_id, parent)
             provider = inherited or (historical if historical != PROVIDER_ID else "") or info["default_provider"]
         definitions = config.read_provider_definitions(path)
         route = _provider_route(path, provider, definitions)
-        if generation and thread_id and not row:
+        if generation and thread_id and not bound:
             db.execute("INSERT INTO sessions VALUES (?, ?)", (thread_id, provider))
         force_fast = db.execute(
             "SELECT value FROM settings WHERE key = 'force_fast_requests'"
         ).fetchone()
         tier_row = db.execute("SELECT tier FROM request_service_tiers WHERE id = ?", (thread_id,)).fetchone() if thread_id else None
-        if tier_row is None and not row and thread_id:
+        if tier_row is None and not bound and thread_id:
             if parent:
                 tier_row = db.execute("SELECT tier FROM request_service_tiers WHERE id = ?", (parent,)).fetchone()
             if tier_row is None and historical in {"", PROVIDER_ID}:
@@ -346,8 +420,10 @@ def resolve_route(path: Path, headers: Mapping, *, generation: bool) -> dict:
             if tier_row and generation:
                 db.execute("INSERT INTO request_service_tiers VALUES (?, ?)", (thread_id, tier_row[0]))
         copy = db.execute("SELECT source_provider FROM copies WHERE id = ?", (thread_id,)).fetchone()
-        if thread_id and not copy:
-            _inherit_copy_history(db, path, thread_id, provider)
+        if thread_id and not copy and db.execute("SELECT 1 FROM copies LIMIT 1").fetchone():
+            if bound:
+                parent = _parent_thread_id(path, thread_id)
+            _inherit_copy_history(db, path, thread_id, provider, parent)
             copy = db.execute("SELECT source_provider FROM copies WHERE id = ?", (thread_id,)).fetchone()
     # Legacy per-chat image flags remain readable for old clients, but routing
     # now follows each request's model, not persisted conversation state.

@@ -21,6 +21,7 @@ from codex_usage_hud.provider_registry import discover_provider_registry
 from codex_usage_hud.provider_gateway_auth import GATEWAY_AUTH_HEADER
 from codex_usage_hud.provider_cleanup import delete_provider_for_context
 from codex_usage_hud.core.parser import JsonlSessionParser
+from codex_usage_hud.renderer_payload_builder import session_switch_payload_from_snapshot
 from codex_usage_hud.config import UserConfig
 from codex_usage_hud.usage_insights import _provider_registry_payload
 
@@ -69,6 +70,49 @@ def state_thread(path, thread_id, provider, created_at=1):
     with sqlite3.connect(path.parent / "state_5.sqlite") as db:
         db.execute("CREATE TABLE IF NOT EXISTS threads(id TEXT PRIMARY KEY, model_provider TEXT, created_at INTEGER)")
         db.execute("INSERT INTO threads VALUES (?, ?, ?)", (thread_id, provider, created_at))
+
+
+def fork_rollout(path, thread_id, parent_id):
+    rollout = path.parent / f"rollout-{thread_id}.jsonl"
+    metadata = {"id": thread_id, "model_provider": gateway.PROVIDER_ID, "forked_from_id": parent_id}
+    rollout.write_text(json.dumps({"type": "session_meta", "payload": metadata}) + "\n", encoding="utf-8")
+    return rollout
+
+
+def test_native_fork_displays_and_routes_to_parent_before_any_child_request(active):
+    path, _, _ = active
+    assert gateway.resolve_route(path, headers(A), generation=True)["provider"] == "alpha"
+    gateway.select_provider("beta", config_path=path)
+    parent = fork_rollout(path, B, A)
+    child = fork_rollout(path, C, B)
+    with sqlite3.connect(path.parent / "state_5.sqlite") as db:
+        db.execute("CREATE TABLE threads(id TEXT PRIMARY KEY, model_provider TEXT, source TEXT, rollout_path TEXT)")
+        db.execute("INSERT INTO threads VALUES (?, ?, 'vscode', ?)", (B, gateway.PROVIDER_ID, str(parent)))
+
+    # The renderer can learn the branch parent from its rollout before Codex indexes the child.
+    parser = JsonlSessionParser()
+    snapshot = parser.parse_file(child)
+    assert session_switch_payload_from_snapshot(snapshot)["activeSessionProvider"] == "alpha"
+    assert gateway.session_provider(C, config_path=path) == ""
+
+    with sqlite3.connect(path.parent / "state_5.sqlite") as db:
+        db.execute("INSERT INTO threads VALUES (?, ?, 'vscode', ?)", (C, gateway.PROVIDER_ID, str(child)))
+    route = gateway.resolve_route(path, headers(C), generation=True)
+    assert route["provider"] == "alpha"
+    assert gateway.session_provider(C, config_path=path) == "alpha"
+
+    # A branch already bound to another provider retains that explicit choice.
+    gateway.select_provider("beta", config_path=path, thread_id=B)
+    assert session_switch_payload_from_snapshot(parser.parse_file(parent))["activeSessionProvider"] == "beta"
+    assert gateway.resolve_route(path, headers(B), generation=True)["provider"] == "beta"
+
+
+def test_fork_with_unknown_parent_provider_does_not_display_new_chat_default(active):
+    path, _, _ = active
+    child = fork_rollout(path, B, B)
+    snapshot = JsonlSessionParser().parse_file(child)
+    assert session_switch_payload_from_snapshot(snapshot)["activeSessionProvider"] == ""
+    assert gateway.session_provider(B, config_path=path) == ""
 
 
 def test_takeover_switch_is_internal_and_exit_restores_direct_identity(active):

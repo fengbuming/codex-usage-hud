@@ -2010,8 +2010,11 @@ class JsonlSessionParser:
         provider = str(payload.get("model_provider") or "").strip().lower() or "unknown"
         from ..provider_gateway import session_provider
 
-        provider = session_provider(str(payload.get("id") or ""), provider) or "unknown"
-        return provider
+        return session_provider(
+            str(payload.get("id") or ""),
+            provider,
+            forked_from_id=payload.get("forked_from_id"),
+        ) or "unknown"
 
     def session_profile_name(self, records: Sequence[Mapping[str, Any]]) -> str:
         """Return the CLI profile label recorded for this session.
