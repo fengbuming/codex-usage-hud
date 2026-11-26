@@ -8919,6 +8919,7 @@ searchDraft: String(_sessionCleanupFilterSnapshot.search || ""),
   } = backgroundUsageDomain;
 
   function createSettingsShellDomain(ctx, shared) {
+      let settingsModelListExpanded = false;
       const pricingWorkflowState = {
         pendingSettings: null,
         pendingSettingsBase: null,
@@ -10887,10 +10888,19 @@ searchDraft: String(_sessionCleanupFilterSnapshot.search || ""),
         return items.map((value) => Number(value || 0)).filter((value) => value > 0).join(",");
       }
 
+      const priceModelCollator = new Intl.Collator("en", { numeric: true, sensitivity: "base" });
+
+      function comparePriceModels(left, right) {
+        return priceModelCollator.compare(pricingBareModelId(right), pricingBareModelId(left));
+      }
+
       function priceRowsHtml(settings) {
         const prices = settings.model_prices && typeof settings.model_prices === "object" ? settings.model_prices : {};
         const entries = Object.entries(prices);
         if (!entries.length) entries.push(["gpt-5.6-sol", { input: 5, output: 30, cached_input: 0.5, cache_write: 6.25 }]);
+        entries.sort(([leftKey, left], [rightKey, right]) =>
+          comparePriceModels(left?.model || leftKey, right?.model || rightKey),
+        );
         return entries.map(([key, price]) => {
           const model = String(price?.model || key || "");
           const provider = String(price?.provider || "");
@@ -10910,7 +10920,7 @@ searchDraft: String(_sessionCleanupFilterSnapshot.search || ""),
       }
 
       function detectedPriceModelsHtml(settings, provider = settingsProviderDraft?.activeProvider || "") {
-        const models = unknownPriceModels(settings, provider);
+        const models = unknownPriceModels(settings, provider).sort(comparePriceModels);
         if (!models.length) return "";
         return `
           <div class="codex-usage-hud-price-detected">
@@ -11495,22 +11505,37 @@ searchDraft: String(_sessionCleanupFilterSnapshot.search || ""),
               <button type="button" class="codex-usage-hud-settings-action codex-usage-hud-pricing-apply-action" data-action="settings-pricing-apply" data-primary="true" data-price-draft-pending="${pricingDraftPending}" aria-label="${pricingDraftPending ? "应用模型单价修改，有待应用修改" : "应用模型单价修改"}" title="${pricingDraftPending ? "应用待提交的模型单价修改" : "应用模型单价修改"}">应用<span class="codex-usage-hud-provider-dirty-dot codex-usage-hud-pricing-apply-dirty-dot" data-pricing-apply-dirty-dot="true" aria-hidden="true" ${pricingDraftPending ? "" : "hidden"}></span></button>
             </div>
           </div>
-          <div class="codex-usage-hud-price-table">
+          <div class="codex-usage-hud-price-actions">
+            <button type="button" class="codex-usage-hud-settings-action" data-action="settings-add-model">添加模型</button>
+            <input data-setting-key="pricing_url" value="${escapeHtml(pricingUrlValue)}" placeholder="${escapeHtml(pricingUrlPlaceholder)}" aria-label="计费单价获取地址" title="${escapeHtml(pricingUrlPlaceholder)}">
+            <button type="button" class="codex-usage-hud-settings-action codex-usage-hud-pricing-check-action" data-action="settings-fetch-prices" aria-label="${pricingUnreadCount ? `检查价格更新，有 ${pricingUnreadCount} 项未读差异` : "检查价格更新"}">检查价格更新<span class="codex-usage-hud-pricing-check-dot" data-pricing-sync-dot="true" aria-hidden="true" ${pricingUnreadCount ? "" : "hidden"}></span></button>
+            <button type="button" class="codex-usage-hud-settings-action codex-usage-hud-pricing-icon-action" data-action="settings-sync-provider-prices" aria-label="同步当前 Provider 单价到其它 Provider" title="同步当前 Provider 的模型单价到其它 Provider"><span aria-hidden="true">⇄</span></button>
+            <button type="button" class="codex-usage-hud-settings-action codex-usage-hud-pricing-icon-action" data-action="pricing-export" aria-label="导出价格 JSON" title="导出价格 JSON"><span aria-hidden="true">⇩</span></button>
+            <button type="button" class="codex-usage-hud-settings-action codex-usage-hud-pricing-icon-action" data-action="pricing-import-open" aria-label="导入价格 JSON" title="导入价格 JSON"><span aria-hidden="true">⇧</span></button>
+          </div>
+          <div id="${settingsModalId}-model-list" class="codex-usage-hud-price-table" data-expanded="${settingsModelListExpanded}">
             <div class="codex-usage-hud-price-header">
               <div>模型</div><div>输入</div><div>缓存读取</div><div>缓存写入</div><div>输出</div><div class="codex-usage-hud-price-advanced">渠道</div><div class="codex-usage-hud-price-advanced">Base URL</div>
             </div>
             <div data-price-rows="true">${priceRowsHtml(providerSettings)}</div>
             <div data-detected-price-models="true">${detectedPriceModelsHtml(providerSettings, activeProvider)}</div>
-            <div class="codex-usage-hud-price-actions">
-              <button type="button" class="codex-usage-hud-settings-action" data-action="settings-add-model">添加模型</button>
-              <input data-setting-key="pricing_url" value="${escapeHtml(pricingUrlValue)}" placeholder="${escapeHtml(pricingUrlPlaceholder)}" aria-label="计费单价获取地址" title="${escapeHtml(pricingUrlPlaceholder)}">
-              <button type="button" class="codex-usage-hud-settings-action codex-usage-hud-pricing-check-action" data-action="settings-fetch-prices" aria-label="${pricingUnreadCount ? `检查价格更新，有 ${pricingUnreadCount} 项未读差异` : "检查价格更新"}">检查价格更新<span class="codex-usage-hud-pricing-check-dot" data-pricing-sync-dot="true" aria-hidden="true" ${pricingUnreadCount ? "" : "hidden"}></span></button>
-              <button type="button" class="codex-usage-hud-settings-action codex-usage-hud-pricing-icon-action" data-action="settings-sync-provider-prices" aria-label="同步当前 Provider 单价到其它 Provider" title="同步当前 Provider 的模型单价到其它 Provider"><span aria-hidden="true">⇄</span></button>
-              <button type="button" class="codex-usage-hud-settings-action codex-usage-hud-pricing-icon-action" data-action="pricing-export" aria-label="导出价格 JSON" title="导出价格 JSON"><span aria-hidden="true">⇩</span></button>
-              <button type="button" class="codex-usage-hud-settings-action codex-usage-hud-pricing-icon-action" data-action="pricing-import-open" aria-label="导入价格 JSON" title="导入价格 JSON"><span aria-hidden="true">⇧</span></button>
-            </div>
+          </div>
+          <div class="codex-usage-hud-price-disclosure">
+            <button type="button" class="codex-usage-hud-price-toggle" data-action="settings-toggle-model-list"
+              aria-controls="${settingsModalId}-model-list" aria-expanded="${settingsModelListExpanded}"
+              aria-label="完整模型列表" title="${settingsModelListExpanded ? "收起模型列表" : "展开完整模型列表"}"><span aria-hidden="true">▽</span></button>
           </div>
         `;
+      }
+
+      function toggleSettingsModelList(button, expanded = !settingsModelListExpanded) {
+        const list = document.getElementById(`${settingsModalId}-model-list`);
+        if (!list || !button) return;
+        settingsModelListExpanded = expanded;
+        list.dataset.expanded = String(expanded);
+        if (!expanded) list.scrollTop = 0;
+        button.setAttribute("aria-expanded", String(expanded));
+        button.title = expanded ? "收起模型列表" : "展开完整模型列表";
       }
 
       function revealSettingsProviderTab(tab) {
@@ -12691,6 +12716,7 @@ searchDraft: String(_sessionCleanupFilterSnapshot.search || ""),
         const root = document.getElementById(rootId);
         const modal = document.getElementById(settingsModalId);
         if (!root || !modal) return;
+        if (modal.hidden) settingsModelListExpanded = false;
         const activeTab = ["storage", "backgroundUsage", "support", "about"].includes(tab) ? tab : "settings";
         if (settingsActiveTab === "storage" && activeTab !== "storage") {
           detachSessionIndexUi();
@@ -12874,9 +12900,9 @@ searchDraft: String(_sessionCleanupFilterSnapshot.search || ""),
                 </div>
               </div>
             </div>
-            <div class="codex-usage-hud-provider-editor" data-provider-editor="true" data-active-provider="${escapeHtml(settingsProviderDraft?.activeProvider || "")}">
-              ${settingsProviderEditorHtml(settings)}
-            </div>
+          </div>
+          <div class="codex-usage-hud-provider-editor" data-provider-editor="true" data-active-provider="${escapeHtml(settingsProviderDraft?.activeProvider || "")}">
+            ${settingsProviderEditorHtml(settings)}
           </div>
         `;
       }
@@ -16385,6 +16411,8 @@ searchDraft: String(_sessionCleanupFilterSnapshot.search || ""),
       function addModelPriceRow(initialModel = "") {
         const rows = document.querySelector(`#${settingsModalId} [data-price-rows="true"]`);
         if (!rows) return;
+        const toggle = document.querySelector(`#${settingsModalId} [data-action="settings-toggle-model-list"]`);
+        toggleSettingsModelList(toggle, true);
         const row = document.createElement("div");
         row.className = "codex-usage-hud-price-row";
         row.dataset.priceRow = "true";
@@ -18856,6 +18884,7 @@ searchDraft: String(_sessionCleanupFilterSnapshot.search || ""),
       renderUpdateButtons,
       thresholdText,
       priceRowsHtml,
+      toggleSettingsModelList,
       detectedPriceModelsHtml,
       settingsProviderNames,
       cloneSettingsPriceTable,
@@ -19014,6 +19043,7 @@ searchDraft: String(_sessionCleanupFilterSnapshot.search || ""),
     renderUpdateButtons,
     thresholdText,
     priceRowsHtml,
+    toggleSettingsModelList,
     detectedPriceModelsHtml,
     settingsProviderNames,
     cloneSettingsPriceTable,
@@ -21276,6 +21306,19 @@ searchDraft: String(_sessionCleanupFilterSnapshot.search || ""),
             scrollbar-width: thin;
             scrollbar-color: var(--codex-usage-hud-divider, #273241) var(--codex-usage-hud-surface, #10161d);
           }
+          #${rootId} .codex-usage-hud-settings-modal:has(> [data-active-tab="settings"]) {
+            padding: 8px;
+          }
+          #${rootId} .codex-usage-hud-settings-dialog[data-active-tab="settings"] {
+            box-sizing: border-box;
+            width: min(760px, calc(100vw - 16px));
+            max-height: calc(100dvh - 16px);
+          }
+          #${rootId} .codex-usage-hud-settings-dialog[data-active-tab="settings"] .codex-usage-hud-settings-body {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+          }
           #${rootId} .codex-usage-hud-settings-dialog[data-active-tab="backgroundUsage"] {
             width: min(1060px, calc(100vw - 48px));
             height: min(760px, calc(100vh - 48px));
@@ -21720,6 +21763,7 @@ searchDraft: String(_sessionCleanupFilterSnapshot.search || ""),
             text-align: left;
           }
           #${rootId} .codex-usage-hud-settings-grid {
+            flex-shrink: 0;
             display: grid;
             grid-template-columns: repeat(2, minmax(0, 1fr));
             gap: 10px;
@@ -21763,8 +21807,7 @@ searchDraft: String(_sessionCleanupFilterSnapshot.search || ""),
             min-width: 0;
             width: 100%;
           }
-          #${rootId} .codex-usage-hud-settings-field,
-          #${rootId} .codex-usage-hud-price-table {
+          #${rootId} .codex-usage-hud-settings-field {
             min-width: 0;
             display: grid;
             gap: 4px;
@@ -21876,11 +21919,14 @@ searchDraft: String(_sessionCleanupFilterSnapshot.search || ""),
           }
           #${rootId} .codex-usage-hud-provider-editor {
             min-width: 0;
-            grid-column: 1 / -1;
-            display: grid;
+            min-height: 0;
+            display: flex;
+            flex-direction: column;
             gap: 8px;
-            margin-top: 4px;
             border-top: 1px solid var(--codex-usage-hud-divider, #273241);
+          }
+          #${rootId} .codex-usage-hud-provider-editor > :not(.codex-usage-hud-price-table) {
+            flex-shrink: 0;
           }
           #${rootId} .codex-usage-hud-provider-editor-head {
             min-width: 0;
@@ -22438,7 +22484,6 @@ searchDraft: String(_sessionCleanupFilterSnapshot.search || ""),
             grid-template-columns: auto minmax(0, 1fr) auto repeat(3, 30px);
             gap: 8px;
             align-items: center;
-            margin-top: 6px;
           }
           #${rootId} .codex-usage-hud-price-actions > .codex-usage-hud-settings-action {
             justify-self: start;
@@ -22491,12 +22536,52 @@ searchDraft: String(_sessionCleanupFilterSnapshot.search || ""),
             padding: 3px 8px;
             font-size: 10px;
           }
+          #${rootId} .codex-usage-hud-price-disclosure {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+          }
+          #${rootId} .codex-usage-hud-price-disclosure::before,
+          #${rootId} .codex-usage-hud-price-disclosure::after {
+            content: "";
+            flex: 1;
+            border-top: 1px solid var(--codex-usage-hud-divider, #273241);
+          }
+          #${rootId} .codex-usage-hud-price-toggle {
+            width: 36px;
+            height: 26px;
+            padding: 0;
+            display: inline-grid;
+            place-items: center;
+            border: 1px solid var(--codex-usage-hud-divider, #273241);
+            border-radius: 13px;
+            background: var(--codex-usage-hud-header-surface, #202833);
+            color: var(--codex-usage-hud-muted, #a9bcd2);
+            font: 16px/1 system-ui, sans-serif;
+            cursor: pointer;
+          }
+          #${rootId} .codex-usage-hud-price-toggle:is(:hover, :focus-visible) {
+            color: var(--codex-usage-hud-accent, #f3d27a);
+            border-color: currentColor;
+          }
+          #${rootId} .codex-usage-hud-price-toggle[aria-expanded="true"] > span {
+            transform: rotate(180deg);
+          }
           #${rootId} .codex-usage-hud-price-table {
-            grid-column: 1 / -1;
-            margin-top: 4px;
-            overflow-x: auto;
+            min-height: 48px;
+            overflow: auto;
+            overscroll-behavior: contain;
             scrollbar-width: thin;
             scrollbar-color: var(--codex-usage-hud-divider, #273241) transparent;
+          }
+          #${rootId} .codex-usage-hud-price-table[data-expanded="false"] {
+            flex-shrink: 0;
+            overscroll-behavior: auto;
+          }
+          #${rootId} .codex-usage-hud-price-table[data-expanded="false"] [data-price-rows] > :nth-child(n + 6),
+          #${rootId} .codex-usage-hud-price-table[data-expanded="false"] [data-detected-price-models],
+          #${rootId} .codex-usage-hud-price-table:not(:has([data-price-rows] > :nth-child(6), [data-detected-price-models] > *)) + .codex-usage-hud-price-disclosure {
+            display: none;
           }
           #${rootId} .codex-usage-hud-price-row,
           #${rootId} .codex-usage-hud-price-header {
@@ -22504,12 +22589,17 @@ searchDraft: String(_sessionCleanupFilterSnapshot.search || ""),
             grid-template-columns: minmax(130px, 1.4fr) repeat(4, minmax(72px, 1fr));
             gap: 6px;
             align-items: center;
-            min-width: 680px;
+            min-width: 442px;
           }
           #${rootId} .codex-usage-hud-price-advanced {
             display: none;
           }
           #${rootId} .codex-usage-hud-price-header {
+            position: sticky;
+            top: 0;
+            z-index: 1;
+            padding-block: 3px;
+            background: var(--codex-usage-hud-surface, #10161d);
             color: var(--codex-usage-hud-muted, #8492a6);
             font-size: 10px;
             font-weight: 700;
@@ -22521,6 +22611,44 @@ searchDraft: String(_sessionCleanupFilterSnapshot.search || ""),
             align-items: center;
             color: var(--codex-usage-hud-muted, #8492a6);
             font-size: 11px;
+          }
+          @media (max-height: 620px) {
+            #${rootId} .codex-usage-hud-settings-modal:has(> [data-active-tab="settings"]) {
+              padding-block: 4px;
+            }
+            #${rootId} .codex-usage-hud-settings-dialog[data-active-tab="settings"] {
+              max-height: calc(100dvh - 8px);
+            }
+            #${rootId} [data-active-tab="settings"] > .codex-usage-hud-settings-head,
+            #${rootId} [data-active-tab="settings"] > .codex-usage-hud-settings-actions {
+              padding-block: 4px;
+            }
+            #${rootId} [data-active-tab="settings"] > .codex-usage-hud-settings-tabs {
+              padding-block: 4px;
+            }
+            #${rootId} .codex-usage-hud-settings-dialog[data-active-tab="settings"] .codex-usage-hud-settings-body {
+              gap: 6px;
+              padding-block: 4px;
+            }
+            #${rootId} .codex-usage-hud-settings-grid,
+            #${rootId} .codex-usage-hud-provider-editor {
+              row-gap: 5px;
+            }
+            #${rootId} .codex-usage-hud-settings-grid .codex-usage-hud-settings-field {
+              row-gap: 2px;
+            }
+            #${rootId} .codex-usage-hud-settings-grid .codex-usage-hud-settings-field :is(input, select),
+            #${rootId} .codex-usage-hud-overlay-dependency {
+              min-height: 26px;
+              padding-block: 2px;
+            }
+            #${rootId} .codex-usage-hud-provider-editor-head {
+              min-height: 34px;
+              padding-top: 2px;
+            }
+            #${rootId} .codex-usage-hud-provider-context {
+              row-gap: 4px;
+            }
           }
           #${rootId} .codex-usage-hud-pricing-tools {
             min-width: 0;
@@ -26170,9 +26298,6 @@ searchDraft: String(_sessionCleanupFilterSnapshot.search || ""),
             #${rootId} .${topClass} .codex-usage-hud-panel-header {
               grid-template-columns: auto minmax(0, 1fr) 22px;
             }
-            #${rootId} .codex-usage-hud-settings-grid {
-              grid-template-columns: minmax(0, 1fr);
-            }
             #${rootId} .codex-usage-hud-codex-cli-grid {
               grid-template-columns: minmax(0, 1fr);
             }
@@ -26185,33 +26310,14 @@ searchDraft: String(_sessionCleanupFilterSnapshot.search || ""),
             #${rootId} .codex-usage-hud-codex-cli-dialog {
               padding: 12px;
             }
-            #${rootId} .codex-usage-hud-settings-compact-row {
-              grid-template-columns: minmax(0, 1fr);
-            }
-            #${rootId} .codex-usage-hud-settings-compact-inputs {
-              grid-template-columns: minmax(0, 1fr);
-            }
             #${rootId} .codex-usage-hud-rest-reminder-grid {
               grid-template-columns: repeat(3, minmax(0, 1fr));
             }
             #${rootId} .codex-usage-hud-rest-reminder-schedule {
               grid-template-columns: minmax(0, 1fr);
             }
-            #${rootId} .codex-usage-hud-provider-editor {
-              grid-column: 1;
-            }
-            #${rootId} .codex-usage-hud-provider-editor-head {
-              grid-template-columns: auto minmax(0, 1fr);
-            }
-            #${rootId} .codex-usage-hud-provider-navigation {
-              grid-column: 1 / -1;
-              grid-row: 2;
-            }
             #${rootId} .codex-usage-hud-provider-editor-head .codex-usage-hud-price-unit {
               display: none;
-            }
-            #${rootId} .codex-usage-hud-price-actions {
-              grid-template-columns: auto minmax(0, 1fr) auto;
             }
             #${rootId} .codex-usage-hud-pricing-tools {
               grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -26346,7 +26452,19 @@ searchDraft: String(_sessionCleanupFilterSnapshot.search || ""),
               display: none;
             }
           }
+          @media (max-width: 460px) {
+            #${rootId} .codex-usage-hud-settings-compact-row {
+              grid-template-columns: minmax(0, 1fr);
+            }
+          }
           @media (max-width: 520px) {
+            #${rootId} .codex-usage-hud-overlay-runtime-row {
+              grid-template-columns: minmax(0, 1fr) 56px;
+            }
+            #${rootId} .codex-usage-hud-overlay-dependency {
+              gap: 4px;
+              padding-inline: 4px;
+            }
             #${rootId} .codex-usage-hud-settings-tabs {
               overflow-x: auto;
             }
@@ -26369,9 +26487,6 @@ searchDraft: String(_sessionCleanupFilterSnapshot.search || ""),
               min-width: 0;
               flex: 1 1 0;
             }
-            #${rootId} .codex-usage-hud-price-actions {
-              grid-template-columns: minmax(0, 1fr);
-            }
             #${rootId} .codex-usage-hud-pricing-tools,
             #${rootId} .codex-usage-hud-pricing-preview-grid {
               grid-template-columns: minmax(0, 1fr);
@@ -26382,12 +26497,9 @@ searchDraft: String(_sessionCleanupFilterSnapshot.search || ""),
             #${rootId} .codex-usage-hud-pricing-version-item time {
               grid-column: 1 / -1;
             }
-            #${rootId} .codex-usage-hud-provider-context {
-              display: grid;
-            }
             #${rootId} .codex-usage-hud-provider-context-adjustment {
-              width: 100%;
-              flex: 1 1 auto;
+              min-width: 112px;
+              flex: 1 1 112px;
             }
             #${rootId} .codex-usage-hud-provider-meta {
               max-width: none;
@@ -32688,6 +32800,12 @@ searchDraft: String(_sessionCleanupFilterSnapshot.search || ""),
         event.preventDefault();
         event.stopPropagation();
         chatTestProviderFromDialog();
+        return;
+      }
+      if (action.dataset.action === "settings-toggle-model-list") {
+        event.preventDefault();
+        event.stopPropagation();
+        toggleSettingsModelList(action);
         return;
       }
       if (action.dataset.action === "settings-add-model") {

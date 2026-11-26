@@ -2137,6 +2137,19 @@ TEXT = r"""
             scrollbar-width: thin;
             scrollbar-color: var(--codex-usage-hud-divider, #273241) var(--codex-usage-hud-surface, #10161d);
           }
+          #${rootId} .codex-usage-hud-settings-modal:has(> [data-active-tab="settings"]) {
+            padding: 8px;
+          }
+          #${rootId} .codex-usage-hud-settings-dialog[data-active-tab="settings"] {
+            box-sizing: border-box;
+            width: min(760px, calc(100vw - 16px));
+            max-height: calc(100dvh - 16px);
+          }
+          #${rootId} .codex-usage-hud-settings-dialog[data-active-tab="settings"] .codex-usage-hud-settings-body {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+          }
           #${rootId} .codex-usage-hud-settings-dialog[data-active-tab="backgroundUsage"] {
             width: min(1060px, calc(100vw - 48px));
             height: min(760px, calc(100vh - 48px));
@@ -2581,6 +2594,7 @@ TEXT = r"""
             text-align: left;
           }
           #${rootId} .codex-usage-hud-settings-grid {
+            flex-shrink: 0;
             display: grid;
             grid-template-columns: repeat(2, minmax(0, 1fr));
             gap: 10px;
@@ -2624,8 +2638,7 @@ TEXT = r"""
             min-width: 0;
             width: 100%;
           }
-          #${rootId} .codex-usage-hud-settings-field,
-          #${rootId} .codex-usage-hud-price-table {
+          #${rootId} .codex-usage-hud-settings-field {
             min-width: 0;
             display: grid;
             gap: 4px;
@@ -2737,11 +2750,14 @@ TEXT = r"""
           }
           #${rootId} .codex-usage-hud-provider-editor {
             min-width: 0;
-            grid-column: 1 / -1;
-            display: grid;
+            min-height: 0;
+            display: flex;
+            flex-direction: column;
             gap: 8px;
-            margin-top: 4px;
             border-top: 1px solid var(--codex-usage-hud-divider, #273241);
+          }
+          #${rootId} .codex-usage-hud-provider-editor > :not(.codex-usage-hud-price-table) {
+            flex-shrink: 0;
           }
           #${rootId} .codex-usage-hud-provider-editor-head {
             min-width: 0;
@@ -3299,7 +3315,6 @@ TEXT = r"""
             grid-template-columns: auto minmax(0, 1fr) auto repeat(3, 30px);
             gap: 8px;
             align-items: center;
-            margin-top: 6px;
           }
           #${rootId} .codex-usage-hud-price-actions > .codex-usage-hud-settings-action {
             justify-self: start;
@@ -3352,12 +3367,52 @@ TEXT = r"""
             padding: 3px 8px;
             font-size: 10px;
           }
+          #${rootId} .codex-usage-hud-price-disclosure {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+          }
+          #${rootId} .codex-usage-hud-price-disclosure::before,
+          #${rootId} .codex-usage-hud-price-disclosure::after {
+            content: "";
+            flex: 1;
+            border-top: 1px solid var(--codex-usage-hud-divider, #273241);
+          }
+          #${rootId} .codex-usage-hud-price-toggle {
+            width: 36px;
+            height: 26px;
+            padding: 0;
+            display: inline-grid;
+            place-items: center;
+            border: 1px solid var(--codex-usage-hud-divider, #273241);
+            border-radius: 13px;
+            background: var(--codex-usage-hud-header-surface, #202833);
+            color: var(--codex-usage-hud-muted, #a9bcd2);
+            font: 16px/1 system-ui, sans-serif;
+            cursor: pointer;
+          }
+          #${rootId} .codex-usage-hud-price-toggle:is(:hover, :focus-visible) {
+            color: var(--codex-usage-hud-accent, #f3d27a);
+            border-color: currentColor;
+          }
+          #${rootId} .codex-usage-hud-price-toggle[aria-expanded="true"] > span {
+            transform: rotate(180deg);
+          }
           #${rootId} .codex-usage-hud-price-table {
-            grid-column: 1 / -1;
-            margin-top: 4px;
-            overflow-x: auto;
+            min-height: 48px;
+            overflow: auto;
+            overscroll-behavior: contain;
             scrollbar-width: thin;
             scrollbar-color: var(--codex-usage-hud-divider, #273241) transparent;
+          }
+          #${rootId} .codex-usage-hud-price-table[data-expanded="false"] {
+            flex-shrink: 0;
+            overscroll-behavior: auto;
+          }
+          #${rootId} .codex-usage-hud-price-table[data-expanded="false"] [data-price-rows] > :nth-child(n + 6),
+          #${rootId} .codex-usage-hud-price-table[data-expanded="false"] [data-detected-price-models],
+          #${rootId} .codex-usage-hud-price-table:not(:has([data-price-rows] > :nth-child(6), [data-detected-price-models] > *)) + .codex-usage-hud-price-disclosure {
+            display: none;
           }
           #${rootId} .codex-usage-hud-price-row,
           #${rootId} .codex-usage-hud-price-header {
@@ -3365,12 +3420,17 @@ TEXT = r"""
             grid-template-columns: minmax(130px, 1.4fr) repeat(4, minmax(72px, 1fr));
             gap: 6px;
             align-items: center;
-            min-width: 680px;
+            min-width: 442px;
           }
           #${rootId} .codex-usage-hud-price-advanced {
             display: none;
           }
           #${rootId} .codex-usage-hud-price-header {
+            position: sticky;
+            top: 0;
+            z-index: 1;
+            padding-block: 3px;
+            background: var(--codex-usage-hud-surface, #10161d);
             color: var(--codex-usage-hud-muted, #8492a6);
             font-size: 10px;
             font-weight: 700;
@@ -3382,6 +3442,44 @@ TEXT = r"""
             align-items: center;
             color: var(--codex-usage-hud-muted, #8492a6);
             font-size: 11px;
+          }
+          @media (max-height: 620px) {
+            #${rootId} .codex-usage-hud-settings-modal:has(> [data-active-tab="settings"]) {
+              padding-block: 4px;
+            }
+            #${rootId} .codex-usage-hud-settings-dialog[data-active-tab="settings"] {
+              max-height: calc(100dvh - 8px);
+            }
+            #${rootId} [data-active-tab="settings"] > .codex-usage-hud-settings-head,
+            #${rootId} [data-active-tab="settings"] > .codex-usage-hud-settings-actions {
+              padding-block: 4px;
+            }
+            #${rootId} [data-active-tab="settings"] > .codex-usage-hud-settings-tabs {
+              padding-block: 4px;
+            }
+            #${rootId} .codex-usage-hud-settings-dialog[data-active-tab="settings"] .codex-usage-hud-settings-body {
+              gap: 6px;
+              padding-block: 4px;
+            }
+            #${rootId} .codex-usage-hud-settings-grid,
+            #${rootId} .codex-usage-hud-provider-editor {
+              row-gap: 5px;
+            }
+            #${rootId} .codex-usage-hud-settings-grid .codex-usage-hud-settings-field {
+              row-gap: 2px;
+            }
+            #${rootId} .codex-usage-hud-settings-grid .codex-usage-hud-settings-field :is(input, select),
+            #${rootId} .codex-usage-hud-overlay-dependency {
+              min-height: 26px;
+              padding-block: 2px;
+            }
+            #${rootId} .codex-usage-hud-provider-editor-head {
+              min-height: 34px;
+              padding-top: 2px;
+            }
+            #${rootId} .codex-usage-hud-provider-context {
+              row-gap: 4px;
+            }
           }
           #${rootId} .codex-usage-hud-pricing-tools {
             min-width: 0;
@@ -7031,9 +7129,6 @@ TEXT = r"""
             #${rootId} .${topClass} .codex-usage-hud-panel-header {
               grid-template-columns: auto minmax(0, 1fr) 22px;
             }
-            #${rootId} .codex-usage-hud-settings-grid {
-              grid-template-columns: minmax(0, 1fr);
-            }
             #${rootId} .codex-usage-hud-codex-cli-grid {
               grid-template-columns: minmax(0, 1fr);
             }
@@ -7046,33 +7141,14 @@ TEXT = r"""
             #${rootId} .codex-usage-hud-codex-cli-dialog {
               padding: 12px;
             }
-            #${rootId} .codex-usage-hud-settings-compact-row {
-              grid-template-columns: minmax(0, 1fr);
-            }
-            #${rootId} .codex-usage-hud-settings-compact-inputs {
-              grid-template-columns: minmax(0, 1fr);
-            }
             #${rootId} .codex-usage-hud-rest-reminder-grid {
               grid-template-columns: repeat(3, minmax(0, 1fr));
             }
             #${rootId} .codex-usage-hud-rest-reminder-schedule {
               grid-template-columns: minmax(0, 1fr);
             }
-            #${rootId} .codex-usage-hud-provider-editor {
-              grid-column: 1;
-            }
-            #${rootId} .codex-usage-hud-provider-editor-head {
-              grid-template-columns: auto minmax(0, 1fr);
-            }
-            #${rootId} .codex-usage-hud-provider-navigation {
-              grid-column: 1 / -1;
-              grid-row: 2;
-            }
             #${rootId} .codex-usage-hud-provider-editor-head .codex-usage-hud-price-unit {
               display: none;
-            }
-            #${rootId} .codex-usage-hud-price-actions {
-              grid-template-columns: auto minmax(0, 1fr) auto;
             }
             #${rootId} .codex-usage-hud-pricing-tools {
               grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -7207,7 +7283,19 @@ TEXT = r"""
               display: none;
             }
           }
+          @media (max-width: 460px) {
+            #${rootId} .codex-usage-hud-settings-compact-row {
+              grid-template-columns: minmax(0, 1fr);
+            }
+          }
           @media (max-width: 520px) {
+            #${rootId} .codex-usage-hud-overlay-runtime-row {
+              grid-template-columns: minmax(0, 1fr) 56px;
+            }
+            #${rootId} .codex-usage-hud-overlay-dependency {
+              gap: 4px;
+              padding-inline: 4px;
+            }
             #${rootId} .codex-usage-hud-settings-tabs {
               overflow-x: auto;
             }
@@ -7230,9 +7318,6 @@ TEXT = r"""
               min-width: 0;
               flex: 1 1 0;
             }
-            #${rootId} .codex-usage-hud-price-actions {
-              grid-template-columns: minmax(0, 1fr);
-            }
             #${rootId} .codex-usage-hud-pricing-tools,
             #${rootId} .codex-usage-hud-pricing-preview-grid {
               grid-template-columns: minmax(0, 1fr);
@@ -7243,12 +7328,9 @@ TEXT = r"""
             #${rootId} .codex-usage-hud-pricing-version-item time {
               grid-column: 1 / -1;
             }
-            #${rootId} .codex-usage-hud-provider-context {
-              display: grid;
-            }
             #${rootId} .codex-usage-hud-provider-context-adjustment {
-              width: 100%;
-              flex: 1 1 auto;
+              min-width: 112px;
+              flex: 1 1 112px;
             }
             #${rootId} .codex-usage-hud-provider-meta {
               max-width: none;

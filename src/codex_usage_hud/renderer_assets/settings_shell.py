@@ -4,6 +4,7 @@ from .settings_support_panels import TEXT as SETTINGS_SUPPORT_PANELS
 
 _TEXT_PREFIX = r"""
   function createSettingsShellDomain(ctx, shared) {
+      let settingsModelListExpanded = false;
       const pricingWorkflowState = {
         pendingSettings: null,
         pendingSettingsBase: null,
@@ -1972,10 +1973,19 @@ _TEXT_PREFIX = r"""
         return items.map((value) => Number(value || 0)).filter((value) => value > 0).join(",");
       }
 
+      const priceModelCollator = new Intl.Collator("en", { numeric: true, sensitivity: "base" });
+
+      function comparePriceModels(left, right) {
+        return priceModelCollator.compare(pricingBareModelId(right), pricingBareModelId(left));
+      }
+
       function priceRowsHtml(settings) {
         const prices = settings.model_prices && typeof settings.model_prices === "object" ? settings.model_prices : {};
         const entries = Object.entries(prices);
         if (!entries.length) entries.push(["gpt-5.6-sol", { input: 5, output: 30, cached_input: 0.5, cache_write: 6.25 }]);
+        entries.sort(([leftKey, left], [rightKey, right]) =>
+          comparePriceModels(left?.model || leftKey, right?.model || rightKey),
+        );
         return entries.map(([key, price]) => {
           const model = String(price?.model || key || "");
           const provider = String(price?.provider || "");
@@ -1995,7 +2005,7 @@ _TEXT_PREFIX = r"""
       }
 
       function detectedPriceModelsHtml(settings, provider = settingsProviderDraft?.activeProvider || "") {
-        const models = unknownPriceModels(settings, provider);
+        const models = unknownPriceModels(settings, provider).sort(comparePriceModels);
         if (!models.length) return "";
         return `
           <div class="codex-usage-hud-price-detected">
@@ -2580,22 +2590,37 @@ _TEXT_PREFIX = r"""
               <button type="button" class="codex-usage-hud-settings-action codex-usage-hud-pricing-apply-action" data-action="settings-pricing-apply" data-primary="true" data-price-draft-pending="${pricingDraftPending}" aria-label="${pricingDraftPending ? "应用模型单价修改，有待应用修改" : "应用模型单价修改"}" title="${pricingDraftPending ? "应用待提交的模型单价修改" : "应用模型单价修改"}">应用<span class="codex-usage-hud-provider-dirty-dot codex-usage-hud-pricing-apply-dirty-dot" data-pricing-apply-dirty-dot="true" aria-hidden="true" ${pricingDraftPending ? "" : "hidden"}></span></button>
             </div>
           </div>
-          <div class="codex-usage-hud-price-table">
+          <div class="codex-usage-hud-price-actions">
+            <button type="button" class="codex-usage-hud-settings-action" data-action="settings-add-model">添加模型</button>
+            <input data-setting-key="pricing_url" value="${escapeHtml(pricingUrlValue)}" placeholder="${escapeHtml(pricingUrlPlaceholder)}" aria-label="计费单价获取地址" title="${escapeHtml(pricingUrlPlaceholder)}">
+            <button type="button" class="codex-usage-hud-settings-action codex-usage-hud-pricing-check-action" data-action="settings-fetch-prices" aria-label="${pricingUnreadCount ? `检查价格更新，有 ${pricingUnreadCount} 项未读差异` : "检查价格更新"}">检查价格更新<span class="codex-usage-hud-pricing-check-dot" data-pricing-sync-dot="true" aria-hidden="true" ${pricingUnreadCount ? "" : "hidden"}></span></button>
+            <button type="button" class="codex-usage-hud-settings-action codex-usage-hud-pricing-icon-action" data-action="settings-sync-provider-prices" aria-label="同步当前 Provider 单价到其它 Provider" title="同步当前 Provider 的模型单价到其它 Provider"><span aria-hidden="true">⇄</span></button>
+            <button type="button" class="codex-usage-hud-settings-action codex-usage-hud-pricing-icon-action" data-action="pricing-export" aria-label="导出价格 JSON" title="导出价格 JSON"><span aria-hidden="true">⇩</span></button>
+            <button type="button" class="codex-usage-hud-settings-action codex-usage-hud-pricing-icon-action" data-action="pricing-import-open" aria-label="导入价格 JSON" title="导入价格 JSON"><span aria-hidden="true">⇧</span></button>
+          </div>
+          <div id="${settingsModalId}-model-list" class="codex-usage-hud-price-table" data-expanded="${settingsModelListExpanded}">
             <div class="codex-usage-hud-price-header">
               <div>模型</div><div>输入</div><div>缓存读取</div><div>缓存写入</div><div>输出</div><div class="codex-usage-hud-price-advanced">渠道</div><div class="codex-usage-hud-price-advanced">Base URL</div>
             </div>
             <div data-price-rows="true">${priceRowsHtml(providerSettings)}</div>
             <div data-detected-price-models="true">${detectedPriceModelsHtml(providerSettings, activeProvider)}</div>
-            <div class="codex-usage-hud-price-actions">
-              <button type="button" class="codex-usage-hud-settings-action" data-action="settings-add-model">添加模型</button>
-              <input data-setting-key="pricing_url" value="${escapeHtml(pricingUrlValue)}" placeholder="${escapeHtml(pricingUrlPlaceholder)}" aria-label="计费单价获取地址" title="${escapeHtml(pricingUrlPlaceholder)}">
-              <button type="button" class="codex-usage-hud-settings-action codex-usage-hud-pricing-check-action" data-action="settings-fetch-prices" aria-label="${pricingUnreadCount ? `检查价格更新，有 ${pricingUnreadCount} 项未读差异` : "检查价格更新"}">检查价格更新<span class="codex-usage-hud-pricing-check-dot" data-pricing-sync-dot="true" aria-hidden="true" ${pricingUnreadCount ? "" : "hidden"}></span></button>
-              <button type="button" class="codex-usage-hud-settings-action codex-usage-hud-pricing-icon-action" data-action="settings-sync-provider-prices" aria-label="同步当前 Provider 单价到其它 Provider" title="同步当前 Provider 的模型单价到其它 Provider"><span aria-hidden="true">⇄</span></button>
-              <button type="button" class="codex-usage-hud-settings-action codex-usage-hud-pricing-icon-action" data-action="pricing-export" aria-label="导出价格 JSON" title="导出价格 JSON"><span aria-hidden="true">⇩</span></button>
-              <button type="button" class="codex-usage-hud-settings-action codex-usage-hud-pricing-icon-action" data-action="pricing-import-open" aria-label="导入价格 JSON" title="导入价格 JSON"><span aria-hidden="true">⇧</span></button>
-            </div>
+          </div>
+          <div class="codex-usage-hud-price-disclosure">
+            <button type="button" class="codex-usage-hud-price-toggle" data-action="settings-toggle-model-list"
+              aria-controls="${settingsModalId}-model-list" aria-expanded="${settingsModelListExpanded}"
+              aria-label="完整模型列表" title="${settingsModelListExpanded ? "收起模型列表" : "展开完整模型列表"}"><span aria-hidden="true">▽</span></button>
           </div>
         `;
+      }
+
+      function toggleSettingsModelList(button, expanded = !settingsModelListExpanded) {
+        const list = document.getElementById(`${settingsModalId}-model-list`);
+        if (!list || !button) return;
+        settingsModelListExpanded = expanded;
+        list.dataset.expanded = String(expanded);
+        if (!expanded) list.scrollTop = 0;
+        button.setAttribute("aria-expanded", String(expanded));
+        button.title = expanded ? "收起模型列表" : "展开完整模型列表";
       }
 
       function revealSettingsProviderTab(tab) {
@@ -3776,6 +3801,7 @@ _TEXT_PREFIX = r"""
         const root = document.getElementById(rootId);
         const modal = document.getElementById(settingsModalId);
         if (!root || !modal) return;
+        if (modal.hidden) settingsModelListExpanded = false;
         const activeTab = ["storage", "backgroundUsage", "support", "about"].includes(tab) ? tab : "settings";
         if (settingsActiveTab === "storage" && activeTab !== "storage") {
           detachSessionIndexUi();
@@ -3959,9 +3985,9 @@ _TEXT_PREFIX = r"""
                 </div>
               </div>
             </div>
-            <div class="codex-usage-hud-provider-editor" data-provider-editor="true" data-active-provider="${escapeHtml(settingsProviderDraft?.activeProvider || "")}">
-              ${settingsProviderEditorHtml(settings)}
-            </div>
+          </div>
+          <div class="codex-usage-hud-provider-editor" data-provider-editor="true" data-active-provider="${escapeHtml(settingsProviderDraft?.activeProvider || "")}">
+            ${settingsProviderEditorHtml(settings)}
           </div>
         `;
       }
@@ -7359,6 +7385,8 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
       function addModelPriceRow(initialModel = "") {
         const rows = document.querySelector(`#${settingsModalId} [data-price-rows="true"]`);
         if (!rows) return;
+        const toggle = document.querySelector(`#${settingsModalId} [data-action="settings-toggle-model-list"]`);
+        toggleSettingsModelList(toggle, true);
         const row = document.createElement("div");
         row.className = "codex-usage-hud-price-row";
         row.dataset.priceRow = "true";
@@ -9830,6 +9858,7 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
       renderUpdateButtons,
       thresholdText,
       priceRowsHtml,
+      toggleSettingsModelList,
       detectedPriceModelsHtml,
       settingsProviderNames,
       cloneSettingsPriceTable,
@@ -9988,6 +10017,7 @@ _TEXT_SUFFIX = r"""      // 状态栏是否正在展示一条「粘性错误」�
     renderUpdateButtons,
     thresholdText,
     priceRowsHtml,
+    toggleSettingsModelList,
     detectedPriceModelsHtml,
     settingsProviderNames,
     cloneSettingsPriceTable,

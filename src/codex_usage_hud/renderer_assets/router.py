@@ -1371,6 +1371,12 @@ TEXT = r"""
         chatTestProviderFromDialog();
         return;
       }
+      if (action.dataset.action === "settings-toggle-model-list") {
+        event.preventDefault();
+        event.stopPropagation();
+        toggleSettingsModelList(action);
+        return;
+      }
       if (action.dataset.action === "settings-add-model") {
         event.preventDefault();
         event.stopPropagation();
