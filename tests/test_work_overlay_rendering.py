@@ -23,18 +23,80 @@ SRC_ROOT = PROJECT_ROOT / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from PySide6.QtWidgets import QApplication, QWidget
+from PySide6.QtCore import QTimer
 from PySide6.QtGui import QFontDatabase
+from PySide6.QtWidgets import QApplication, QWidget
 
 import codex_usage_hud.overlay_projection as overlay_projection
 import codex_usage_hud.active_work as active_work
 from codex_usage_hud.core.parser import Activity, ParsedSession, WorkStatusItem
+from codex_usage_hud.ui.work_overlay import qt_runtime
 from codex_usage_hud.ui.work_overlay.constants import (
     DEFAULT_WORK_OVERLAY_THEME,
     WORK_OVERLAY_BODY_MAX_LINES,
 )
 from codex_usage_hud.ui.work_overlay.qt_rendering import OverlayRenderingMixin
 from codex_usage_hud.ui.work_overlay.qt_window import OverlayWindow, _multiline_elided_text
+
+
+@pytest.mark.parametrize("persistent_failure", [False, True])
+def test_helper_heartbeat_tracks_state_apply_success(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, persistent_failure: bool,
+) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    monkeypatch.setattr(qt_runtime, "WORK_OVERLAY_HELPER_HEARTBEAT_MS", 5)
+    monkeypatch.setattr(qt_runtime, "_STATE_APPLY_RETRY_MS", 40)
+    app = QApplication.instance() or QApplication(sys.argv[:1])
+    state_path = tmp_path / "state.json"
+    state_path.write_text("{}", encoding="utf-8")
+    attempts = 0
+    heartbeats: list[int] = []
+
+    def render_items(window: OverlayWindow, _items: object, **_kwargs: object) -> None:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            return
+        if attempts == 3:
+            app.quit()
+            assert not window._last_payload_signature
+            assert not window._last_structure_signature
+        if attempts == 2 or persistent_failure:
+            window._last_payload_signature = "failed-payload"
+            window._last_structure_signature = "failed-layout"
+            raise TypeError("synthetic Qt render failure")
+
+    def heartbeat(_window: OverlayWindow) -> None:
+        heartbeats.append(attempts)
+        if len(heartbeats) == 1:
+            state_path.write_text('{"revision": 2}', encoding="utf-8")
+
+    monkeypatch.setattr(OverlayWindow, "render_items", render_items)
+    monkeypatch.setattr(OverlayWindow, "emit_helper_heartbeat", heartbeat)
+    deadline = QTimer()
+    deadline.setSingleShot(True)
+    deadline.timeout.connect(app.quit)
+    deadline.start(3_000)
+    try:
+        exit_code = qt_runtime.run_work_overlay_helper_qt(
+            state_path,
+            process_exists=lambda _pid: True,
+            owner_pid_from_path=lambda _path: None,
+            item_limit=2,
+            stale_seconds=20.0,
+            overlay_alpha=0.88,
+            hover_alpha=0.22,
+            header_title_limit=28,
+        )
+        assert deadline.isActive()
+    finally:
+        deadline.stop()
+
+    assert exit_code == 0
+    assert attempts == 3
+    assert heartbeats[0] == 1
+    assert 2 not in heartbeats
+    assert (3 in heartbeats) is not persistent_failure
 
 
 class WorkOverlayRenderingTests(unittest.TestCase):

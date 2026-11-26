@@ -754,12 +754,18 @@ class OverlayWindow(OverlayTransitionsMixin, OverlayRenderingMixin, QWidget):
             )
             if self._side != previous_side:
                 self._last_payload_signature = ""
-            self.render_items(
-                items,
-                system_action=system_action or {},
-                system_notice=system_notice or {},
-                rest_reminder=rest_reminder or {},
-            )
+            try:
+                self.render_items(
+                    items,
+                    system_action=system_action or {},
+                    system_notice=system_notice or {},
+                    rest_reminder=rest_reminder or {},
+                )
+            except Exception:
+                # A failed render may already have cached these signatures.
+                self._last_payload_signature = ""
+                self._last_structure_signature = ""
+                raise
             if system_action is not None:
                 self.emit_system_action_ready(system_action)
             return True

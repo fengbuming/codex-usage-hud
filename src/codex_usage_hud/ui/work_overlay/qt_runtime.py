@@ -14,6 +14,8 @@ from .constants import (
     WORK_OVERLAY_STATE_READ_RETRY_MS,
 )
 
+_STATE_APPLY_RETRY_MS = 1_000
+
 
 def _work_overlay_command_path(state_path: Path) -> Path:
     return overlay_ipc.command_path(state_path)
@@ -98,6 +100,7 @@ def run_work_overlay_helper_qt(
     state_read_retry_timer.setSingleShot(True)
     helper_heartbeat_timer = QTimer()
     helper_heartbeat_timer.timeout.connect(overlay.emit_helper_heartbeat)
+    apply_failed = False
 
     def watch_state_path() -> None:
         parent = str(path.parent)
@@ -122,19 +125,39 @@ def run_work_overlay_helper_qt(
         )
 
     def refresh_state_from_watcher(*_args: object) -> None:
+        nonlocal apply_failed
+        if state_read_retry_timer.isActive():
+            return
         watch_state_path()
-        _refresh_overlay_state_from_event(
-            read_state=overlay.poll_state,
-            retry_active=state_read_retry_timer.isActive,
-            start_retry=state_read_retry_timer.start,
-            stop_retry=state_read_retry_timer.stop,
-            heartbeat_active=helper_heartbeat_timer.isActive,
-            start_heartbeat=lambda: (
-                overlay.emit_helper_heartbeat(),
-                helper_heartbeat_timer.start(WORK_OVERLAY_HELPER_HEARTBEAT_MS),
-            ),
-            schedule_stale=schedule_stale_check,
-        )
+        try:
+            applied = _refresh_overlay_state_from_event(
+                read_state=overlay.poll_state,
+                retry_active=state_read_retry_timer.isActive,
+                start_retry=state_read_retry_timer.start,
+                stop_retry=state_read_retry_timer.stop,
+                heartbeat_active=helper_heartbeat_timer.isActive,
+                start_heartbeat=lambda: (
+                    overlay.emit_helper_heartbeat(),
+                    helper_heartbeat_timer.start(WORK_OVERLAY_HELPER_HEARTBEAT_MS),
+                ),
+                schedule_stale=schedule_stale_check,
+            )
+        except Exception as exc:
+            # A live Qt loop can still leave stale bubbles on screen. Let the
+            # existing heartbeat watchdog replace a helper that cannot recover.
+            helper_heartbeat_timer.stop()
+            state_read_retry_timer.start(_STATE_APPLY_RETRY_MS)
+            if not apply_failed:
+                apply_failed = True
+                try:
+                    sys.stderr.write(
+                        f"work_overlay_state_apply_failed error={type(exc).__name__}\n"
+                    )
+                except (AttributeError, OSError):
+                    pass
+            return
+        if applied:
+            apply_failed = False
         watch_state_path()
 
     state_watcher.fileChanged.connect(refresh_state_from_watcher)
