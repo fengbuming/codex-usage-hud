@@ -820,6 +820,47 @@ class JsonlSessionParserTests(unittest.TestCase):
         self.assertEqual(snapshot.last_output.kind, "agent")
         self.assertEqual(snapshot.last_output.detail, "最后一轮输出会保留")
 
+    def test_latest_output_skips_browser_completion_and_uses_new_assistant_text(self) -> None:
+        directive = '::browser-complete{title="Reviewed browser page"}'
+        records = [
+            record("2026-05-28T00:00:00Z", "event_msg", {"type": "task_started"}),
+            record(
+                "2026-05-28T00:00:01Z",
+                "response_item",
+                {"type": "message", "role": "assistant", "phase": "commentary",
+                 "content": [{"type": "output_text", "text": "开始检查配置。"}]},
+            ),
+            record(
+                "2026-05-28T00:00:02Z",
+                "event_msg",
+                {"type": "agent_message", "phase": "commentary", "message": directive},
+            ),
+            record(
+                "2026-05-28T00:00:03Z",
+                "response_item",
+                {"type": "message", "role": "assistant", "phase": "commentary",
+                 "content": [{"type": "output_text", "text": directive}]},
+            ),
+            record(
+                "2026-05-28T00:00:04Z",
+                "response_item",
+                {"type": "custom_tool_call", "name": "exec", "input": "check config"},
+            ),
+        ]
+        running = self.speed_snapshot(records)
+        self.assertEqual(running.last_output.detail, "开始检查配置。")
+        self.assertEqual(running.last_output.timestamp, records[1]["_dt"])
+
+        records.append(record(
+            "2026-05-28T00:00:05Z",
+            "response_item",
+            {"type": "message", "role": "assistant", "phase": "final_answer",
+             "content": [{"type": "output_text", "text": "配置检查完成。"}]},
+        ))
+        finished = self.speed_snapshot(records)
+        self.assertEqual(finished.last_output.detail, "配置检查完成。")
+        self.assertEqual(finished.last_output.timestamp, records[-1]["_dt"])
+
     def test_usage_events_can_be_summarized_for_time_windows(self) -> None:
         parser = JsonlSessionParser()
         records = [

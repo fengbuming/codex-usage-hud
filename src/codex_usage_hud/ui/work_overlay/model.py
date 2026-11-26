@@ -1272,7 +1272,12 @@ def _item_dismiss_key(item: Mapping[str, object]) -> str:
     user_steer_at = str(item.get("userSteerAt") or "").strip()
     if user_steer_at:
         dismissal_key["userSteerAt"] = user_steer_at
-    return json.dumps(dismissal_key, ensure_ascii=False, sort_keys=True)
+    # Explicit string indentation avoids the Python 3.14 encoder failure seen
+    # in the helper. Drop formatting newlines to match already persisted keys.
+    return json.dumps(
+        dismissal_key, ensure_ascii=False, sort_keys=True,
+        indent="", separators=(", ", ": "),
+    ).replace("\n", "")
 
 def _mark_item_dismissed(
     dismissed_instances: MutableMapping[str, str],

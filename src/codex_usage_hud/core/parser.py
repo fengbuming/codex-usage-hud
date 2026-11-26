@@ -3602,18 +3602,21 @@ class JsonlSessionParser:
             timestamp = record.get("_dt")
 
             if record_type == "event_msg" and payload_type == "agent_message":
-                text = compact_text(payload.get("message"), 220)
-                if text:
-                    return Activity("agent", text, timestamp)
-            if record_type == "response_item" and payload_type == "message":
-                if is_turn_aborted_message(payload):
-                    continue
-                role = response_message_role(payload)
-                if role and role != "assistant":
-                    continue
-                text = compact_text(message_text(payload), 220)
-                if text:
-                    return Activity("assistant", text, timestamp)
+                kind = "agent"
+                text = str(payload.get("message") or "").strip()
+            elif (
+                record_type == "response_item"
+                and payload_type == "message"
+                and response_message_role(payload) in {"", "assistant"}
+            ):
+                kind = "assistant"
+                text = message_text(payload).strip()
+            else:
+                continue
+            # Codex consumes this standalone commentary as a browser UI event.
+            if not text or re.fullmatch(r"::browser-complete\{[^\r\n]*\}", text):
+                continue
+            return Activity(kind, compact_text(text, 220), timestamp)
         return Activity("idle", "", None)
 
     def slow_summary(

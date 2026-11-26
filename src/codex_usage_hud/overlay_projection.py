@@ -607,10 +607,10 @@ def visible_payload_items(
         item_id = str(item.get("id") or "")
         if index not in selected_indexes:
             continue
-        key = dismiss_key(item)
-        if item_id and dismissed_instances.get(item_id) == key:
-            continue
-        if item_id and item_id in dismissed_instances:
+        saved_key = dismissed_instances.get(item_id) if item_id else None
+        if saved_key is not None:
+            if saved_key == dismiss_key(item):
+                continue
             dismissed_instances.pop(item_id, None)
         visible.append(item)
     return visible

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from codex_usage_hud.overlay_projection import visible_payload_items
@@ -61,6 +62,33 @@ def test_new_task_for_a_dismissed_session_is_visible(tmp_path: Path) -> None:
         dismiss_key=_item_dismiss_key,
     ) == [new_item]
     assert old_item["id"] not in store
+
+
+def test_visible_items_generate_keys_only_for_previously_dismissed_cards() -> None:
+    dismissed = _completed_item()
+    visible = {**dismissed, "id": "thread-2", "status": "running"}
+    dismissed_instances = {
+        dismissed["id"]: json.dumps(
+            {
+                "id": dismissed["id"],
+                "status": "work",
+                "errorText": "",
+                "taskStartedAt": dismissed["taskStartedAt"],
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+    }
+    checked_ids = []
+
+    def dismiss_key(item):
+        checked_ids.append(item["id"])
+        return _item_dismiss_key(item)
+
+    assert visible_payload_items(
+        [visible, dismissed], dismissed_instances, item_limit=2, dismiss_key=dismiss_key,
+    ) == [visible]
+    assert checked_ids == [dismissed["id"]]
 
 
 def test_dismissal_store_is_bounded(tmp_path: Path) -> None:
