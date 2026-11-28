@@ -1,5 +1,5 @@
 {
-  "checked_at": "2026-11-19T12:07:36.745459Z",
+  "checked_at": "2026-11-28T16:53:20.001642Z",
   "currency": "USD",
   "prices": [
     {
@@ -8,7 +8,7 @@
       "catalog_status": "active",
       "currency": "USD",
       "input": 8.0,
-      "last_seen_at": "2026-11-19T12:07:36.745459Z",
+      "last_seen_at": "2026-11-28T16:53:20.001642Z",
       "model": "gpt-6.2-astra",
       "output": 40.0,
       "reasoning": 40.0,
@@ -20,7 +20,7 @@
       "catalog_status": "active",
       "currency": "USD",
       "input": 2.0,
-      "last_seen_at": "2026-11-19T12:07:36.745459Z",
+      "last_seen_at": "2026-11-28T16:53:20.001642Z",
       "model": "gpt-6.2-sol",
       "output": 10.0,
       "reasoning": 10.0,
@@ -32,7 +32,7 @@
       "catalog_status": "active",
       "currency": "USD",
       "input": 1.0,
-      "last_seen_at": "2026-11-19T12:07:36.745459Z",
+      "last_seen_at": "2026-11-28T16:53:20.001642Z",
       "model": "gpt-6.1-terra",
       "output": 5.0,
       "reasoning": 5.0,
@@ -44,7 +44,7 @@
       "catalog_status": "active",
       "currency": "USD",
       "input": 0.1,
-      "last_seen_at": "2026-11-19T12:07:36.745459Z",
+      "last_seen_at": "2026-11-28T16:53:20.001642Z",
       "model": "gpt-6-luna",
       "output": 0.5,
       "reasoning": 0.5,
@@ -151,11 +151,11 @@
   "schema_version": 2,
   "sources": [
     {
-      "sha256": "e246b27bf3e11101bf6ff6cb6f8a905f00418f7793ffadd09149b44750c9ff15",
+      "sha256": "70d2d876df04cc924ff37efa07724211c631e40139c055d042ce80baf12b14e9",
       "url": "https://developers.openai.com/api/docs/models"
     },
     {
-      "sha256": "16216d4af21e18323228e826b58c8f03a2c9fe1254c08c263c873412828d41bf",
+      "sha256": "5f81fbb96f3f2cddde509ea1da6ddeac3937ba8726ca6d58f5a01149ebb7b5b7",
       "url": "https://platform.openai.com/docs/pricing"
     }
   ],
